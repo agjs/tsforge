@@ -112,4 +112,36 @@ describe("evaluateHarness records the graded score", () => {
       await rm(runsDir, { recursive: true, force: true });
     }
   }, 120_000);
+
+  test("an outage leaves avgProgress UNMEASURED, not zero", () => {
+    // The finding my previous commit claimed to have fixed and had not: the
+    // production call read `r.progress ?? 0`, turning errored records into
+    // measured zero progress, so a split of nothing but timeouts reported 0%
+    // as though it had been measured. Only a test through the real path can
+    // catch that — meanProgress's own skip logic was dead code above it.
+    return (async () => {
+      const corpusDir = await corpus();
+      const runsDir = await mkdtemp(join(tmpdir(), "tsforge-progress-err-"));
+
+      try {
+        const out = await evaluateHarness(["tiny"], {
+          corpusDir,
+          runsDir,
+          provider: {
+            complete: () => Promise.reject(new Error("endpoint is down")),
+          },
+          repeats: 1,
+          overlay: null,
+        });
+
+        expect(out.score.errored).toBe(1);
+        expect(out.score.passed).toBe(0);
+        // Unmeasured, NOT zero — an outage is not a run that made no progress.
+        expect(out.score.avgProgress).toBeUndefined();
+      } finally {
+        await rm(corpusDir, { recursive: true, force: true });
+        await rm(runsDir, { recursive: true, force: true });
+      }
+    })();
+  }, 120_000);
 });

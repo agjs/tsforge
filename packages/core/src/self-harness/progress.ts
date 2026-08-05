@@ -98,20 +98,26 @@ const FAILED_RUN_CEILING = 0.99;
  */
 export function runProgress(
   events: readonly ILoopEvent[],
-  passed: boolean
+  passed: boolean,
+  taskCount: number
 ): number {
   if (passed) {
     return 1;
   }
 
-  const traces = taskTraces(events);
+  // The denominator is the spec's task count, NOT the number of tasks that
+  // happened to open. Dividing by what was attempted rewarded giving up early:
+  // a run that cleared task 1 and never opened task 2 scored the ceiling, while
+  // a run that cleared task 1 AND made real progress on task 2 scored far less.
+  // A task never attempted resolved nothing, so it counts as zero.
+  const denominator = Math.max(taskCount, taskTraces(events).length, 1);
+  const scores = taskTraces(events).map((t) => taskProgress(t));
 
-  if (traces.length === 0) {
+  if (scores.length === 0) {
     return 0;
   }
 
-  const scores = traces.map((t) => taskProgress(t));
-  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const mean = scores.reduce((a, b) => a + b, 0) / denominator;
 
   return Math.min(FAILED_RUN_CEILING, clamp01(mean));
 }

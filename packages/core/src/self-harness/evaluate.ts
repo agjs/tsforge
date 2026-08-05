@@ -204,7 +204,7 @@ async function runTaskOnce(
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
   // How far the run got, not merely whether it arrived. See ./progress.ts.
-  const progress = runProgress(events, passed);
+  const progress = runProgress(events, passed, spec.tasks.length);
 
   return {
     record: {
@@ -360,9 +360,12 @@ export async function evaluateHarness(
       avgQuality: meanOfSignaled(summaries.map((s) => s.avgQuality)),
       avgLoc: meanOfSignaled(summaries.map((s) => s.avgLoc)),
       // Mean over RUNS, not over tasks: a task measured twice should weigh
-      // twice, and a run with no gate settlements is skipped rather than
-      // counted as zero progress.
-      avgProgress: meanProgress(records.map((r) => r.progress ?? 0)),
+      // twice. A record with NO score is an errored one — it never reached
+      // scoring — and meanProgress skips it, so an outage cannot enter the
+      // graded figure as measured zero progress. Completed runs always carry a
+      // number (0 when they produced no gate readings), so nothing that did run
+      // can drop out of the denominator.
+      avgProgress: meanProgress(records.map((r) => r.progress)),
       perTask,
     };
 

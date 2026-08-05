@@ -46,7 +46,7 @@ describe("taskTraces", () => {
 
 describe("runProgress", () => {
   test("a pass is 1", () => {
-    expect(runProgress([ev("red", 9)], true)).toBe(1);
+    expect(runProgress([ev("red", 9)], true, 1)).toBe(1);
   });
 
   test("the real failed run scores 0.98, not 0", () => {
@@ -56,7 +56,7 @@ describe("runProgress", () => {
       ev(i === 0 ? "red" : "validated", n)
     );
 
-    expect(runProgress(events, false)).toBeCloseTo(0.98, 2);
+    expect(runProgress(events, false, 1)).toBeCloseTo(0.98, 2);
   });
 
   test("a failed run whose gate went fully clean is still NOT a pass", () => {
@@ -69,11 +69,11 @@ describe("runProgress", () => {
       ev("red", 3, "2"),
       ev("validated", 0, "2"),
     ];
-    const score = runProgress(events, false);
+    const score = runProgress(events, false, 2);
 
     expect(score).toBeLessThan(1);
     expect(score).toBeGreaterThan(0.9);
-    expect(score).toBeLessThan(runProgress(events, true));
+    expect(score).toBeLessThan(runProgress(events, true, 2));
   });
 
   test("a failed multi-task run is NOT 1 just because one task greened", () => {
@@ -88,7 +88,7 @@ describe("runProgress", () => {
     ];
 
     // task 1 resolved everything (1.0), task 2 resolved a fifth (0.2).
-    expect(runProgress(events, false)).toBeCloseTo(0.6, 5);
+    expect(runProgress(events, false, 2)).toBeCloseTo(0.6, 5);
   });
 
   test("a neighbouring task's zero cannot rescue a task that moved nothing", () => {
@@ -99,11 +99,11 @@ describe("runProgress", () => {
       ev("validated", 5, "2"),
     ];
 
-    expect(runProgress(events, false)).toBeCloseTo(0.5, 5);
+    expect(runProgress(events, false, 2)).toBeCloseTo(0.5, 5);
   });
 
   test("a run that resolved nothing scores 0", () => {
-    expect(runProgress([ev("red", 10), ev("validated", 10)], false)).toBe(0);
+    expect(runProgress([ev("red", 10), ev("validated", 10)], false, 1)).toBe(0);
   });
 
   test("scores the best state reached WITHIN a task, not its last", () => {
@@ -112,11 +112,11 @@ describe("runProgress", () => {
     // already penalise the thrash.
     const events = [ev("red", 10), ev("validated", 1), ev("validated", 6)];
 
-    expect(runProgress(events, false)).toBeCloseTo(0.9, 5);
+    expect(runProgress(events, false, 1)).toBeCloseTo(0.9, 5);
   });
 
   test("getting worse than the start scores 0, never negative", () => {
-    expect(runProgress([ev("red", 4), ev("validated", 20)], false)).toBe(0);
+    expect(runProgress([ev("red", 4), ev("validated", 20)], false, 1)).toBe(0);
   });
 
   test("a completed run with no gate readings scores 0, not nothing", () => {
@@ -124,7 +124,7 @@ describe("runProgress", () => {
     // low-scoring failure into an UNSCORED one and lift the mean for free.
     // Genuine infrastructure failures are tracked as `errored` and excluded
     // upstream, so this path does not need to represent them.
-    expect(runProgress([ev("cycle"), ev("stuck")], false)).toBe(0);
+    expect(runProgress([ev("cycle"), ev("stuck")], false, 1)).toBe(0);
   });
 
   test("a task that opened green contributes a full share", () => {
@@ -135,8 +135,28 @@ describe("runProgress", () => {
       ev("validated", 2, "2"),
     ];
 
-    expect(runProgress(events, false)).toBeCloseTo(0.75, 5);
+    expect(runProgress(events, false, 2)).toBeCloseTo(0.75, 5);
   });
+});
+
+test("giving up early cannot outscore doing more work", () => {
+  // The denominator is the SPEC's task count, not the tasks that opened.
+  // Dividing by what was attempted rewarded quitting: clearing task 1 and
+  // never opening task 2 scored the ceiling, beating a run that cleared
+  // task 1 AND made real progress on task 2.
+  const quitEarly = [ev("red", 10, "1"), ev("validated", 0, "1")];
+  const didMore = [
+    ev("red", 10, "1"),
+    ev("validated", 0, "1"),
+    ev("red", 10, "2"),
+    ev("validated", 3, "2"),
+  ];
+
+  expect(runProgress(quitEarly, false, 2)).toBeLessThan(
+    runProgress(didMore, false, 2)
+  );
+  // Half the work done, so half credit — not the ceiling.
+  expect(runProgress(quitEarly, false, 2)).toBeCloseTo(0.5, 5);
 });
 
 describe("meanProgress", () => {
