@@ -2,11 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  bothMustPass,
-  evaluateHarness,
-  meanProgress,
-} from "../src/self-harness";
+import { allMustRun, evaluateHarness, meanProgress } from "../src/self-harness";
 import { runShellCommand } from "../src/lib/fs/process";
 
 /**
@@ -20,7 +16,16 @@ import { runShellCommand } from "../src/lib/fs/process";
  * exactly nothing to the acceptance rule.
  */
 
-/** A TWO-task scratch corpus, so a run can solve one task and not the other. */
+/**
+ * A TWO-task BROWNFIELD corpus that starts with real, countable gate errors.
+ *
+ * Brownfield (`mode: existing`) so `startRed` leaves the seeded files in place —
+ * a scratch corpus deletes them, and in a temp dir with no tsconfig the gate is
+ * eslint-only, so a missing file produces no diagnostic at all and the error
+ * count never moves. Here `one.ts` ships with lint violations the model can
+ * clear, while `two.ts` is lint-clean but returns the wrong value, so the run
+ * reduces gate errors and still FAILS.
+ */
 async function twoTaskCorpus(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-progress-corpus2-"));
   const task = join(dir, "pair");
@@ -33,7 +38,7 @@ async function twoTaskCorpus(): Promise<string> {
       "id: pair",
       "title: Pair",
       "verify: bun test",
-      "mode: scratch",
+      "mode: existing",
       "---",
       "",
       "## Acceptance criteria",
@@ -71,11 +76,25 @@ async function twoTaskCorpus(): Promise<string> {
         "",
       ].join("\n")
     );
-    await writeFile(
-      join(task, `${n}.ts`),
-      `export function ${n}() {\n  return ${String(v)};\n}\n`
-    );
   }
+
+  // Lint-dirty AND wrong: several padding-line violations for the gate to count.
+  await writeFile(
+    join(task, "one.ts"),
+    [
+      "export function one() {",
+      "  const a = 0;",
+      "  const b = a;",
+      "  return b;",
+      "}",
+      "",
+    ].join("\n")
+  );
+  // Lint-clean, but wrong — so the run cannot go green on task two.
+  await writeFile(
+    join(task, "two.ts"),
+    "export function two() {\n  return 0;\n}\n"
+  );
 
   return dir;
 }
@@ -190,11 +209,15 @@ describe("evaluateHarness records the graded score", () => {
                       toolCalls: [
                         {
                           id: "1",
-                          name: "create",
+                          // `edit`, not `create`: brownfield leaves one.ts in
+                          // place and create refuses to overwrite a file that
+                          // still parses.
+                          name: "edit",
                           arguments: {
                             file: "one.ts",
-                            content:
-                              "export function one() {\n  return 1;\n}\n",
+                            oldString:
+                              "  const a = 0;\n  const b = a;\n  return b;",
+                            newString: "  return 1;",
                           },
                         },
                       ],
@@ -225,6 +248,19 @@ describe("evaluateHarness records the graded score", () => {
             expect(r.progress).toBeLessThan(1);
           }
         }
+
+        // The wiring this pass exists to establish: the run FAILED (two.ts was
+        // never written) but it did resolve real gate errors along the way —
+        // startRed deleted both files, the model restored one. A hardcoded 0, or
+        // an end reading that is just the start reading again, fails here and
+        // passes every other assertion in this suite.
+        const failed = out.records.filter((r) => !r.passed);
+
+        expect(failed.length).toBeGreaterThan(0);
+
+        for (const r of failed) {
+          expect(r.progress).toBeGreaterThan(0);
+        }
       } finally {
         await rm(corpusDir, { recursive: true, force: true });
         await rm(runsDir, { recursive: true, force: true });
@@ -233,42 +269,60 @@ describe("evaluateHarness records the graded score", () => {
   }, 180_000);
 });
 
-describe("bothMustPass", () => {
+describe("allMustRun", () => {
   /**
-   * The graded score reads gate error counts as one series, so every reading has
-   * to mean the same thing. `&&` broke that: once the gate went red it hid every
-   * downstream failure behind it, so breaking the type check turned forty test
-   * failures into one error and READ as progress.
+   * The graded score is two readings of the gate, so a reading has to be TOTAL
+   * residual errors. The gate's own join is `&&`, fail-fast by design, which
+   * makes a failing gate's count "whichever stage died first" — so 50 type
+   * errors going to 3 type errors reads as 94% resolved while every lint error
+   * behind it is still there. That clears the promotion floor by a mile, and no
+   * other guard catches it: the same stage switch moves held-in and held-out
+   * together, and fail-fast uses FEWER cycles so the blowup veto stays quiet.
    */
-  const run = (
-    gate: string,
-    own: string
-  ): Promise<{ exitCode: number; out: string }> =>
-    runShellCommand(process.cwd(), bothMustPass(gate, own)).then((r) => ({
+  const run = (parts: string[]): Promise<{ exitCode: number; out: string }> =>
+    runShellCommand(process.cwd(), allMustRun(parts)).then((r) => ({
       exitCode: r.exitCode,
       out: r.stdout + r.stderr,
     }));
 
-  test("exits 0 only when BOTH sides pass", async () => {
-    expect((await run("true", "true")).exitCode).toBe(0);
-    expect((await run("false", "true")).exitCode).not.toBe(0);
-    expect((await run("true", "false")).exitCode).not.toBe(0);
-    expect((await run("false", "false")).exitCode).not.toBe(0);
+  test("exits 0 only when EVERY stage passes", async () => {
+    expect((await run(["true", "true", "true"])).exitCode).toBe(0);
+    expect((await run(["false", "true", "true"])).exitCode).not.toBe(0);
+    expect((await run(["true", "false", "true"])).exitCode).not.toBe(0);
+    expect((await run(["true", "true", "false"])).exitCode).not.toBe(0);
   });
 
-  test("a failing gate does not hide the downstream errors", async () => {
-    // THE point. Under `&&` this output would contain GATE_ERR alone, and the
-    // reading would be "1 error" for a run that also has every test failing.
-    const r = await run("echo GATE_ERR; false", "echo OWN_ERR; false");
+  test("a failing FIRST stage does not hide what the later ones would report", async () => {
+    // THE point. Under `&&` this output is TSC_ERR alone, and the reading is
+    // "1 error" for a tree that also has every lint rule and every test failing.
+    const r = await run([
+      "echo TSC_ERR; false",
+      "echo LINT_ERR; false",
+      "echo TEST_ERR; false",
+    ]);
 
-    expect(r.out).toContain("GATE_ERR");
-    expect(r.out).toContain("OWN_ERR");
-  });
-
-  test("a failing gate does not suppress a PASSING downstream either", async () => {
-    const r = await run("echo GATE_ERR; false", "echo OWN_RAN");
-
-    expect(r.out).toContain("OWN_RAN");
+    expect(r.out).toContain("TSC_ERR");
+    expect(r.out).toContain("LINT_ERR");
+    expect(r.out).toContain("TEST_ERR");
     expect(r.exitCode).not.toBe(0);
+  });
+
+  test("a stage calling `exit 0` cannot report success for the whole gate", async () => {
+    // Stages are opaque strings built elsewhere. In a brace group an `exit`, a
+    // `set -e`, or a trap escapes the wrapper; a subshell contains it.
+    const r = await run(["echo A; exit 0", "echo B; false"]);
+
+    expect(r.out).toContain("B");
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  test("a stage cannot poison the status variable of another", async () => {
+    const r = await run(["__tsf_bad=0; false", "true"]);
+
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  test("no stages is vacuously green", async () => {
+    expect((await run([])).exitCode).toBe(0);
   });
 });

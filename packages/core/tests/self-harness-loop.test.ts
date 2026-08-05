@@ -304,6 +304,31 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("held-out cycles blew up");
   });
 
+  test("a NaN graded figure fails closed, it does not sail through", () => {
+    // NaN makes every comparison below false: neither the minimum-gain check nor
+    // the regression check rejects it, so a candidate whose held-in score was not
+    // a number was accepted. HarnessEvaluator is a runtime boundary — the type
+    // saying `number` enforces nothing.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.5),
+      withProgress(base, Number.NaN, 0.5)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("not measured");
+  });
+
+  test("an out-of-range graded figure fails closed too", () => {
+    for (const bad of [-0.5, 1.5, Number.POSITIVE_INFINITY]) {
+      const d = acceptanceDecision(
+        withProgress(base, 0.4, 0.5),
+        withProgress(base, bad, 0.5)
+      );
+
+      expect(d.accepted).toBe(false);
+    }
+  });
+
   test("held-out holding exactly level is fine", () => {
     const d = acceptanceDecision(
       withProgress(base, 0.4, 0.6),

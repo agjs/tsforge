@@ -12,9 +12,10 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../spec";
+import type { ITask } from "../spec";
 import { buildGate, buildCoreFix } from "../gate";
 import { runSpec } from "../loop";
-import { validate } from "../validate";
+import { runAccept, parserFor } from "../validate";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
 import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
@@ -112,50 +113,75 @@ async function runSeedSetup(dir: string): Promise<void> {
   }
 }
 
-/** Gate every task and the whole-spec verify behind tsforge's strict floor —
- *  identical composition to the eval sweep, so scores are comparable. */
 /**
- * Join the repo-wide gate to a task's own acceptance so BOTH sides always run.
+ * Run EVERY stage and fail if any did — the measurement join.
  *
- * `&&` short-circuits, and that makes the error count incomparable between
- * readings — which matters because the graded run score reads those counts as
- * one series (see ./progress.ts). Once the gate goes red, every downstream test
- * failure hides behind it: a run that breaks the type check reads as ONE error
- * while being further from passing than the forty-failure run it replaced. That
- * is a way to score progress by getting worse, and no acceptance guard bounds it
- * — the same stage switch inflates held-in and held-out together.
+ * The gate's own `&&` is fail-fast by design: the cheap static floor should
+ * reject before anything pays for a test run. That is right for gating and
+ * wrong for measuring. A failing gate's error count is whichever stage died
+ * first, so a run going from 50 type errors to 3 type errors reads as 94%
+ * resolved while every lint error behind it is still there, unseen and unfixed.
+ * Under the acceptance rule that clears the promotion floor by a mile, and
+ * nothing catches it: the same stage switch inflates held-in and held-out
+ * together, and the fail-fast path uses FEWER cycles so the blowup veto stays
+ * quiet too.
  *
- * Pass/fail semantics are unchanged: exit 0 iff both sides exit 0. The cost is
- * running the task's own acceptance even when the gate is red, which is the
- * price of a count that means the same thing at every reading.
+ * SUBSHELLS, not brace groups. The stages are opaque strings assembled
+ * elsewhere; run in this shell, an `exit 0`, a `set -e`, a trap, or an
+ * assignment to the status variable would escape the wrapper and report success
+ * for a failing stage. A subshell contains all of it, and its exit status is
+ * still what the stage reported.
  */
-export function bothMustPass(gate: string, own: string): string {
-  // SUBSHELLS, not brace groups. Both sides are opaque strings assembled
-  // elsewhere; run in this shell, an `exit 0`, a `set -e`, a trap, or an
-  // assignment to one of the status variables would escape the wrapper and
-  // report success for a failing gate. A subshell contains all of that, and its
-  // exit status is still what the command reported.
-  return `( ${gate} ); __tsf_gate=$?; ( ${own} ); __tsf_own=$?; [ "$__tsf_gate" -eq 0 ] && [ "$__tsf_own" -eq 0 ]`;
+export function allMustRun(parts: readonly string[]): string {
+  if (parts.length === 0) {
+    return "true";
+  }
+
+  const runs = parts
+    .map(
+      (part, i) =>
+        `( ${part} ); __tsf_s${String(i)}=$?; [ "$__tsf_s${String(i)}" -eq 0 ] || __tsf_bad=1`
+    )
+    .join("; ");
+
+  return `__tsf_bad=0; ${runs}; [ "$__tsf_bad" -eq 0 ]`;
 }
 
 /**
  * Gate errors right now, as one number — the fixed measurement the graded run
  * score is built from (see ./progress.ts). Deliberately the BARE gate, with no
- * task acceptance composed onto it, so the reading means the same thing whenever
- * it is taken and whatever the run was doing at the time.
+ * task acceptance composed onto it, and with every stage run rather than
+ * short-circuited, so the reading means the same thing whenever it is taken and
+ * whatever the run was doing at the time.
+ *
+ * Returns null when the gate FAILED but produced nothing parseable — a crash, a
+ * missing binary, a timeout. `validate` substitutes a single generic error there,
+ * and taking that at face value would read a broken measurement as "1 error
+ * left": from a start of 50 that is 89% progress for a run that may have done
+ * nothing at all. Null is scored as no progress, not skipped, so the failure mode
+ * can never flatter a candidate and can never drop an unflattering run out of the
+ * denominator either.
  */
 async function gateErrorCount(
   runDir: string,
-  gateCommand: string
-): Promise<number> {
-  const result = await validate(
-    { id: "__progress__", accept: gateCommand, files: [] },
-    runDir
-  );
+  measureCommand: string
+): Promise<number | null> {
+  const task: ITask = { id: "__progress__", accept: measureCommand, files: [] };
+  const result = await runAccept(task, runDir);
 
-  return result.passed ? 0 : result.errors.length;
+  if (result.passed) {
+    return 0;
+  }
+
+  const parsed = parserFor(measureCommand)(result.output);
+
+  return parsed.length > 0 ? parsed.length : null;
 }
 
+/** Gate every task and the whole-spec verify behind tsforge's strict floor —
+ *  identical composition to the eval sweep, so scores are comparable. Left as
+ *  the fail-fast `&&` the loop has always used: the graded score no longer reads
+ *  these readings at all, so there is nothing here for this change to fix. */
 function gateSpec(
   gateCommand: string,
   spec: ReturnType<typeof parseSpec>
@@ -167,12 +193,10 @@ function gateSpec(
     tasks: spec.tasks.map((t) => ({
       ...t,
       fix: fixCommand,
-      accept: bothMustPass(gateCommand, t.accept),
+      accept: `${gateCommand} && ${t.accept}`,
     })),
     verify:
-      spec.verify.length > 0
-        ? bothMustPass(gateCommand, spec.verify)
-        : gateCommand,
+      spec.verify.length > 0 ? `${gateCommand} && ${spec.verify}` : gateCommand,
   };
 }
 
@@ -197,11 +221,14 @@ async function runTaskOnce(
   await startRed(runDir, spec);
   await runSeedSetup(runDir);
 
-  const gateCommand = (await buildGate(runDir)).command;
+  const gate = await buildGate(runDir);
+  const gateCommand = gate.command;
+  // Every stage, not the fail-fast join — see allMustRun.
+  const measureCommand = allMustRun(gate.parts ?? [gateCommand]);
   // Measured BEFORE the model starts, on the same command measured again after
   // it stops. startRed has already removed the task files, so this is the run's
   // honest opening state.
-  const startErrors = await gateErrorCount(runDir, gateCommand);
+  const startErrors = await gateErrorCount(runDir, measureCommand);
   const gated = gateSpec(gateCommand, spec);
   const logFile = Bun.file(join(runDir, "run.log")).writer();
   const events: ILoopEvent[] = [];
@@ -253,11 +280,13 @@ async function runTaskOnce(
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
   // How far the run got, not merely whether it arrived. See ./progress.ts.
-  const progress = runProgress(
-    startErrors,
-    passed ? 0 : await gateErrorCount(runDir, gateCommand),
-    passed
-  );
+  const endErrors = passed ? 0 : await gateErrorCount(runDir, measureCommand);
+  // A null on either end is an unusable measurement, scored as no progress —
+  // never skipped, never taken at face value.
+  const progress =
+    startErrors === null || endErrors === null
+      ? runProgress(0, 0, passed)
+      : runProgress(startErrors, endErrors, passed);
 
   return {
     record: {

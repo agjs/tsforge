@@ -167,6 +167,23 @@ function heldOutGuards(
 }
 
 /**
+ * A usable graded figure: present, finite, and inside the range it claims.
+ *
+ * `HarnessEvaluator` is a runtime boundary — injectable, and in production fed
+ * by arithmetic over measured counts — so the type says `number` and nothing
+ * enforces it. Checking only for undefined let NaN through, and NaN makes EVERY
+ * comparison below false: the minimum-gain check does not reject it and neither
+ * does the regression check, so a candidate whose held-in score was not a number
+ * sailed past both and was accepted. Out-of-range values are the same class of
+ * problem with a quieter symptom.
+ */
+function scored(value: number | undefined): value is number {
+  return (
+    value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1
+  );
+}
+
+/**
  * The graded decision, reached when pass counts are identical on both splits.
  *
  * Asks whether the candidate got FURTHER, not merely whether it arrived: mean
@@ -203,10 +220,10 @@ function progressDecision(
   // would be stricter than Δin ≥ 0 ∧ Δho ≥ 0 ∧ max > 0 and would reject real
   // wins over a measurement that is only the tie-break.
   if (
-    inBase === undefined ||
-    inCand === undefined ||
-    outBase === undefined ||
-    outCand === undefined
+    !scored(inBase) ||
+    !scored(inCand) ||
+    !scored(outBase) ||
+    !scored(outCand)
   ) {
     return no(
       "no strict gain on either split (Δin=0, Δho=0) and progress was not measured on both splits"
