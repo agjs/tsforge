@@ -79,18 +79,6 @@ const PROGRESS_HO_TOLERANCE = 0;
  * a bar on a prediction is how the loop accepted noise in the first place.
  */
 const HO_CYCLE_BLOWUP_FACTOR = 1.1;
-/** How much held-out progress must improve before extra cycles read as
- *  productive work rather than thrash. The SAME floor promotion uses: a move
- *  this change calls noise on held-in cannot simultaneously be evidence of
- *  real work on held-out, and at 1pp a jitter could switch the veto off and
- *  license an arbitrary blowup. */
-const HO_PROGRESS_MATERIAL = PROGRESS_MIN_GAIN;
-
-/** The ceiling on that exemption. Getting further buys more cycles, not
- *  unlimited ones — without a hard stop, the smallest material move (5pp, by
- *  definition the least that counts) would license an unbounded blowup, and
- *  "grinds twice as long" stops being a better harness whatever it gained. */
-const HO_CYCLE_EXEMPT_CEILING = 2;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -208,6 +196,12 @@ function progressDecision(
   // cannot show non-regression — accepting there would promote an edit on no
   // evidence that it generalises, which is the one thing the held-out split
   // exists to prevent.
+  //
+  // This governs THIS path only — the graded one. A candidate with a strict pass
+  // gain is decided by the paper's rule and never reaches here, so it is still
+  // accepted with no graded figure at all. That is deliberate: requiring one
+  // would be stricter than Δin ≥ 0 ∧ Δho ≥ 0 ∧ max > 0 and would reject real
+  // wins over a measurement that is only the tie-break.
   if (
     inBase === undefined ||
     inCand === undefined ||
@@ -239,41 +233,23 @@ function progressDecision(
     );
   }
 
-  // The cycle guard asks "same place, slower?" — so it only applies when
-  // held-out progress did NOT improve. Spending more cycles to get FURTHER is
-  // the behaviour this whole feature exists to reward; vetoing it would make
-  // the graded dimension self-defeating precisely when the baseline fails fast
-  // and the candidate works the problem. Thrash is more cycles for no more
-  // ground, and that is what this catches.
+  // The cycle guard, unconditional at the bar the previous rule used.
+  //
+  // A waiver was tried — the veto lifted, up to a hard ceiling, when held-out
+  // progress improved materially — on the argument that spending more cycles to
+  // get FURTHER is the behaviour this feature exists to reward, and that vetoing
+  // it makes the graded dimension self-defeating when the baseline fails fast.
+  // Reviewers called every version of it a relaxation, and they were right: the
+  // waiver made a candidate acceptable that the previous rule rejected, and the
+  // reasoning for why that was safe was mine, not evidence. A stricter bar can
+  // only cost false REJECTIONS, which for a loop that edits itself is the safe
+  // direction to be wrong in. If real candidates start dying here with genuine
+  // held-out progress, that is a measurement to bring back — not a prediction.
   const cycles = commonCycles(baseline.heldOut, candidate.heldOut);
-  // A MATERIAL increase, not any epsilon: a 0.1pp blip would otherwise disable
-  // the guard entirely and let a candidate thrash held-out for free.
-  // Same epsilon as the held-in comparison: 0.45 - 0.40 is
-  // 0.04999999999999999, and without it an exact 5pp held-out improvement
-  // fails the material check, leaving the veto on and rejecting a candidate
-  // that spent cycles to get further — the path this feature rewards.
-  const wentFurther = outCand - outBase >= HO_PROGRESS_MATERIAL - 1e-9;
 
-  // The exemption is bounded. Getting further earns more cycles; it does not
-  // earn unlimited ones, or a 5pp nudge — the smallest move that counts as
-  // material at all — would buy a 10× blowup. Above the ceiling the candidate is
-  // rejected however much ground it gained: at that point the edit is not making
-  // the model better at the task, it is making it grind.
-  const bar = wentFurther ? HO_CYCLE_EXEMPT_CEILING : HO_CYCLE_BLOWUP_FACTOR;
-  // A zero baseline has no ratio: every bar multiplies out to zero, so a single
-  // candidate cycle trips even the 2× ceiling. On the thrash path that stays —
-  // more cycles than a baseline that spent none, for no extra ground, is the
-  // definition of the thing. But it must not kill the exemption, or a baseline
-  // that did nothing at all would veto the candidate that did the work, which is
-  // the exact self-defeat the exemption exists to prevent.
-  const noRatio = cycles.base <= 0;
-  const exempt = wentFurther && noRatio;
-
-  if (cycles.tasks > 0 && !exempt && cycles.cand > cycles.base * bar) {
+  if (cycles.tasks > 0 && cycles.cand > cycles.base * HO_CYCLE_BLOWUP_FACTOR) {
     return no(
-      wentFurther
-        ? `held-out cycles blew up past the ceiling even for extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_EXEMPT_CEILING)}×)`
-        : `held-out cycles blew up for no extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
+      `held-out cycles blew up (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
     );
   }
 

@@ -113,6 +113,25 @@ async function runSeedSetup(dir: string): Promise<void> {
 
 /** Gate every task and the whole-spec verify behind tsforge's strict floor —
  *  identical composition to the eval sweep, so scores are comparable. */
+/**
+ * Join the repo-wide gate to a task's own acceptance so BOTH sides always run.
+ *
+ * `&&` short-circuits, and that makes the error count incomparable between
+ * readings — which matters because the graded run score reads those counts as
+ * one series (see ./progress.ts). Once the gate goes red, every downstream test
+ * failure hides behind it: a run that breaks the type check reads as ONE error
+ * while being further from passing than the forty-failure run it replaced. That
+ * is a way to score progress by getting worse, and no acceptance guard bounds it
+ * — the same stage switch inflates held-in and held-out together.
+ *
+ * Pass/fail semantics are unchanged: exit 0 iff both sides exit 0. The cost is
+ * running the task's own acceptance even when the gate is red, which is the
+ * price of a count that means the same thing at every reading.
+ */
+export function bothMustPass(gate: string, own: string): string {
+  return `{ ${gate}; }; __tsf_gate=$?; { ${own}; }; __tsf_own=$?; [ "$__tsf_gate" -eq 0 ] && [ "$__tsf_own" -eq 0 ]`;
+}
+
 async function gateSpec(
   runDir: string,
   spec: ReturnType<typeof parseSpec>
@@ -125,10 +144,12 @@ async function gateSpec(
     tasks: spec.tasks.map((t) => ({
       ...t,
       fix: fixCommand,
-      accept: `${gateCommand} && ${t.accept}`,
+      accept: bothMustPass(gateCommand, t.accept),
     })),
     verify:
-      spec.verify.length > 0 ? `${gateCommand} && ${spec.verify}` : gateCommand,
+      spec.verify.length > 0
+        ? bothMustPass(gateCommand, spec.verify)
+        : gateCommand,
   };
 }
 

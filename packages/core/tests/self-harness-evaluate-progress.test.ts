@@ -3,10 +3,12 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  bothMustPass,
   evaluateHarness,
   meanProgress,
   runProgress,
 } from "../src/self-harness";
+import { runShellCommand } from "../src/lib/fs/process";
 
 /**
  * The PRODUCTION path: does `evaluateHarness` actually put a graded score on
@@ -228,4 +230,44 @@ describe("evaluateHarness records the graded score", () => {
       }
     })();
   }, 180_000);
+});
+
+describe("bothMustPass", () => {
+  /**
+   * The graded score reads gate error counts as one series, so every reading has
+   * to mean the same thing. `&&` broke that: once the gate went red it hid every
+   * downstream failure behind it, so breaking the type check turned forty test
+   * failures into one error and READ as progress.
+   */
+  const run = (
+    gate: string,
+    own: string
+  ): Promise<{ exitCode: number; out: string }> =>
+    runShellCommand(process.cwd(), bothMustPass(gate, own)).then((r) => ({
+      exitCode: r.exitCode,
+      out: r.stdout + r.stderr,
+    }));
+
+  test("exits 0 only when BOTH sides pass", async () => {
+    expect((await run("true", "true")).exitCode).toBe(0);
+    expect((await run("false", "true")).exitCode).not.toBe(0);
+    expect((await run("true", "false")).exitCode).not.toBe(0);
+    expect((await run("false", "false")).exitCode).not.toBe(0);
+  });
+
+  test("a failing gate does not hide the downstream errors", async () => {
+    // THE point. Under `&&` this output would contain GATE_ERR alone, and the
+    // reading would be "1 error" for a run that also has every test failing.
+    const r = await run("echo GATE_ERR; false", "echo OWN_ERR; false");
+
+    expect(r.out).toContain("GATE_ERR");
+    expect(r.out).toContain("OWN_ERR");
+  });
+
+  test("a failing gate does not suppress a PASSING downstream either", async () => {
+    const r = await run("echo GATE_ERR; false", "echo OWN_RAN");
+
+    expect(r.out).toContain("OWN_RAN");
+    expect(r.exitCode).not.toBe(0);
+  });
 });

@@ -245,42 +245,6 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("held-out cycles blew up");
   });
 
-  test("spending more cycles to get FURTHER is not treated as thrash", () => {
-    // The category error: the bar was calibrated for same-outcome comparisons,
-    // but on the path this feature exists for the baseline often fails fast
-    // while a better candidate spends its budget clearing errors. Vetoing that
-    // rejects the only signal the graded dimension adds.
-    const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.4), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.7), 9)
-    );
-
-    expect(d.accepted).toBe(true);
-  });
-
-  test("a baseline that spent NO cycles cannot veto the work the candidate did", () => {
-    // Every bar multiplies a zero baseline out to zero, so a single candidate
-    // cycle trips even the 2x ceiling. Left alone, a baseline that did nothing
-    // vetoes the candidate that did the work — the exact self-defeat the
-    // exemption exists to prevent.
-    const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.4), 0),
-      withCyclesOn(withProgress(base, 0.8, 0.7), 12)
-    );
-
-    expect(d.accepted).toBe(true);
-  });
-
-  test("a zero baseline still vetoes cycles spent for NO extra ground", () => {
-    const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.6), 0),
-      withCyclesOn(withProgress(base, 0.8, 0.6), 12)
-    );
-
-    expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("no extra ground");
-  });
-
   test("held-out level to the last bit is not a regression", () => {
     // 0.1 + 0.2 is 0.30000000000000004; a bare `<` reads the mirror of that as a
     // regression and rejects a candidate whose held-out did not move at all.
@@ -290,30 +254,6 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     );
 
     expect(d.accepted).toBe(true);
-  });
-
-  test("getting further buys more cycles, but not unlimited ones", () => {
-    // The exemption is bounded. Otherwise the smallest material move — 5pp, by
-    // definition the least that counts — would license any blowup at all, and a
-    // harness that grinds ten times as long is not a better one whatever ground
-    // it gained.
-    const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.4), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.7), 50)
-    );
-
-    expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("past the ceiling");
-  });
-
-  test("more cycles for NO extra ground is still thrash", () => {
-    const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.6), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.6), 50)
-    );
-
-    expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("no extra ground");
   });
 
   test("the 5pp floor is NOT relaxed on a nearly-green split", () => {
@@ -330,27 +270,38 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("needs +5.0pp");
   });
 
-  test("an exact 5pp held-out gain counts as going further, despite floats", () => {
-    // 0.45 - 0.40 is 0.04999999999999999. Without an epsilon the veto stays on
-    // and rejects exactly the candidate this feature exists to reward.
+  test("held-out cycles blowing up is vetoed however much ground was gained", () => {
+    // The bar is unconditional. A waiver for candidates that got further was
+    // tried in three shapes and each one was a relaxation: it accepted what the
+    // previous rule rejected, on my reasoning rather than on evidence.
     const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.4), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.45), 9)
+      withCyclesOn(withProgress(base, 0.3, 0.4), 10),
+      withCyclesOn(withProgress(base, 0.8, 0.9), 40)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out cycles blew up");
+  });
+
+  test("more cycles within the bar is fine", () => {
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 10),
+      withCyclesOn(withProgress(base, 0.8, 0.5), 11)
     );
 
     expect(d.accepted).toBe(true);
   });
 
-  test("a microscopic held-out gain does not buy a cycle blowup", () => {
-    // `wentFurther` on any epsilon let a 0.1pp blip switch the thrash guard
-    // off entirely.
+  test("a baseline that spent NO cycles vetoes any candidate cycles", () => {
+    // Zero baseline has no ratio — every bar multiplies out to zero. Vetoing is
+    // the strict reading, and strict is the safe direction to be wrong in.
     const d = acceptanceDecision(
-      withCyclesOn(withProgress(base, 0.3, 0.6), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.61), 50)
+      withCyclesOn(withProgress(base, 0.3, 0.4), 0),
+      withCyclesOn(withProgress(base, 0.8, 0.9), 12)
     );
 
     expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("no extra ground");
+    expect(d.reason).toContain("held-out cycles blew up");
   });
 
   test("held-out holding exactly level is fine", () => {
