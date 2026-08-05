@@ -127,7 +127,7 @@ export function buildBinaryInvocation(
 export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
-): Promise<{ ok: boolean; stdout: string }> {
+): Promise<{ ok: boolean; stdout: string; timedOut: boolean }> {
   const tmpPath =
     r.input === "tempfile"
       ? join(tmpdir(), `tsforge-review-${randomUUID()}.txt`)
@@ -152,7 +152,12 @@ export async function runBinary(
     stdout: "pipe",
     stderr: "ignore",
   });
+  // Recorded rather than inferred: a killed process exits non-zero, so the exit
+  // code alone cannot distinguish "we killed it at the budget" from "it failed
+  // on its own". Only the killer knows.
+  let timedOut = false;
   const timer = setTimeout(() => {
+    timedOut = true;
     proc.kill();
   }, r.timeoutMs);
 
@@ -160,7 +165,7 @@ export async function runBinary(
     const stdout = await new Response(proc.stdout).text();
     const code = await proc.exited;
 
-    return { ok: code === 0, stdout };
+    return { ok: code === 0, stdout, timedOut };
   } finally {
     clearTimeout(timer);
 
@@ -269,6 +274,18 @@ export function formatVerdict(v: IVerdict): string {
     `harness-review: ${head} — ${v.reason}`,
     `reviewers ok: ${String(v.reviewers.ok)}  errored: ${String(v.reviewers.errored)}  (builder: ${v.identity})`,
   ];
+
+  // Name every reviewer that dropped out, with why and how long it took. A bare
+  // "errored: 2" is the same line whether two binaries are misconfigured or the
+  // whole panel timed out, and those need opposite responses.
+  for (const f of v.failures ?? []) {
+    const took =
+      f.ms === undefined ? "" : ` after ${(f.ms / 1000).toFixed(1)}s`;
+
+    lines.push(
+      `  ! ${f.reviewerId} did not review (${f.cause ?? "error"})${took}: ${f.error}`
+    );
+  }
 
   for (const f of v.ranked) {
     lines.push(

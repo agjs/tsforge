@@ -3,8 +3,50 @@ import { isRecord } from "../lib/guards";
 import type { IReview, IFinding, FindingCode } from "./schema";
 
 export type ReviewOutcome =
-  | { status: "ok"; review: IReview }
-  | { status: "errored"; reviewerId: string; error: string };
+  | { status: "ok"; review: IReview; ms?: number }
+  | {
+      status: "errored";
+      reviewerId: string;
+      error: string;
+      /** Wall-clock ms the reviewer consumed before failing. Without it a crash
+       *  and a timeout are indistinguishable in the logs, which is exactly the
+       *  question you want answered when a panel comes back short: did this
+       *  reviewer die instantly, or did it burn its whole budget doing work that
+       *  was then thrown away? Diagnosing that once took an afternoon of timing
+       *  the binaries by hand. */
+      ms?: number;
+      /** Why it failed, as a category rather than prose: `timeout` (killed at
+       *  the budget), `exit` (ran, exited non-zero), `unparseable` (answered,
+       *  but not in the review schema), `threw` (the call itself failed). The
+       *  old string said "binary exited non-zero or timed out" for the first two
+       *  at once and so could not tell them apart. */
+      cause?: ReviewFailureCause;
+    };
+
+/** The failure taxonomy, and the single source of the union below. `timeout`
+ *  means the budget was too small for the work (raise it, or drop the reviewer);
+ *  `exit` means the binary is broken (the budget is irrelevant). Collapsing those
+ *  two into one message is what made this undiagnosable. */
+const FAILURE_CAUSES = ["timeout", "exit", "unparseable", "threw"] as const;
+
+export type ReviewFailureCause = (typeof FAILURE_CAUSES)[number];
+
+/** Widened to string so `includes` accepts an unknown-origin value. Kept next to
+ *  FAILURE_CAUSES, which the union is derived FROM, so the two cannot drift. */
+const KNOWN_CAUSES: readonly string[] = FAILURE_CAUSES;
+
+/** Narrow an unknown to a known cause. A type guard, not an `as` cast: the value
+ *  comes off disk and an unrecognised string must be dropped, not asserted. */
+function isFailureCause(value: unknown): value is ReviewFailureCause {
+  return typeof value === "string" && KNOWN_CAUSES.includes(value);
+}
+
+export interface IReviewerFailure {
+  reviewerId: string;
+  error: string;
+  cause?: ReviewFailureCause;
+  ms?: number;
+}
 
 export interface IRankedFinding extends IFinding {
   agreement: number;
@@ -14,6 +56,11 @@ export interface IVerdict {
   blocked: boolean;
   reason: string;
   reviewers: { ok: number; errored: number };
+  /** Who failed and why, one entry per errored reviewer. The counts alone say a
+   *  panel came back short; they never say WHICH reviewer, or whether it died
+   *  instantly or burned its whole budget — and those imply opposite fixes.
+   *  Empty/absent when every reviewer answered. */
+  failures?: IReviewerFailure[];
   ranked: IRankedFinding[];
   perReviewer: IReview[];
   identity: string;
@@ -161,15 +208,22 @@ export function aggregate(
   opts: { minReviewers: number; identity: string }
 ): IVerdict {
   const reviews: IReview[] = [];
-  let errored = 0;
+  const failures: IReviewerFailure[] = [];
 
   for (const o of outcomes) {
     if (o.status === "ok") {
       reviews.push(o.review);
     } else {
-      errored += 1;
+      failures.push({
+        reviewerId: o.reviewerId,
+        error: o.error,
+        ...(o.cause === undefined ? {} : { cause: o.cause }),
+        ...(o.ms === undefined ? {} : { ms: o.ms }),
+      });
     }
   }
+
+  const errored = failures.length;
 
   const ranked = rank(groupFindings(reviews));
   const reason = decideReason(
@@ -186,8 +240,41 @@ export function aggregate(
     ranked,
     perReviewer: reviews,
     identity: opts.identity,
+    ...(failures.length > 0 ? { failures } : {}),
     ...(reviews.length < opts.minReviewers ? { noQuorum: true } : {}),
   };
+}
+
+/**
+ * Rehydrate the per-reviewer failure diagnostics from a cached artifact.
+ *
+ * A malformed entry is DROPPED rather than failing the whole parse: these are
+ * informational, and losing one diagnostic line is not a reason to treat an
+ * otherwise valid cached verdict as corrupt and re-run the entire panel.
+ */
+function parseFailures(raw: unknown): IReviewerFailure[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const out: IReviewerFailure[] = [];
+
+  for (const f of raw) {
+    if (
+      isRecord(f) &&
+      typeof f.reviewerId === "string" &&
+      typeof f.error === "string"
+    ) {
+      out.push({
+        reviewerId: f.reviewerId,
+        error: f.error,
+        ...(isFailureCause(f.cause) ? { cause: f.cause } : {}),
+        ...(typeof f.ms === "number" ? { ms: f.ms } : {}),
+      });
+    }
+  }
+
+  return out;
 }
 
 /** Parse and validate a cached verdict artifact. Returns null if any field is
@@ -259,6 +346,8 @@ export function parseVerdict(raw: unknown): IVerdict | null {
     parsedReviews.push(review);
   }
 
+  const parsedFailures = parseFailures(raw.failures);
+
   return {
     blocked,
     reason,
@@ -266,6 +355,7 @@ export function parseVerdict(raw: unknown): IVerdict | null {
     ranked: parsedRanked,
     perReviewer: parsedReviews,
     identity,
+    ...(parsedFailures.length > 0 ? { failures: parsedFailures } : {}),
     ...(raw.preReview === true ? { preReview: true } : {}),
     ...(raw.noQuorum === true ? { noQuorum: true } : {}),
   };

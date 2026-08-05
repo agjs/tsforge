@@ -126,7 +126,9 @@ describe("reviewerInvoke", () => {
       deps
     );
 
-    expect(out[0]).toEqual({
+    // toMatchObject, not toEqual: every outcome also carries `ms` (how long the
+    // reviewer took), which is a live clock and not what this test is about.
+    expect(out[0]).toMatchObject({
       status: "ok",
       review: {
         reviewerId: "grok",

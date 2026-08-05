@@ -18,10 +18,10 @@ export interface IInvokeDeps {
   runBinary: (
     r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
     stdin: string
-  ) => Promise<{ ok: boolean; stdout: string }>;
+  ) => Promise<{ ok: boolean; stdout: string; timedOut?: boolean }>;
 }
 
-function reviewFrom(id: string, rawText: string): ReviewOutcome {
+function reviewFrom(id: string, rawText: string, ms: number): ReviewOutcome {
   let review: IReview | null;
 
   try {
@@ -31,8 +31,14 @@ function reviewFrom(id: string, rawText: string): ReviewOutcome {
   }
 
   return review === null
-    ? { status: "errored", reviewerId: id, error: "unparseable review output" }
-    : { status: "ok", review };
+    ? {
+        status: "errored",
+        reviewerId: id,
+        error: "unparseable review output",
+        cause: "unparseable",
+        ms,
+      }
+    : { status: "ok", review, ms };
 }
 
 async function invokeModel(
@@ -40,18 +46,22 @@ async function invokeModel(
   request: IReviewRequest,
   deps: IInvokeDeps
 ): Promise<ReviewOutcome> {
+  const started = Date.now();
+
   try {
     const res = await deps.makeProvider(reviewer.entry).complete([
       { role: "system", content: REVIEW_SYSTEM_PROMPT },
       { role: "user", content: renderReviewPrompt(request) },
     ]);
 
-    return reviewFrom(reviewer.id, res.content);
+    return reviewFrom(reviewer.id, res.content, Date.now() - started);
   } catch (err) {
     return {
       status: "errored",
       reviewerId: reviewer.id,
       error: err instanceof Error ? err.message : String(err),
+      cause: "threw",
+      ms: Date.now() - started,
     };
   }
 }
@@ -70,6 +80,8 @@ async function invokeBinary(
   request: IReviewRequest,
   deps: IInvokeDeps
 ): Promise<ReviewOutcome> {
+  const started = Date.now();
+
   try {
     // Binaries have no separate system channel, so the review contract (JSON
     // schema + reject-by-default + rubric) must be prepended to their single
@@ -87,10 +99,21 @@ async function invokeBinary(
     );
 
     if (!res.ok) {
+      // Timeout and non-zero exit are DIFFERENT facts and the old message
+      // reported them as one. A timeout means the budget is too small for the
+      // work — raise it, or drop the reviewer. A non-zero exit means it is
+      // broken — the budget is irrelevant. Told apart, the fix is obvious;
+      // conflated, the only way to find out is to time the binary by hand.
+      const timedOut = res.timedOut === true;
+
       return {
         status: "errored",
         reviewerId: reviewer.id,
-        error: "binary exited non-zero or timed out",
+        error: timedOut
+          ? `binary hit its ${String(reviewer.timeoutMs)}ms timeout`
+          : "binary exited non-zero",
+        cause: timedOut ? "timeout" : "exit",
+        ms: Date.now() - started,
       };
     }
 
@@ -99,12 +122,14 @@ async function invokeBinary(
         ? extractBinaryJson(res.stdout)
         : res.stdout;
 
-    return reviewFrom(reviewer.id, payload);
+    return reviewFrom(reviewer.id, payload, Date.now() - started);
   } catch (err) {
     return {
       status: "errored",
       reviewerId: reviewer.id,
       error: err instanceof Error ? err.message : String(err),
+      cause: "threw",
+      ms: Date.now() - started,
     };
   }
 }
