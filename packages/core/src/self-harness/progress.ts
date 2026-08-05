@@ -55,15 +55,17 @@ export function taskTraces(events: readonly ILoopEvent[]): ITaskTrace[] {
 
 /** What one task achieved: the fraction of ITS starting errors it cleared.
  *
- *  The BEST state within that task, not its last, because the harness LOCKS a
- *  near-green checkpoint when it reaches one — so the best state is a state the
- *  run actually banked and can return to, not a peak it merely passed through.
- *  (An earlier note here claimed cycles penalise a rebound; that is no longer
- *  true on the deciding path, where cycles are only a held-out veto. The
- *  checkpoint is the real justification, and it stands on its own.)
+ *  The FINAL state, not the best one reached. Scoring the minimum credited a run
+ *  for ground it did not keep: a trace of 10 → 1 → 6 scored 0.9 while ending at
+ *  6. The near-green checkpoint was the justification for that, but it is
+ *  flag-gated and stops reverting after MAX_NEAR_GREEN_ROLLBACKS, so a run is
+ *  NOT guaranteed to end on the state it banked. Final is right either way —
+ *  when the checkpoint does restore, the final state IS the best one.
+ *
  *  Scoped to the task so a neighbour's zero cannot leak in. */
 function taskProgress(trace: ITaskTrace): number {
   const start = trace.counts[0];
+  const end = trace.counts[trace.counts.length - 1];
 
   if (start === undefined || start <= 0) {
     // Opened green. Nothing was there to resolve, so this task contributes a
@@ -71,7 +73,7 @@ function taskProgress(trace: ITaskTrace): number {
     return 1;
   }
 
-  return clamp01((start - Math.min(...trace.counts)) / start);
+  return clamp01((start - (end ?? start)) / start);
 }
 
 /**

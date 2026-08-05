@@ -39,18 +39,17 @@ const LOC_TOLERANCE_FACTOR = 1.25;
  * pass/fail scores as nothing.
  */
 const PROGRESS_MIN_GAIN = 0.05;
-/**
- * …but measured against the HEADROOM that was actually available, not the raw
- * split mean.
+/*
+ * There is deliberately no headroom-relative relaxation of that floor.
  *
- * Every passing run contributes 1.0 to the mean, so on a mostly-green split the
- * most a candidate can possibly gain is roughly failed/total. With one failing
- * run in twenty, completely fixing it moves the mean by 0.05 — right at the
- * floor — so the graded dimension would go dark exactly on the corpora we have.
- * Requiring a fraction of what was there to win keeps the bar meaningful on a
- * nearly-green split without lowering it on a mostly-red one.
+ * On a nearly-green split every passing run contributes 1.0, so the most a
+ * candidate can gain is roughly failed/total, and the graded dimension goes
+ * quiet. Scaling the bar down to keep it talking — it briefly fell to 0.005 —
+ * means accepting half-a-point moves, which is the measurement noise this whole
+ * change exists to exclude. Going quiet when there is nothing to measure is the
+ * correct behaviour; the fix for a corpus with no headroom is harder tasks, not
+ * a lower bar.
  */
-const PROGRESS_MIN_HEADROOM_SHARE = 0.25;
 /** Held-out progress may not fall AT ALL. The paper's rule is non-regression on
  *  the held-out split; a tolerance here would permit promoting a candidate with
  *  measurably worse held-out behaviour, which is precisely what that split
@@ -73,6 +72,9 @@ const PROGRESS_HO_TOLERANCE = 0;
  * and passed everything. Same bar, applied where it was previously blind.
  */
 const HO_CYCLE_BLOWUP_FACTOR = 1.1;
+/** How much held-out progress must actually improve before extra cycles are
+ *  read as productive work rather than thrash. */
+const HO_PROGRESS_MATERIAL = 0.01;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -204,18 +206,9 @@ function progressDecision(
   const pct = (v: number): string => (v * 100).toFixed(1);
   const gain = inCand - inBase;
 
-  // Whichever bar is EASIER to clear, so neither a mostly-red nor a
-  // mostly-green split can render the dimension unusable — but both are real
-  // bars, and a candidate that moves nothing clears neither.
-  const headroom = 1 - inBase;
-  const required = Math.min(
-    PROGRESS_MIN_GAIN,
-    Math.max(headroom * PROGRESS_MIN_HEADROOM_SHARE, 0.005)
-  );
-
-  if (gain < required) {
+  if (gain < PROGRESS_MIN_GAIN) {
     return no(
-      `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(required)}pp of the ${pct(headroom)}pp available)`
+      `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`
     );
   }
 
@@ -232,7 +225,9 @@ function progressDecision(
   // and the candidate works the problem. Thrash is more cycles for no more
   // ground, and that is what this catches.
   const cycles = commonCycles(baseline.heldOut, candidate.heldOut);
-  const wentFurther = outCand > outBase;
+  // A MATERIAL increase, not any epsilon: a 0.1pp blip would otherwise disable
+  // the guard entirely and let a candidate thrash held-out for free.
+  const wentFurther = outCand - outBase >= HO_PROGRESS_MATERIAL;
 
   if (
     !wentFurther &&

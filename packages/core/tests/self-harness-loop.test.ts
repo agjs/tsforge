@@ -265,25 +265,30 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("no extra ground");
   });
 
-  test("the bar scales to the headroom actually available", () => {
-    // On a nearly-green split every passing run contributes 1.0, so the most a
-    // candidate can gain is roughly failed/total. A flat 5pp floor made the
-    // dimension go dark exactly on the corpora we have — one failing run in
-    // twenty, fully fixed, moves the mean by 0.05 at best.
-    const nearlyGreen = acceptanceDecision(
+  test("the 5pp floor is NOT relaxed on a nearly-green split", () => {
+    // Briefly the bar scaled with headroom and could fall to 0.005, accepting
+    // half-a-point moves — the exact noise this change exists to exclude.
+    // Going quiet when a split has no headroom left is correct; the answer to a
+    // corpus with nothing to measure is harder tasks, not a lower bar.
+    const d = acceptanceDecision(
       withProgress(base, 0.95, 0.9),
       withProgress(base, 0.98, 0.9)
     );
 
-    expect(nearlyGreen.accepted).toBe(true);
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("needs +5.0pp");
+  });
 
-    // …but a candidate that moves almost nothing still clears neither bar.
-    const noise = acceptanceDecision(
-      withProgress(base, 0.95, 0.9),
-      withProgress(base, 0.952, 0.9)
+  test("a microscopic held-out gain does not buy a cycle blowup", () => {
+    // `wentFurther` on any epsilon let a 0.1pp blip switch the thrash guard
+    // off entirely.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.6), 5),
+      withCyclesOn(withProgress(base, 0.8, 0.601), 50)
     );
 
-    expect(noise.accepted).toBe(false);
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("no extra ground");
   });
 
   test("held-out holding exactly level is fine", () => {

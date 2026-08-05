@@ -108,13 +108,16 @@ describe("runProgress", () => {
     ).toBe(0);
   });
 
-  test("scores the best state reached WITHIN a task, not its last", () => {
-    // A run that touches 1 error then thrashes back to 6 proved it could reach
-    // 1; the harness keeps a near-green checkpoint for that reason and cycles
-    // already penalise the thrash.
+  test("scores the state the run KEPT, not the best it passed through", () => {
+    // 10 → 1 → 6 ends at 6, so it resolved 4 of 10. Crediting the transient 1
+    // would score 0.9 for ground the run did not hold. The near-green
+    // checkpoint was the old justification, but it is flag-gated and stops
+    // reverting after MAX_NEAR_GREEN_ROLLBACKS — so the run is not guaranteed
+    // to end where it banked. When the checkpoint DOES restore, final is the
+    // best anyway.
     const events = [ev("red", 10), ev("validated", 1), ev("validated", 6)];
 
-    expect(runProgress(events, false, ["1"])).toBeCloseTo(0.9, 5);
+    expect(runProgress(events, false, ["1"])).toBeCloseTo(0.4, 5);
   });
 
   test("getting worse than the start scores 0, never negative", () => {
