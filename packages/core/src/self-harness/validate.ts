@@ -99,10 +99,6 @@ function heldOutGuards(
   return null;
 }
 
-/** The efficiency tie-break, reached ONLY at Δin=0 ∧ Δho=0: equal pass counts
- *  may still promote an edit that makes the harness materially FASTER to green
- *  — the signal the paper's pass-only metric can't see. Pass regression never
- *  reaches here; nothing about the pass rule is loosened. */
 /**
  * The graded decision, reached when pass counts are identical on both splits.
  *
@@ -119,45 +115,44 @@ function progressDecision(
 ): IAcceptanceDecision {
   const inBase = baseline.heldIn.avgProgress;
   const inCand = candidate.heldIn.avgProgress;
-
-  // No graded claim is possible when either side recorded no progress at all —
-  // typically an endpoint failure. Silence is not evidence of improvement.
-  if (inBase === undefined || inCand === undefined) {
-    return {
-      accepted: false,
-      deltaIn: 0,
-      deltaOut: 0,
-      reason:
-        "no strict gain on either split (Δin=0, Δho=0) and no graded progress recorded",
-    };
-  }
-
-  const gain = inCand - inBase;
-  const pct = (v: number): string => (v * 100).toFixed(1);
-
-  if (gain < PROGRESS_MIN_GAIN) {
-    return {
-      accepted: false,
-      deltaIn: 0,
-      deltaOut: 0,
-      reason: `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`,
-    };
-  }
-
   const outBase = baseline.heldOut.avgProgress;
   const outCand = candidate.heldOut.avgProgress;
+  const no = (reason: string): IAcceptanceDecision => ({
+    accepted: false,
+    deltaIn: 0,
+    deltaOut: 0,
+    reason,
+  });
 
+  // FAIL CLOSED on a missing score, on either split. A split with no graded
+  // figure is a split that was not measured, and an unmeasured held-out split
+  // cannot show non-regression — accepting there would promote an edit on no
+  // evidence that it generalises, which is the one thing the held-out split
+  // exists to prevent.
   if (
-    outBase !== undefined &&
-    outCand !== undefined &&
-    outCand < outBase - PROGRESS_HO_TOLERANCE
+    inBase === undefined ||
+    inCand === undefined ||
+    outBase === undefined ||
+    outCand === undefined
   ) {
-    return {
-      accepted: false,
-      deltaIn: 0,
-      deltaOut: 0,
-      reason: `held-out progress regressed (${pct(outBase)}%→${pct(outCand)}%)`,
-    };
+    return no(
+      "no strict gain on either split (Δin=0, Δho=0) and progress was not measured on both splits"
+    );
+  }
+
+  const pct = (v: number): string => (v * 100).toFixed(1);
+  const gain = inCand - inBase;
+
+  if (gain < PROGRESS_MIN_GAIN) {
+    return no(
+      `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`
+    );
+  }
+
+  if (outCand < outBase - PROGRESS_HO_TOLERANCE) {
+    return no(
+      `held-out progress regressed (${pct(outBase)}%→${pct(outCand)}%)`
+    );
   }
 
   if (guard !== null) {
@@ -168,7 +163,7 @@ function progressDecision(
     accepted: true,
     deltaIn: 0,
     deltaOut: 0,
-    reason: `progress gain: held-in ${pct(inBase)}%→${pct(inCand)}% of gate errors resolved, held-out ${outBase === undefined ? "n/a" : `${pct(outBase)}%→${pct(outCand ?? outBase)}%`}`,
+    reason: `progress gain: held-in ${pct(inBase)}%→${pct(inCand)}% of gate errors resolved, held-out ${pct(outBase)}%→${pct(outCand)}%`,
   };
 }
 

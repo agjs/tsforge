@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
-  errorTrace,
+  taskTraces,
   runProgress,
   meanProgress,
 } from "../src/self-harness/progress";
@@ -12,10 +12,10 @@ import type { ILoopEvent } from "../src/loop";
  * only ever accept flukes.
  */
 
-function ev(kind: ILoopEvent["kind"], errors?: number): ILoopEvent {
+function ev(kind: ILoopEvent["kind"], errors?: number, task = "1"): ILoopEvent {
   return {
     kind,
-    task: "t",
+    task,
     message: "",
     ...(errors === undefined ? {} : { errors }),
   };
@@ -24,21 +24,23 @@ function ev(kind: ILoopEvent["kind"], errors?: number): ILoopEvent {
 /** The real trace from a failed `query` run, 2026-08-05. */
 const REAL_FAILED_RUN = [50, 54, 51, 49, 42, 42, 29, 1, 1, 1, 1, 1];
 
-describe("errorTrace", () => {
-  test("collects the opening red and every gate settlement", () => {
-    const events = [
-      ev("red", 8),
-      ev("cycle"),
-      ev("validated", 5),
-      ev("token"),
-      ev("validated", 2),
-    ];
+describe("taskTraces", () => {
+  test("groups counts by task", () => {
+    const traces = taskTraces([
+      ev("red", 8, "1"),
+      ev("validated", 5, "1"),
+      ev("red", 4, "2"),
+      ev("validated", 4, "2"),
+    ]);
 
-    expect(errorTrace(events)).toEqual([8, 5, 2]);
+    expect(traces).toEqual([
+      { task: "1", counts: [8, 5] },
+      { task: "2", counts: [4, 4] },
+    ]);
   });
 
-  test("ignores events with no error count", () => {
-    expect(errorTrace([ev("cycle"), ev("done"), ev("token")])).toEqual([]);
+  test("ignores events carrying no error count", () => {
+    expect(taskTraces([ev("cycle"), ev("done"), ev("token")])).toEqual([]);
   });
 });
 
@@ -57,51 +59,78 @@ describe("runProgress", () => {
     expect(runProgress(events, false)).toBeCloseTo(0.98, 2);
   });
 
-  test("a run that resolved nothing scores 0", () => {
-    const events = [ev("red", 10), ev("validated", 10)];
+  test("a failed multi-task run is NOT 1 just because one task greened", () => {
+    // The bug the reviewers caught: one `Math.min` over the flat stream saw the
+    // greened task's zero and scored the whole failed run 1.0 — identical to a
+    // pass, with the second task's residual errors invisible.
+    const events = [
+      ev("red", 10, "1"),
+      ev("validated", 0, "1"),
+      ev("red", 10, "2"),
+      ev("validated", 8, "2"),
+    ];
 
-    expect(runProgress(events, false)).toBe(0);
+    // task 1 resolved everything (1.0), task 2 resolved a fifth (0.2).
+    expect(runProgress(events, false)).toBeCloseTo(0.6, 5);
   });
 
-  test("scores the BEST state reached, not the last", () => {
-    // A run that reaches 1 error then thrashes back to 6 proved it could reach
-    // 1; the harness keeps a near-green checkpoint for that reason, and cycles
+  test("a neighbouring task's zero cannot rescue a task that moved nothing", () => {
+    const events = [
+      ev("red", 5, "1"),
+      ev("validated", 0, "1"),
+      ev("red", 5, "2"),
+      ev("validated", 5, "2"),
+    ];
+
+    expect(runProgress(events, false)).toBeCloseTo(0.5, 5);
+  });
+
+  test("a run that resolved nothing scores 0", () => {
+    expect(runProgress([ev("red", 10), ev("validated", 10)], false)).toBe(0);
+  });
+
+  test("scores the best state reached WITHIN a task, not its last", () => {
+    // A run that touches 1 error then thrashes back to 6 proved it could reach
+    // 1; the harness keeps a near-green checkpoint for that reason and cycles
     // already penalise the thrash.
     const events = [ev("red", 10), ev("validated", 1), ev("validated", 6)];
 
     expect(runProgress(events, false)).toBeCloseTo(0.9, 5);
   });
 
-  test("getting WORSE than the start still scores 0, never negative", () => {
-    const events = [ev("red", 4), ev("validated", 20)];
-
-    expect(runProgress(events, false)).toBe(0);
+  test("getting worse than the start scores 0, never negative", () => {
+    expect(runProgress([ev("red", 4), ev("validated", 20)], false)).toBe(0);
   });
 
-  test("a run with no gate settlements has no score", () => {
-    // An endpoint failure. Scoring it 0 would let an outage read as a
-    // regression and drag a candidate down for infrastructure weather.
-    expect(runProgress([ev("cycle"), ev("stuck")], false)).toBeUndefined();
+  test("a completed run with no gate readings scores 0, not nothing", () => {
+    // Returning undefined here was a hole: a candidate could turn a
+    // low-scoring failure into an UNSCORED one and lift the mean for free.
+    // Genuine infrastructure failures are tracked as `errored` and excluded
+    // upstream, so this path does not need to represent them.
+    expect(runProgress([ev("cycle"), ev("stuck")], false)).toBe(0);
   });
 
-  test("a failure that started green has no graded claim", () => {
-    // Failed for a non-gate reason (timeout, guard). 0/0 is not 100%.
-    expect(runProgress([ev("red", 0), ev("stuck")], false)).toBeUndefined();
+  test("a task that opened green contributes a full share", () => {
+    // Nothing was there to resolve; it must not drag the mean toward zero.
+    const events = [
+      ev("red", 0, "1"),
+      ev("red", 4, "2"),
+      ev("validated", 2, "2"),
+    ];
+
+    expect(runProgress(events, false)).toBeCloseTo(0.75, 5);
   });
 });
 
 describe("meanProgress", () => {
-  test("averages the runs that recorded a score", () => {
+  test("averages every run", () => {
     expect(meanProgress([1, 0.5])).toBeCloseTo(0.75, 5);
   });
 
-  test("skips unscored runs rather than counting them as zero", () => {
-    // Two clean runs at 1.0 and one errored run must average 1.0, not 0.67.
-    expect(meanProgress([1, undefined, 1])).toBe(1);
-  });
-
-  test("all-unscored yields undefined, not zero", () => {
-    expect(meanProgress([undefined, undefined])).toBeUndefined();
+  test("no run can be removed from the denominator", () => {
+    // Three runs, one of them zero: the mean is 0.67, not 1.0. There is no
+    // longer any way to drop an unflattering run.
+    expect(meanProgress([1, 0, 1])).toBeCloseTo(0.6667, 3);
   });
 
   test("an empty split yields undefined", () => {

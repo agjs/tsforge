@@ -182,16 +182,36 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.accepted).toBe(true);
   });
 
-  test("no recorded progress is not evidence of improvement", () => {
-    // An endpoint failure leaves runs with no gate settlements. Silence must
-    // never read as a gain.
+  test("an unmeasured split fails CLOSED, on either side", () => {
+    // A split with no graded figure was not measured. An unmeasured held-out
+    // split cannot show non-regression, so accepting there promotes an edit on
+    // no evidence that it generalises.
+    for (const [i, o] of [
+      [undefined, undefined],
+      [0.9, undefined],
+      [undefined, 0.9],
+    ] as const) {
+      const d = acceptanceDecision(
+        withProgress(base, 0.4, 0.5),
+        withProgress(base, i, o)
+      );
+
+      expect(d.accepted).toBe(false);
+      expect(d.reason).toContain("not measured on both splits");
+    }
+  });
+
+  test("a missing held-out candidate score is never reported as unchanged", () => {
+    // The accept message used `outCand ?? outBase`, which printed "50%→50%"
+    // for a candidate whose held-out progress was never recorded — fabricating
+    // the evidence for its own acceptance.
     const d = acceptanceDecision(
-      withProgress(base, undefined, undefined),
-      withProgress(base, undefined, undefined)
+      withProgress(base, 0.4, 0.5),
+      withProgress(base, 0.9, undefined)
     );
 
     expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("no graded progress recorded");
+    expect(d.reason).not.toContain("50.0%→50.0%");
   });
 
   test("a progress gain still honours the held-out quality guard", () => {

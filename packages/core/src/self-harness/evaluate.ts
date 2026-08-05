@@ -215,7 +215,7 @@ async function runTaskOnce(
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
-      ...(progress === undefined ? {} : { progress }),
+      progress,
     },
     run: {
       taskId,
@@ -362,7 +362,7 @@ export async function evaluateHarness(
       // Mean over RUNS, not over tasks: a task measured twice should weigh
       // twice, and a run with no gate settlements is skipped rather than
       // counted as zero progress.
-      avgProgress: meanProgress(records.map((r) => r.progress)),
+      avgProgress: meanProgress(records.map((r) => r.progress ?? 0)),
       perTask,
     };
 
