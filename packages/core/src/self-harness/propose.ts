@@ -29,6 +29,7 @@ const SURFACE_CATALOG = `You may edit ONLY these declared harness surfaces, expr
 
 1. "ttsrRules": array of stream-time rules. Each rule aborts generation when a regex matches the live output and injects corrective guidance on retry.
    Shape: {"name": "kebab-case", "condition": ["regex source", ...], "scope": "content"|"tool-args"|"both", "fileGlobs": ["src/**/*.ts"]?, "guidance": "<=300 chars", "repeatMode": "once"|"cooldown", "repeatGap": number?}
+   CONDITIONS ARE OR-ED, NOT AND-ED: the rule fires as soon as ANY one pattern matches. There is no way to require two things at once, so a second pattern always makes a rule fire MORE, never less. Write one pattern that describes the moment you want to interrupt. A broad pattern (e.g. "lint" or "TS\\d{4}") fires on almost every repair turn — that may still help, but say so in "risks" rather than assuming the patterns narrow each other.
 
 2. "promptBlocks": edits to NAMED system-prompt blocks. Names: "bootstrap" (the lead-with-action instruction), "execution" (the gate-feedback-loop instruction), "verification" (the run-your-hypotheses instruction), "extra" (a free block appended after all built-in guidance).
    Shape: {"<name>": {"mode": "append"|"replace", "text": "..."}}
