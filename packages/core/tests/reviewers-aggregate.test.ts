@@ -6,6 +6,10 @@ import {
   type IVerdict,
 } from "../src/reviewers/aggregate";
 import type { IReview, IFinding } from "../src/reviewers/schema";
+import {
+  shouldCacheVerdict,
+  honorCachedVerdict,
+} from "../src/reviewers/harness-review";
 
 function ok(
   id: string,
@@ -38,6 +42,52 @@ describe("aggregate", () => {
     expect(
       aggregate([ok("a", "approve"), ok("b", "reject")], opts).preReview
     ).toBeUndefined();
+  });
+
+  test("a short panel is FLAGGED noQuorum, so its block is never cached", () => {
+    // The production wiring. shouldCacheVerdict and honorCachedVerdict both test
+    // this flag; if aggregate never set it, both guards would be dead code and
+    // an outage would keep poisoning the cache exactly as before.
+    const allErrored = aggregate(
+      [
+        { status: "errored", reviewerId: "a", error: "connection refused" },
+        { status: "errored", reviewerId: "b", error: "connection refused" },
+      ],
+      opts
+    );
+
+    expect(allErrored.reviewers).toEqual({ ok: 0, errored: 2 });
+    expect(allErrored.noQuorum).toBe(true);
+    expect(shouldCacheVerdict(allErrored)).toBe(false);
+
+    // One short of quorum is the same category: not enough opinions to be a
+    // judgment about the code.
+    const oneShort = aggregate(
+      [
+        ok("a", "approve"),
+        { status: "errored", reviewerId: "b", error: "timeout" },
+      ],
+      opts
+    );
+
+    expect(oneShort.noQuorum).toBe(true);
+    expect(shouldCacheVerdict(oneShort)).toBe(false);
+  });
+
+  test("a panel that REACHED quorum is cached, block or pass", () => {
+    // The other half of the invariant: this must not turn into "never cache a
+    // block". A real reject is a judgment about the code and caching it is the
+    // whole point of the cache.
+    const reject = aggregate([ok("a", "approve"), ok("b", "reject")], opts);
+
+    expect(reject.blocked).toBe(true);
+    expect(reject.noQuorum).toBeUndefined();
+    expect(shouldCacheVerdict(reject)).toBe(true);
+
+    const pass = aggregate([ok("a", "approve"), ok("b", "approve")], opts);
+
+    expect(pass.noQuorum).toBeUndefined();
+    expect(shouldCacheVerdict(pass)).toBe(true);
   });
 
   test("insufficient reviewers → block", () => {
@@ -226,6 +276,46 @@ describe("parseVerdict", () => {
     expect(parsed?.ranked).toHaveLength(1);
     expect(parsed?.ranked[0]?.agreement).toBe(2);
     expect(parsed?.perReviewer).toHaveLength(2);
+  });
+
+  test("round-trips the noQuorum flag through the REAL read path", () => {
+    // The production read is readCachedVerdict -> parseVerdict ->
+    // honorCachedVerdict. The honorCachedVerdict unit test hands it an object
+    // directly and so bypasses parseVerdict entirely: if a refactor dropped the
+    // flag on read, that test stays green while the cache-poison bug quietly
+    // returns. This is the only assertion that covers the seam.
+    const raw: unknown = JSON.parse(
+      JSON.stringify({
+        blocked: true,
+        reason: "insufficient reviewers (0 of 2 required)",
+        reviewers: { ok: 0, errored: 4 },
+        ranked: [],
+        perReviewer: [],
+        identity: "local/flash",
+        noQuorum: true,
+      })
+    );
+    const parsed = parseVerdict(raw);
+
+    expect(parsed?.noQuorum).toBe(true);
+    expect(honorCachedVerdict(parsed)).toBeNull();
+  });
+
+  test("a verdict without noQuorum parses to undefined (not injected)", () => {
+    // The mirror: injecting the flag where it was absent would make every
+    // cached verdict unusable and silently disable the cache.
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 4, errored: 0 },
+      ranked: [],
+      perReviewer: [],
+      identity: "local/flash",
+    };
+    const parsed = parseVerdict(v);
+
+    expect(parsed?.noQuorum).toBeUndefined();
+    expect(honorCachedVerdict(parsed)).toBe(parsed);
   });
 
   test("round-trips the preReview flag (cache-poison guard survives serialize→parse)", () => {

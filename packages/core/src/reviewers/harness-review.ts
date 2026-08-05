@@ -307,8 +307,11 @@ export async function reviewRequest(
 /** Verdict-cache schema version. Bump to invalidate ALL previously written cache
  *  artifacts in one shot. Bumped to "3" when the key changed from a diff-hash to a full
  *  request fingerprint (below): legacy artifacts key on incomparable inputs, so the bump
- *  retires them rather than risk a stale-input collision. */
-export const CACHE_VERSION = "3";
+ *  retires them rather than risk a stale-input collision. Bumped to "4" for the
+ *  no-quorum guard: artifacts written before it carry no `noQuorum` flag, so an
+ *  outage block already on disk would keep being honored by a guard that has
+ *  nothing to test. The bump retires them; the flag stops new ones. */
+export const CACHE_VERSION = "4";
 
 /** Deterministic JSON: recursively sort object keys so equal CONTENT hashes equally
  *  regardless of construction/insertion order. A cache key must not thrash — or, if a
@@ -446,19 +449,33 @@ export async function runReviewFlow(
 }
 
 /** The caching decision, isolated so it is unit-testable without the filesystem.
- *  ONLY a real panel verdict is cached. A pre-review gate/precondition block
- *  (validate failed, empty intent, empty/oversized diff) is transient — caching one
- *  would re-serve as a permanent block for that request, so it is skipped. */
+ *  ONLY a real panel verdict is cached — one where enough reviewers actually
+ *  formed an opinion about the code.
+ *
+ *  Two kinds of block are not that, and neither is cached. A pre-review
+ *  gate/precondition block (validate failed, empty intent, empty/oversized diff)
+ *  never ran the panel at all. A no-quorum block ran it and got too few answers
+ *  back: the reviewers errored, which says something about the endpoint and
+ *  nothing about the diff. Caching either re-serves it as a permanent block for
+ *  that exact tree, escapable only by touching a file or changing the intent
+ *  string. */
 export function shouldCacheVerdict(verdict: IVerdict): boolean {
-  return verdict.preReview !== true;
+  return verdict.preReview !== true && verdict.noQuorum !== true;
 }
 
-/** The read-side guard, isolated for testing: a cached pre-review gate block must
- *  never be honored (defense in depth beside the CACHE_VERSION bump — belt and
- *  suspenders for any pre-review artifact that reaches disk). Returns the verdict
- *  to use, or null to force a fresh live review. */
+/** The read-side guard, isolated for testing: a cached pre-review or no-quorum
+ *  block must never be honored (defense in depth beside the CACHE_VERSION bump —
+ *  belt and suspenders for any such artifact that reaches disk, including one
+ *  written by an older build). Returns the verdict to use, or null to force a
+ *  fresh live review. */
 export function honorCachedVerdict(verdict: IVerdict | null): IVerdict | null {
-  return verdict !== null && verdict.preReview === true ? null : verdict;
+  if (verdict === null) {
+    return null;
+  }
+
+  return verdict.preReview === true || verdict.noQuorum === true
+    ? null
+    : verdict;
 }
 
 export function artifactBody(

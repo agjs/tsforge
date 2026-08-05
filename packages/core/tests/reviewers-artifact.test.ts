@@ -111,6 +111,19 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
     );
   });
 
+  test("CACHE_VERSION moved past 3, so pre-noQuorum artifacts are retired", () => {
+    // The bump is load-bearing, not cosmetic. Artifacts written at version 3
+    // predate the noQuorum flag, so a cached outage block from that era carries
+    // nothing for honorCachedVerdict to test and would be honored as a real
+    // verdict — the poison the flag exists to stop, still live on disk.
+    //
+    // Asserting "greater than 3" rather than "is 4" pins the invalidation this
+    // change required without freezing every future bump — and unlike "not 3",
+    // it also catches a regression to 1 or 2, which would reactivate an even
+    // older generation of artifacts.
+    expect(Number(CACHE_VERSION)).toBeGreaterThan(3);
+  });
+
   test("CACHE_VERSION is mixed into the key — bumping it retires ALL legacy artifacts in one shot", () => {
     // The ONLY lever that invalidates every already-on-disk artifact (e.g. legacy diff-hash
     // keys, or a poisoned pre-review block). If a regression dropped CACHE_VERSION from the
@@ -333,6 +346,21 @@ describe("runReviewFlow (the CLI wiring invariant: gather-before-cache, block-ne
 });
 
 describe("read-side + artifact", () => {
+  test("honorCachedVerdict drops a cached NO-QUORUM block", () => {
+    // Belt and suspenders beside the CACHE_VERSION bump: an outage block written
+    // by an older build carries no flag, and one written by this build must
+    // still never be honored if it somehow reaches disk.
+    expect(
+      honorCachedVerdict({
+        ...v,
+        blocked: true,
+        reason: "insufficient reviewers (0 of 2 required)",
+        reviewers: { ok: 0, errored: 4 },
+        noQuorum: true,
+      })
+    ).toBeNull();
+  });
+
   test("honorCachedVerdict drops a cached pre-review block, passes a real verdict through", () => {
     expect(honorCachedVerdict(null)).toBeNull();
     expect(

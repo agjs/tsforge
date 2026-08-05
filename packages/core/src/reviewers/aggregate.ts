@@ -23,6 +23,15 @@ export interface IVerdict {
    *  be cached: a flaky validate under load would otherwise poison the tree-hash
    *  and block every future push until the cache is hand-purged. */
   preReview?: boolean;
+  /** True when the panel RAN but too few reviewers came back to reach the
+   *  quorum — every one of them errored, or enough did. Same category as
+   *  `preReview` and cached under the same rule: an endpoint that was down is
+   *  not a judgment about the code. Without this, one outage writes a BLOCK
+   *  against the tree hash and re-serves it for that exact tree forever, so the
+   *  only ways past it are to touch a file or vary the intent string (which
+   *  feeds the cache key). Observed live on 2026-08-05: `ok: 0, errored: 4`
+   *  cached, then replayed as `cache hit, reusing verdict`. */
+  noQuorum?: boolean;
 }
 
 const SECURITY_CODES: readonly FindingCode[] = ["security", "supply-chain"];
@@ -177,6 +186,7 @@ export function aggregate(
     ranked,
     perReviewer: reviews,
     identity: opts.identity,
+    ...(reviews.length < opts.minReviewers ? { noQuorum: true } : {}),
   };
 }
 
@@ -257,5 +267,6 @@ export function parseVerdict(raw: unknown): IVerdict | null {
     perReviewer: parsedReviews,
     identity,
     ...(raw.preReview === true ? { preReview: true } : {}),
+    ...(raw.noQuorum === true ? { noQuorum: true } : {}),
   };
 }
