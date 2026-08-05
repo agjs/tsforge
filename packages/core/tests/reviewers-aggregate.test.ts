@@ -284,7 +284,7 @@ describe("parseVerdict", () => {
     // directly and so bypasses parseVerdict entirely: if a refactor dropped the
     // flag on read, that test stays green while the cache-poison bug quietly
     // returns. This is the only assertion that covers the seam.
-    const raw = JSON.parse(
+    const raw: unknown = JSON.parse(
       JSON.stringify({
         blocked: true,
         reason: "insufficient reviewers (0 of 2 required)",
@@ -294,7 +294,7 @@ describe("parseVerdict", () => {
         identity: "local/flash",
         noQuorum: true,
       })
-    ) as unknown;
+    );
     const parsed = parseVerdict(raw);
 
     expect(parsed?.noQuorum).toBe(true);
