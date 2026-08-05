@@ -1,7 +1,11 @@
 import { test, expect, describe } from "bun:test";
 import { aggregate, parseVerdict } from "../src/reviewers/aggregate";
 import type { ReviewOutcome } from "../src/reviewers/aggregate";
-import { formatVerdict, runBinary } from "../src/cli/harness-review-mode";
+import {
+  formatVerdict,
+  runBinary,
+  MAX_STDOUT_BYTES,
+} from "../src/cli/harness-review-mode";
 import { reviewerInvoke } from "../src/reviewers/invoke";
 import type { IPanel } from "../src/reviewers/registry";
 import type { IReviewRequest } from "../src/reviewers/schema";
@@ -277,6 +281,56 @@ describe("runBinary reports WHICH failure it was", () => {
     // Returned on the drain bound rather than waiting out the child.
     expect(Date.now() - started).toBeLessThan(5_000);
   }, 30_000);
+
+  test("a reviewer that floods stdout is cut off AT the ceiling", async () => {
+    // A review is a small JSON object; a reviewer emitting megabytes is a
+    // runaway, and reading it to EOF lets one of them exhaust the harness.
+    //
+    // The bound is exact. Appending a whole chunk and checking afterwards
+    // overruns by up to one chunk, which for a megabyte-chunked writer is not a
+    // rounding error — so the last chunk is sliced to the remaining allowance.
+    const r = await runBinary(
+      {
+        argv: [
+          "sh",
+          "-c",
+          `yes 0123456789012345678901234567890123456789 | head -c ${String(MAX_STDOUT_BYTES * 2)}`,
+        ],
+        input: "arg",
+        timeoutMs: 60_000,
+      },
+      ""
+    );
+
+    expect(r.truncated).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.timedOut).toBe(false);
+    // ASCII, so bytes and characters coincide here.
+    expect(r.stdout.length).toBe(MAX_STDOUT_BYTES);
+  }, 120_000);
+
+  test("output of exactly the ceiling is NOT truncation", async () => {
+    // The off-by-one: breaking on a full buffer before attempting the next read
+    // calls a stream that ends exactly at the limit truncated, though its next
+    // read is EOF and nothing was lost. The runaway condition is output PAST the
+    // ceiling.
+    const r = await runBinary(
+      {
+        argv: [
+          "sh",
+          "-c",
+          `yes 0123456789012345678901234567890123456789 | head -c ${String(MAX_STDOUT_BYTES)}`,
+        ],
+        input: "arg",
+        timeoutMs: 60_000,
+      },
+      ""
+    );
+
+    expect(r.stdout.length).toBe(MAX_STDOUT_BYTES);
+    expect(r.truncated).toBe(false);
+    expect(r.ok).toBe(true);
+  }, 120_000);
 
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {
     const r = await runBinary(

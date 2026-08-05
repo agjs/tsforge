@@ -143,7 +143,7 @@ const POST_EXIT_DRAIN_MS = 2_000;
  * past this is a runaway, and reading it to EOF would let one noisy reviewer
  * exhaust the harness.
  */
-const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+export const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
 /** Mutable read state, held in an object so a closure can flip it. */
 interface IReadState {
@@ -154,8 +154,8 @@ interface IReadState {
 /** What a bounded read produced, and why it stopped. */
 interface IBoundedRead {
   text: string;
-  /** `size` — the reviewer flooded us. `deadline` — the pipe was still open a
-   *  second after the process went. `eof` — the normal end. */
+  /** `size` — the reviewer flooded us past the ceiling. `deadline` — the pipe
+   *  was still open when the post-exit grace ran out. `eof` — the normal end. */
   stoppedBy: "eof" | "size" | "deadline";
   /** True whenever the read did not reach EOF.
    *
@@ -205,11 +205,6 @@ async function readBounded(
 
   try {
     for (;;) {
-      if (bytes >= MAX_STDOUT_BYTES) {
-        state.stoppedBy = "size";
-        break;
-      }
-
       if (state.expired) {
         state.stoppedBy = "deadline";
         break;
@@ -227,15 +222,24 @@ async function readBounded(
         break;
       }
 
-      // Sliced to the remaining allowance: checking the ceiling only BEFORE
-      // appending lets the returned text overrun it by a whole chunk, which for
-      // a reviewer emitting megabyte chunks is not a rounding error.
+      // The ceiling is checked AFTER the read, not before. Breaking on a full
+      // buffer first would call a stream of exactly MAX_STDOUT_BYTES truncated,
+      // though its next read is EOF and nothing was lost — the documented
+      // runaway condition is output PAST the ceiling.
       const room = MAX_STDOUT_BYTES - bytes;
-      const chunk =
-        next.value.length > room ? next.value.subarray(0, room) : next.value;
 
-      bytes += chunk.length;
-      text += decoder.decode(chunk, { stream: true });
+      if (next.value.length > room) {
+        // Sliced to the remaining allowance: appending whole and checking
+        // afterwards lets the text overrun by a full chunk, which for a reviewer
+        // emitting megabyte chunks is not a rounding error.
+        bytes += room;
+        text += decoder.decode(next.value.subarray(0, room), { stream: true });
+        state.stoppedBy = "size";
+        break;
+      }
+
+      bytes += next.value.length;
+      text += decoder.decode(next.value, { stream: true });
     }
   } finally {
     await reader.cancel().catch(() => undefined);
