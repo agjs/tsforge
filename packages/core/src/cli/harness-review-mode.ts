@@ -128,30 +128,66 @@ export function buildBinaryInvocation(
  *  normal shutdown, short enough that an unkillable reviewer cannot hold the
  *  panel. */
 const KILL_GRACE_MS = 2_000;
-/** How long to keep draining stdout AFTER a kill. A descendant can hold the pipe
- *  open long past the reviewer's own exit; the output is discarded on a timeout
- *  regardless, so waiting for EOF buys nothing. */
-const POST_KILL_DRAIN_MS = 1_000;
+/**
+ * How long to keep draining stdout after the process itself has gone.
+ *
+ * A descendant inherits the pipe, so `Response.text()` waits for EOF — which
+ * means the LAST child, not the reviewer. That hangs the panel whether the
+ * reviewer was killed or exited cleanly on its own, so the bound is tied to the
+ * process exiting rather than to the kill.
+ */
+const POST_EXIT_DRAIN_MS = 1_000;
 
-/** Read a stream to EOF, but stop shortly after `killed()` turns true. */
+/** Sentinel for the give-up branch of the read race. */
+const GIVE_UP = Symbol("give-up");
+
+/**
+ * Read a stream to EOF, or give up shortly after the process is gone — keeping
+ * whatever arrived before that.
+ *
+ * Bounded by a PROMISE, not a poll. A `while (!done) await sleep(50)` loop keeps
+ * scheduling itself forever when it loses the race — Promise.race abandons the
+ * loser's value, never its work — so every successful call leaked a poller for
+ * the life of the process.
+ *
+ * Chunk by chunk, because racing a whole `Response.text()` throws away
+ * everything already read the moment it gives up: a reviewer that answered and
+ * exited, leaving a background child holding the pipe, would have its complete
+ * answer discarded for the sake of the child. Partial output beats none, and on
+ * the timeout path it is discarded by the caller anyway.
+ */
 async function readBounded(
   stream: ReadableStream<Uint8Array>,
-  killed: () => boolean
+  gone: Promise<unknown>
 ): Promise<string> {
-  const text = new Response(stream).text();
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const giveUp = gone
+    .then(() => Bun.sleep(POST_EXIT_DRAIN_MS))
+    .then(() => GIVE_UP);
+  let text = "";
 
-  return await Promise.race([
-    text,
-    (async (): Promise<string> => {
-      while (!killed()) {
-        await Bun.sleep(50);
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), giveUp]);
+
+      // typeof, because `.then(() => GIVE_UP)` widens the unique symbol back to
+      // `symbol` and equality alone will not narrow the union.
+      if (typeof next === "symbol") {
+        break;
       }
 
-      await Bun.sleep(POST_KILL_DRAIN_MS);
+      if (next.done) {
+        break;
+      }
 
-      return "";
-    })(),
-  ]);
+      text += decoder.decode(next.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+
+  return text + decoder.decode();
 }
 
 export async function runBinary(
@@ -192,6 +228,13 @@ export async function runBinary(
     // SIGTERM is a request. A reviewer that ignores it — or installs a handler
     // and takes its time — would otherwise keep the whole panel blocked past a
     // budget that exists precisely to stop that. SIGKILL is not refusable.
+    // KNOWN LIMITATION: this kills the reviewer, not its process group. A
+    // reviewer that backgrounds work leaves those children orphaned and running
+    // — they die on their own, but they are not reaped here. Killing the group
+    // would need the child spawned into one of its own; done naively (kill
+    // -pid on a shared group) it would take the harness down with it, which is
+    // a worse failure than a stray `sleep`. The drain bound above is what stops
+    // an orphan holding the panel.
     killHard = setTimeout(() => {
       proc.kill(9);
     }, KILL_GRACE_MS);
@@ -201,27 +244,19 @@ export async function runBinary(
   try {
     // Cleared the MOMENT the process exits, not after stdout finishes draining.
     // A reviewer can finish under budget while its output is still being read
-    // (a big review, a busy event loop), and a timer firing during that drain
-    // would mark a completed review as a timeout and throw its answer away —
-    // the exact false signal this change exists to remove, and most likely near
-    // the budget edge under concurrent panel load.
+    // (a big review, a descendant holding the pipe), and a timer firing during
+    // that drain would mark a completed review as timed out and throw its answer
+    // away — the exact false signal this change exists to remove, and likeliest
+    // near the budget edge under concurrent panel load.
     const exited = proc.exited.then((code) => {
       clearTimeout(timer);
+      clearTimeout(killHard);
 
       return code;
     });
-    // Bounded because a KILLED process can leave a descendant holding the
-    // stdout pipe open (a backgrounded child inherits it), and reading to EOF
-    // would then wait for that descendant rather than for the reviewer. On a
-    // timeout the output is discarded anyway, so giving up on it is free.
-    const stdout = await readBounded(proc.stdout, () => timedOut);
+    const stdout = await readBounded(proc.stdout, exited);
     const code = await exited;
 
-    // A killed process is NOT a success, whatever it exited with. A binary can
-    // trap SIGTERM and exit 0, which would otherwise report `ok: true,
-    // timedOut: true` — and an over-budget reviewer's partial output would be
-    // parsed and counted as a real review. Whatever it managed to print before
-    // we killed it is a partial answer, and a partial answer is not a review.
     return { ok: code === 0 && !timedOut, stdout, timedOut };
   } finally {
     clearTimeout(timer);

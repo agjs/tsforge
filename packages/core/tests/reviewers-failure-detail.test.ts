@@ -250,20 +250,31 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
-  test("a success near the budget is not retro-flagged as a timeout", async () => {
-    // The race: a reviewer can finish under budget while its output is still
-    // draining, and a timer firing during that drain would mark a completed
-    // review as timed out and throw its answer away.
+  test("a success is not retro-flagged when its output drains past the budget", async () => {
+    // THE race, exercised for real. The parent exits at once, but a backgrounded
+    // child inherits stdout and holds the pipe open past the budget — so the
+    // drain is still running when the timer would fire. Clearing the timer on
+    // exit is the only reason this comes back ok.
+    //
+    // The previous version of this test slept after the call and re-read the
+    // returned object, which is a snapshot: a late timer could not have been
+    // observed either way, and `echo` finished long before its budget, so the
+    // timer never fired during a drain at all. It passed with the fix deleted.
+    const started = Date.now();
     const r = await runBinary(
-      { argv: ["sh", "-c", "echo done"], input: "arg", timeoutMs: 900 },
+      {
+        argv: ["sh", "-c", "echo done; sleep 3 &"],
+        input: "arg",
+        timeoutMs: 700,
+      },
       ""
     );
-
-    await Bun.sleep(1200);
 
     expect(r.timedOut).toBe(false);
     expect(r.ok).toBe(true);
     expect(r.stdout).toContain("done");
+    // And it returned on the drain bound rather than waiting out the child.
+    expect(Date.now() - started).toBeLessThan(2_500);
   }, 30_000);
 
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {

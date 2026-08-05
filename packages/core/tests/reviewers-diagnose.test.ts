@@ -230,6 +230,45 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     expect(outcome?.status).toBe("errored");
   });
 
+  test("a TIMED-OUT binary's partial JSON is not counted as a vote", async () => {
+    // The diagnose path had the same `ok`-only check the review path lost: a
+    // runner reporting ok:true alongside timedOut:true would have its output
+    // parsed, so a diagnosis cut off mid-sentence counted as a real one. A
+    // partial answer is not a diagnosis any more than it is a review.
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 4321,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      // Deliberately VALID output: the point is that it is refused for having
+      // been cut off, not for being malformed.
+      runBinary: () =>
+        Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS, timedOut: true }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(outcome.error).toContain("4321");
+      expect(outcome.error).toContain("timeout");
+    }
+  });
+
   test("a binary reviewer returning valid JSON on stdout becomes a vote", async () => {
     const panel: IPanel = {
       minReviewers: 1,
