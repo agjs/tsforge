@@ -88,6 +88,17 @@ async function invokeBinary(
       };
     }
 
+    // Truncation, checked before ok — same order and same reason as the review
+    // path. A prefix is not a finished answer, and reporting it as "exited
+    // non-zero" blames the binary for something the harness did.
+    if (res.truncated) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "diagnosis output was truncated before it finished",
+      };
+    }
+
     if (!res.ok) {
       return {
         status: "errored",

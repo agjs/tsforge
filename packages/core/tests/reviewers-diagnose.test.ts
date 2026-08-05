@@ -294,6 +294,48 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     }
   });
 
+  test("a TRUNCATED binary's output is not counted as a vote either", async () => {
+    // Parallel to the timeout case, and the same asymmetry: the review path
+    // refuses a prefix while diagnose fell through to "binary exited non-zero",
+    // blaming the binary for something the harness did — or, for a runner
+    // reporting ok:true alongside the flag, counting a cut-off diagnosis as a
+    // real one.
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 1000,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: GOOD_DIAGNOSIS,
+          timedOut: false,
+          truncated: true,
+        }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(outcome.error).toContain("truncated");
+    }
+  });
+
   test("a binary reviewer returning valid JSON on stdout becomes a vote", async () => {
     const panel: IPanel = {
       minReviewers: 1,

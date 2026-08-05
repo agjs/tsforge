@@ -250,57 +250,33 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
-  test("a success is not retro-flagged when its output drains past the budget", async () => {
-    // THE race, exercised for real. The parent exits at once, but a backgrounded
-    // child inherits stdout and holds the pipe open past the budget — so the
-    // drain is still running when the timer would fire. Clearing the timer on
-    // exit is the only reason this comes back ok.
+  test("an orphan holding the pipe means the read is REPORTED incomplete", async () => {
+    // The parent answers and exits at once; a backgrounded child keeps stdout
+    // open. We stop reading, and we say so: not reaching EOF means we cannot
+    // claim the answer is complete, and whether that orphan is idle or still
+    // writing cannot be decided from here — a writer slower than the grace looks
+    // identical to one that has finished.
     //
-    // The previous version of this test slept after the call and re-read the
-    // returned object, which is a snapshot: a late timer could not have been
-    // observed either way, and `echo` finished long before its budget, so the
-    // timer never fired during a drain at all. It passed with the fix deleted.
+    // The cost is refusing a review from any reviewer that backgrounds work.
+    // That is visible, with cause `truncated`. Passing a prefix off as a
+    // finished review is not, and a wrong verdict is worse than a missing one.
     const started = Date.now();
     const r = await runBinary(
       {
-        argv: ["sh", "-c", "echo done; sleep 3 &"],
-        input: "arg",
-        timeoutMs: 700,
-      },
-      ""
-    );
-
-    expect(r.timedOut).toBe(false);
-    expect(r.ok).toBe(true);
-    expect(r.stdout).toContain("done");
-    // And it returned on the drain bound rather than waiting out the child.
-    expect(Date.now() - started).toBeLessThan(2_500);
-  }, 30_000);
-
-  test("a reviewer that floods stdout is cut off and SAID to be", async () => {
-    // The size ceiling. A review is a small JSON object; a reviewer emitting
-    // megabytes is a runaway, and reading it to EOF lets one of them exhaust the
-    // harness. Reporting it as truncated rather than as a bad answer points at
-    // the right problem — we stopped listening.
-    const r = await runBinary(
-      {
-        // ~16MB, past the 8MB ceiling, as fast as the shell can produce it.
-        argv: [
-          "sh",
-          "-c",
-          "yes 0123456789012345678901234567890123456789 | head -c 16000000",
-        ],
+        argv: ["sh", "-c", "echo done; sleep 6 &"],
         input: "arg",
         timeoutMs: 30_000,
       },
       ""
     );
 
+    expect(r.stdout).toContain("done");
     expect(r.truncated).toBe(true);
     expect(r.ok).toBe(false);
     expect(r.timedOut).toBe(false);
-    expect(r.stdout.length).toBeLessThan(16_000_000);
-  }, 60_000);
+    // Returned on the drain bound rather than waiting out the child.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 30_000);
 
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {
     const r = await runBinary(

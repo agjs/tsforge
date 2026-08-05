@@ -136,7 +136,7 @@ const KILL_GRACE_MS = 2_000;
  * reviewer was killed or exited cleanly on its own, so the bound is tied to the
  * process exiting rather than to the kill.
  */
-const POST_EXIT_DRAIN_MS = 1_000;
+const POST_EXIT_DRAIN_MS = 2_000;
 
 /**
  * Hard ceiling on a reviewer's stdout. A review is a small JSON object; anything
@@ -154,22 +154,27 @@ interface IReadState {
 /** What a bounded read produced, and why it stopped. */
 interface IBoundedRead {
   text: string;
-  /**
-   * Why the read ended, because the two early exits mean different things.
-   *
-   * `size` is the reviewer flooding us — its answer really is cut off. `deadline`
-   * is the pipe still being open a second after the PROCESS was gone, which
-   * happens when a descendant inherited it; if the reviewer exited cleanly it
-   * had already finished writing, and calling that a truncated review would
-   * discard a perfectly good answer for an orphan's file handle. `eof` is the
-   * normal end.
-   */
+  /** `size` — the reviewer flooded us. `deadline` — the pipe was still open a
+   *  second after the process went. `eof` — the normal end. */
   stoppedBy: "eof" | "size" | "deadline";
+  /** True whenever the read did not reach EOF.
+   *
+   *  Deliberately blunt. Whether an orphan holding the pipe is idle or still
+   *  writing cannot be decided from here: a writer slower than the grace window
+   *  looks exactly like a writer that has finished, and a heuristic on "did
+   *  bytes arrive during the grace" only catches the loud half. Not reaching EOF
+   *  means we cannot claim the answer is complete, so we do not.
+   *
+   *  The cost is a reviewer that backgrounds work having its review refused —
+   *  visibly, with cause `truncated`, which is the whole point of these
+   *  diagnostics. The alternative is passing a prefix off as a finished review,
+   *  and a wrong verdict is worse than a missing one. */
+  truncated: boolean;
 }
 
 /**
  * Read a stream to EOF, or stop shortly after the process is gone — keeping
- * whatever arrived, and saying so when it stopped early.
+ * whatever arrived, and saying whether anything was probably lost.
  *
  * Bounded by a FLAG, not by racing the deadline each iteration. `Promise.race`
  * resolves with the first ALREADY-SETTLED entry in array order, so once a
@@ -177,10 +182,10 @@ interface IBoundedRead {
  * round forever and the deadline never gets a turn — the bound silently stops
  * bounding for exactly the noisy-child case it exists to handle.
  *
- * Chunk by chunk, because racing a whole `Response.text()` discards everything
- * already read the moment it gives up: a reviewer that answered and exited,
- * leaving a background child holding the pipe, would lose a complete answer for
- * the sake of the child.
+ * Chunk by chunk, because racing a whole `Response.text()` throws away
+ * everything already read the moment it gives up: a reviewer that answered and
+ * exited, leaving a background child holding the pipe, would lose a complete
+ * answer for the sake of the child.
  */
 async function readBounded(
   stream: ReadableStream<Uint8Array>,
@@ -188,10 +193,6 @@ async function readBounded(
 ): Promise<IBoundedRead> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  // One mutable object rather than locals: the deadline flips `expired` from a
-  // callback, and control-flow analysis cannot see an assignment made inside a
-  // closure — with plain locals it narrows the flag to a constant and calls the
-  // check dead code.
   const state: IReadState = { expired: false, stoppedBy: "eof" };
   let bytes = 0;
   let text = "";
@@ -226,14 +227,25 @@ async function readBounded(
         break;
       }
 
-      bytes += next.value.length;
-      text += decoder.decode(next.value, { stream: true });
+      // Sliced to the remaining allowance: checking the ceiling only BEFORE
+      // appending lets the returned text overrun it by a whole chunk, which for
+      // a reviewer emitting megabyte chunks is not a rounding error.
+      const room = MAX_STDOUT_BYTES - bytes;
+      const chunk =
+        next.value.length > room ? next.value.subarray(0, room) : next.value;
+
+      bytes += chunk.length;
+      text += decoder.decode(chunk, { stream: true });
     }
   } finally {
     await reader.cancel().catch(() => undefined);
   }
 
-  return { text: text + decoder.decode(), stoppedBy: state.stoppedBy };
+  return {
+    text: text + decoder.decode(),
+    stoppedBy: state.stoppedBy,
+    truncated: state.stoppedBy !== "eof",
+  };
 }
 
 export async function runBinary(
@@ -310,21 +322,11 @@ export async function runBinary(
     const read = await readBounded(proc.stdout, exited);
     const code = await exited;
 
-    // A reviewer that FLOODED us really was cut off, and passing the prefix on
-    // as though it were the whole answer makes that look like a malformed review
-    // — sending the next person to debug the reviewer rather than the bound.
-    //
-    // A deadline stop after a CLEAN exit is different: the reviewer had already
-    // finished writing, and what still holds the pipe is a descendant. Treating
-    // that as truncation would reject a good review over an orphan's file
-    // handle. A deadline stop after a KILL is already covered by `timedOut`.
-    const truncated = read.stoppedBy === "size";
-
     return {
-      ok: code === 0 && !kill.timedOut && !truncated,
+      ok: code === 0 && !kill.timedOut && !read.truncated,
       stdout: read.text,
       timedOut: kill.timedOut,
-      truncated,
+      truncated: read.truncated,
     };
   } finally {
     clearTimeout(timer);
