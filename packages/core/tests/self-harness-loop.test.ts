@@ -139,10 +139,13 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
 
   test("a material held-in progress gain with stable held-out is accepted", () => {
     // The case pass/fail cannot see: nothing flipped red→green, but the runs
-    // resolved far more of their gate errors than before.
+    // resolved far more of their gate errors than before. Cycles are REAL here,
+    // not an empty perTask: with no shared tasks `commonCycles` reports zero and
+    // the veto never runs, so a regression that always reported `tasks === 0`
+    // would leave this test — the primary accept path — green.
     const d = acceptanceDecision(
-      withProgress(base, 0.4, 0.5),
-      withProgress(base, 0.62, 0.5)
+      withCyclesOn(withProgress(base, 0.4, 0.5), 8),
+      withCyclesOn(withProgress(base, 0.62, 0.5), 8)
     );
 
     expect(d.accepted).toBe(true);
@@ -250,6 +253,40 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     const d = acceptanceDecision(
       withCyclesOn(withProgress(base, 0.3, 0.4), 5),
       withCyclesOn(withProgress(base, 0.8, 0.7), 9)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("a baseline that spent NO cycles cannot veto the work the candidate did", () => {
+    // Every bar multiplies a zero baseline out to zero, so a single candidate
+    // cycle trips even the 2x ceiling. Left alone, a baseline that did nothing
+    // vetoes the candidate that did the work — the exact self-defeat the
+    // exemption exists to prevent.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 0),
+      withCyclesOn(withProgress(base, 0.8, 0.7), 12)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("a zero baseline still vetoes cycles spent for NO extra ground", () => {
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.6), 0),
+      withCyclesOn(withProgress(base, 0.8, 0.6), 12)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("no extra ground");
+  });
+
+  test("held-out level to the last bit is not a regression", () => {
+    // 0.1 + 0.2 is 0.30000000000000004; a bare `<` reads the mirror of that as a
+    // regression and rejects a candidate whose held-out did not move at all.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.1 + 0.2),
+      withProgress(base, 0.7, 0.3)
     );
 
     expect(d.accepted).toBe(true);

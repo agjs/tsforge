@@ -230,7 +230,10 @@ function progressDecision(
     );
   }
 
-  if (outCand < outBase - PROGRESS_HO_TOLERANCE) {
+  // Epsilon here too, for the same reason the other two comparisons carry one:
+  // held-out holding exactly level must not read as a regression because the two
+  // means differ in the last bit.
+  if (outCand < outBase - PROGRESS_HO_TOLERANCE - 1e-9) {
     return no(
       `held-out progress regressed (${pct(outBase)}%→${pct(outCand)}%)`
     );
@@ -257,8 +260,16 @@ function progressDecision(
   // rejected however much ground it gained: at that point the edit is not making
   // the model better at the task, it is making it grind.
   const bar = wentFurther ? HO_CYCLE_EXEMPT_CEILING : HO_CYCLE_BLOWUP_FACTOR;
+  // A zero baseline has no ratio: every bar multiplies out to zero, so a single
+  // candidate cycle trips even the 2× ceiling. On the thrash path that stays —
+  // more cycles than a baseline that spent none, for no extra ground, is the
+  // definition of the thing. But it must not kill the exemption, or a baseline
+  // that did nothing at all would veto the candidate that did the work, which is
+  // the exact self-defeat the exemption exists to prevent.
+  const noRatio = cycles.base <= 0;
+  const exempt = wentFurther && noRatio;
 
-  if (cycles.tasks > 0 && cycles.cand > Math.max(cycles.base, 0) * bar) {
+  if (cycles.tasks > 0 && !exempt && cycles.cand > cycles.base * bar) {
     return no(
       wentFurther
         ? `held-out cycles blew up past the ceiling even for extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_EXEMPT_CEILING)}×)`

@@ -21,6 +21,19 @@ import type { ILoopEvent } from "../loop";
  * task reaching zero credited the entire run. Reading the run as the single
  * series it is removes all of them at once — 20 → 10 → 5 is 15 of 20 resolved,
  * which is simply what happened.
+ *
+ * KNOWN LIMITATION — the `&&` in that prefix short-circuits. A reading is the
+ * error count of whatever stage failed FIRST, so a run that breaks the type
+ * check hides every downstream test failure behind it and reads as one error.
+ * A harness edit that made the model sloppier upstream could therefore score
+ * progress while moving further from a pass. Nothing here detects that: the
+ * event carries a count, not which stage produced it, and separating the stages
+ * means changing how the gate is executed — not something to do inside a
+ * scoring change. What bounds it meanwhile: this score only decides when BOTH
+ * pass deltas are zero, so it can never promote an edit that costs a pass, and
+ * held-out progress must not regress. It is a real hole, it is narrower than
+ * the pass-only scoring it replaces, and it is written down rather than papered
+ * over. See `errorTrace`'s test for the behaviour as it stands.
  */
 
 /** Gate error counts over the run, oldest first. */
