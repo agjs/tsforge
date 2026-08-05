@@ -6,7 +6,7 @@
 //
 // Run:  bun packages/core/scripts/self-harness.ts [--rounds 3] [--width 3]
 //         [--repeats 2] [--held-in a,b,..] [--held-out c,d,..]
-//         [--dry-run] [--no-judge] [--build-logs [dir]] [--build-logs-limit 40]
+//         [--dry-run] [--no-judge] [--build-logs [dir]] [--build-logs-limit 40] [--build-logs-days 7]
 // Judge override (else the active model judges): TSFORGE_JUDGE_URL/MODEL/KEY.
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -77,10 +77,13 @@ const buildLogsRaw = argValue("build-logs");
 const buildLogsDir = hasFlag("build-logs")
   ? (buildLogsRaw ?? join(homedir(), ".tsforge", "logs"))
   : undefined;
-// Newest N logs. This is also what keeps the evidence current: as new builds
-// land they push older ones out, so a campaign that has already fixed something
-// stops mining the failures it fixed.
+// Newest N logs, AND only recent ones. The count alone does not keep evidence
+// current: measured 2026-08-05, the newest 40 logs reached back to 17 July —
+// so the loop was mining failures produced by a harness that no longer exists,
+// including ones fixed hours earlier. A proposal slot spent on a solved problem
+// is a slot not spent on a live one.
 const buildEvidenceLimit = Number(argValue("build-logs-limit") ?? "40");
+const buildEvidenceDays = Number(argValue("build-logs-days") ?? "7");
 
 /** Continue a lineage: start from a previous session's accepted overlay so
  *  improvements COMPOUND across sessions. Fails loudly on a bad path/file —
@@ -397,7 +400,10 @@ const lineage = await runSelfHarness({
     ? {}
     : {
         extraEvidence: () =>
-          buildEvidenceFrom(buildLogsDir, { limit: buildEvidenceLimit }),
+          buildEvidenceFrom(buildLogsDir, {
+            limit: buildEvidenceLimit,
+            since: Date.now() - buildEvidenceDays * 24 * 60 * 60 * 1000,
+          }),
       }),
   waitHealthy,
   log: say,
