@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 import {
   judge,
   withinBudget,
+  sizeWithinBudget,
   JUDGE_BUDGET,
   JUDGE_MAX_TOKENS,
 } from "../src/eval/judge";
@@ -94,8 +95,7 @@ describe("judge input budget", () => {
       code: "x".repeat(JUDGE_BUDGET.code + 1),
     });
 
-    expect(score.scored).toBe(true);
-    expect(score.overall).toBe(1);
+    expect(score.outcome).toBe("oversized");
     expect(calls).toHaveLength(0);
   });
 
@@ -191,5 +191,134 @@ describe("judge request shape", () => {
     expect(score.overall).toBe(4);
     expect(calls[0]?.messages[0]?.content ?? "").toContain("UNTRUSTED DATA");
     expect(calls[0]?.messages[1]?.content ?? "").toContain("ignore previous");
+  });
+});
+
+describe("an unusable judge ANSWER is scored, not skipped", () => {
+  /**
+   * The second door into the same bypass. Candidate code is in the prompt, so it
+   * can ask the model to reply with prose or an out-of-range score. Returning no
+   * signal there skips the acceptance guard exactly like an oversized solution
+   * did — over-budget was only one of the two ways in.
+   */
+  const replying = (content: string): IProvider => ({
+    complete: () => Promise.resolve({ content, toolCalls: [] }),
+  });
+
+  test("prose instead of JSON scores at the floor", async () => {
+    const score = await judge(replying("Looks great to me!"), {
+      goal: "g",
+      criteria: "c",
+      code: "const a = 1;",
+    });
+
+    expect(score.outcome).toBe("unusable");
+  });
+
+  test("valid JSON that is not an object scores at the floor", async () => {
+    const score = await judge(replying("[1,2,3]"), {
+      goal: "g",
+      criteria: "c",
+      code: "const a = 1;",
+    });
+
+    expect(score.outcome).toBe("unusable");
+  });
+
+  test("but a FAILED CALL is still no signal", async () => {
+    // The line that keeps the floor fair: a dead endpoint is not the
+    // candidate's doing; an unusable reply to a successful call can be.
+    const dead: IProvider = {
+      complete: () => Promise.reject(new Error("ECONNREFUSED")),
+    };
+    const score = await judge(dead, { goal: "g", criteria: "c", code: "a" });
+
+    expect(score.outcome).toBe("unreachable");
+  });
+
+  test("the returned score is a copy, not the shared singleton", async () => {
+    // These are module-level constants. Handing one out by reference lets any
+    // caller that mutates a score corrupt every future result in the process.
+    const first = await judge(replying("nope"), {
+      goal: "g",
+      criteria: "c",
+      code: "const a = 1;",
+    });
+
+    first.overall = 5;
+    first.notes = "mutated";
+
+    const second = await judge(replying("nope"), {
+      goal: "g",
+      criteria: "c",
+      code: "const a = 1;",
+    });
+
+    expect(second.overall).toBe(1);
+  });
+});
+
+describe("sizeWithinBudget", () => {
+  /**
+   * The evaluator decides from file SIZES whether to read at all, and it must
+   * use this exact arithmetic — a short-circuit with its own threshold drifts,
+   * and then either refuses inputs the judge accepts or materialises ones it
+   * would refuse.
+   */
+  test("agrees with withinBudget on the same content", () => {
+    const code = "x".repeat(1000);
+    const input = { goal: "g", criteria: "c", code };
+
+    expect(sizeWithinBudget({ goal: 1, criteria: 1, code: 1000 })).toBe(
+      withinBudget(input)
+    );
+  });
+
+  test("rejects code past the code cap", () => {
+    expect(
+      sizeWithinBudget({ goal: 0, criteria: 0, code: JUDGE_BUDGET.code + 1 })
+    ).toBe(false);
+  });
+
+  test("counts the framing, so the total is a bound on the WIRE", () => {
+    // A payload sitting exactly on `total` still exceeds it once the system
+    // prompt and labels are added — the ceiling has to include them or it is
+    // not the ceiling it claims to be.
+    expect(
+      sizeWithinBudget({
+        goal: 0,
+        criteria: JUDGE_BUDGET.criteria,
+        code: JUDGE_BUDGET.total - JUDGE_BUDGET.criteria,
+      })
+    ).toBe(false);
+  });
+});
+
+describe("byte counting is bounded", () => {
+  test("a huge string is refused without being encoded", () => {
+    // Encoding to count allocates a full copy of attacker-controlled input
+    // during the check meant to refuse it. Correctness is what is asserted here;
+    // that it holds only one integer while doing so is the point of the loop.
+    const huge = "x".repeat(JUDGE_BUDGET.code * 2);
+
+    expect(withinBudget({ goal: "", criteria: "", code: huge })).toBe(false);
+  });
+
+  test("multi-byte content is measured in bytes, not units", () => {
+    // 4 bytes each, 2 UTF-16 units each: a length-based count would pass this.
+    const emoji = "😀".repeat(JUDGE_BUDGET.code / 4 + 1);
+
+    expect(emoji.length).toBeLessThan(JUDGE_BUDGET.code);
+    expect(withinBudget({ goal: "", criteria: "", code: emoji })).toBe(false);
+  });
+
+  test("an exactly-at-cap ASCII payload is accepted", () => {
+    expect(
+      withinBudget({
+        goal: "",
+        criteria: "",
+        code: "x".repeat(JUDGE_BUDGET.code),
+      })
+    ).toBe(true);
   });
 });

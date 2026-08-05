@@ -3,6 +3,7 @@ export {
   judge,
   overBudgetScore,
   withinBudget,
+  sizeWithinBudget,
   JUDGE_INPUT_SHAPE,
   JUDGE_BUDGET,
   JUDGE_MAX_TOKENS,

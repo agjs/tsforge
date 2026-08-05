@@ -84,11 +84,21 @@ export const JUDGE_BUDGET = {
   total: 64_000,
 } as const;
 
-/** The fixed framing the user message adds around the three fields ("Goal:",
- *  "Acceptance criteria:", "Solution:", separators) plus the system prompt,
- *  counted so the total is a bound on what actually goes on the wire rather than
- *  on the payload alone. */
-const FRAMING_BYTES = 256;
+/** The labels and separators the user message wraps around the three fields. */
+const USER_FRAMING = "Goal: \n\nAcceptance criteria:\n\n\nSolution:\n";
+
+/**
+ * Everything on the wire that is not the three payload fields: the system prompt
+ * plus the user-message framing.
+ *
+ * MEASURED, not guessed. A hand-picked constant was wrong the moment the system
+ * prompt grew — it sat at 256 while the real figure was ~670 — so the "hard
+ * ceiling" quietly admitted requests over it. Deriving it from the strings means
+ * editing the prompt cannot silently loosen the budget.
+ */
+const FRAMING_BYTES =
+  new TextEncoder().encode(SYSTEM).length +
+  new TextEncoder().encode(USER_FRAMING).length;
 
 /** Response cap. The reply is one small JSON object; the model-wide default is
  *  sized for whole-file tool output and is thousands of times larger than this
@@ -104,7 +114,8 @@ const OVER_BUDGET: IJudgeScore = {
   design: 1,
   readability: 1,
   notes: "solution exceeds the reviewable size budget",
-  scored: true,
+  scored: false,
+  outcome: "oversized",
 };
 
 /** The floor score as a value the caller can return without building a request —
@@ -118,31 +129,115 @@ export function overBudgetScore(): IJudgeScore {
  *  individually AND against a total, so no single field can consume the whole
  *  ceiling and no combination can exceed it. */
 export function withinBudget(input: IJudgeInput): boolean {
-  const goal = byteLength(input.goal);
-  const criteria = byteLength(input.criteria);
-  const code = byteLength(input.code);
+  const goal = byteLength(input.goal, JUDGE_BUDGET.goal);
+  const criteria = byteLength(input.criteria, JUDGE_BUDGET.criteria);
+  const code = byteLength(input.code, JUDGE_BUDGET.code);
 
+  return sizeWithinBudget({ goal, criteria, code });
+}
+
+/**
+ * The same arithmetic over byte COUNTS, for a caller that can learn the sizes
+ * without materialising the content — the evaluator stats its solution files
+ * rather than reading them. One implementation, so the pre-read short-circuit
+ * and the real check cannot drift to different thresholds.
+ */
+export function sizeWithinBudget(bytes: {
+  goal: number;
+  criteria: number;
+  code: number;
+}): boolean {
   return (
-    goal <= JUDGE_BUDGET.goal &&
-    criteria <= JUDGE_BUDGET.criteria &&
-    code <= JUDGE_BUDGET.code &&
-    goal + criteria + code + FRAMING_BYTES <= JUDGE_BUDGET.total
+    bytes.goal <= JUDGE_BUDGET.goal &&
+    bytes.criteria <= JUDGE_BUDGET.criteria &&
+    bytes.code <= JUDGE_BUDGET.code &&
+    bytes.goal + bytes.criteria + bytes.code + FRAMING_BYTES <=
+      JUDGE_BUDGET.total
   );
 }
 
-/** Bytes, not characters — a budget that counts UTF-16 units understates what
- *  actually goes on the wire for any non-ASCII content. */
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
+/** UTF-8 width of one code point. */
+function utf8Width(code: number): number {
+  if (code <= 0x7f) {
+    return 1;
+  }
+
+  if (code <= 0x7ff) {
+    return 2;
+  }
+
+  return code <= 0xffff ? 3 : 4;
 }
 
-const UNPARSEABLE: IJudgeScore = {
+/**
+ * Bytes, not characters — a budget counting UTF-16 units understates what goes
+ * on the wire for anything non-ASCII.
+ *
+ * Counted rather than encoded, and abandoned as soon as it passes `cap`.
+ * `TextEncoder().encode()` allocates a full copy of an attacker-controlled
+ * string during the very check meant to refuse it, so the public API would stay
+ * unbounded however carefully the evaluator avoids reading upstream. This is
+ * exact — an approximation from `length` would undercount the TOTAL even where
+ * it safely decides each field — while holding one integer.
+ *
+ * Returns `cap + 1` once exceeded: the precise size of something already too
+ * big is not information anyone needs.
+ */
+function byteLength(value: string, cap: number): number {
+  let bytes = 0;
+
+  for (const char of value) {
+    bytes += utf8Width(char.codePointAt(0) ?? 0);
+
+    if (bytes > cap) {
+      return cap + 1;
+    }
+  }
+
+  return bytes;
+}
+
+/**
+ * NO SIGNAL — reserved for failures that are not the candidate's doing.
+ *
+ * The acceptance guard is skipped when either side lacks signal, so this is a
+ * free pass and must only be reachable by things the candidate cannot cause: a
+ * dead endpoint, a timeout, a connection reset. Anything the candidate's own
+ * code can provoke has to be SCORED instead, or it becomes a way to switch the
+ * guard off. See UNSCOREABLE.
+ */
+const NO_SIGNAL: IJudgeScore = {
   overall: 0,
   correctness: 0,
   design: 0,
   readability: 0,
-  notes: "unparseable judge response",
+  notes: "judge call failed",
   scored: false,
+  outcome: "unreachable",
+};
+
+/**
+ * The floor, SCORED — for a call that SUCCEEDED but produced nothing usable.
+ *
+ * Candidate code is in the prompt, so it can ask the model to reply with prose,
+ * or with a score outside the range, and a `scored: false` there would skip the
+ * guard exactly like an oversized solution did. Same bypass, different door.
+ *
+ * Flooring it is safe as well as correct: the guard compares candidate against
+ * baseline, so if the judge is simply flaky both sides floor and nothing fires.
+ * It only bites when the CANDIDATE's code makes the judge unusable and the
+ * baseline's does not — which is the attack, not the weather.
+ */
+const UNSCOREABLE: IJudgeScore = {
+  overall: 1,
+  correctness: 1,
+  design: 1,
+  readability: 1,
+  notes: "judge response unusable",
+  // scored:false — there is no verdict to act on, so the improvement loop stays
+  // out of it. The acceptance guard reads `outcome` instead and floors it.
+  scored: false,
+  outcome: "unusable",
 };
 
 export async function judge(
@@ -150,7 +245,7 @@ export async function judge(
   input: IJudgeInput
 ): Promise<IJudgeScore> {
   if (!withinBudget(input)) {
-    return OVER_BUDGET;
+    return { ...OVER_BUDGET };
   }
 
   let res;
@@ -170,7 +265,7 @@ export async function judge(
     // A judge call that errors (non-2xx, timeout, connection) is no signal — not a
     // crash of the (best-effort) quality pass, and not a real 0/5. Treat it like an
     // unparseable response so the caller skips the loop.
-    return { ...UNPARSEABLE, notes: "judge call failed" };
+    return { ...NO_SIGNAL };
   }
 
   let data: unknown;
@@ -178,14 +273,23 @@ export async function judge(
   try {
     data = JSON.parse(extractJson(res.content));
   } catch {
-    return UNPARSEABLE;
+    return { ...UNSCOREABLE };
   }
 
   if (!isRecord(data)) {
-    return UNPARSEABLE;
+    return { ...UNSCOREABLE };
   }
 
   const overall = clampScore(data.overall);
+
+  // Parseable, but with no valid 1–5 `overall` (missing, or out of range) —
+  // which candidate code can ask the model for just as easily as it can ask for
+  // prose. Every route out of a SUCCESSFUL call scores; only a failed call is
+  // allowed to return no signal, or the guard is switchable off from inside the
+  // artifact being guarded. Third door into the same bypass, and the last one.
+  if (overall === 0) {
+    return { ...UNSCOREABLE };
+  }
 
   return {
     overall,
@@ -193,10 +297,8 @@ export async function judge(
     design: clampScore(data.design),
     readability: clampScore(data.readability),
     notes: typeof data.notes === "string" ? data.notes : "",
-    // Parseable but lacking a valid 1–5 `overall` (missing/out-of-range → clamped
-    // to 0) is still no usable signal — flag it unscored so the caller skips the
-    // loop instead of acting on a fake 0/5.
-    scored: overall > 0,
+    scored: true,
+    outcome: "scored",
   };
 }
 

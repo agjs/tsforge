@@ -23,7 +23,7 @@ import {
   countTaskLoc,
   judge,
   overBudgetScore,
-  JUDGE_BUDGET,
+  sizeWithinBudget,
   summarize,
 } from "../eval";
 import type { IJudgeScore, IRunRecord } from "../eval";
@@ -223,6 +223,55 @@ export function solutionFiles(spec: {
   return [...new Set(spec.tasks.flatMap((t) => t.files))];
 }
 
+/** The quality figure the acceptance guard should see, or undefined for "not
+ *  measured". See the call site for why an unusable answer is a 1 and not a
+ *  skip. */
+function guardQuality(score: IJudgeScore): number | undefined {
+  if (score.outcome === "scored") {
+    return score.overall;
+  }
+
+  return score.outcome === "unreachable" ? undefined : QUALITY_FLOOR;
+}
+
+/** Bottom of the judge's 1–5 scale. */
+const QUALITY_FLOOR = 1;
+
+/**
+ * Whether the solution is small enough to judge, decided from file SIZES.
+ *
+ * Sized before reading. Reading every file, joining them, and then encoding the
+ * result to count bytes copies the whole artifact twice before concluding it was
+ * too big to look at — so the path the budget exists to bound stayed unbounded
+ * locally, just short of the model call. `Bun.file().size` is a stat.
+ *
+ * The arithmetic is the judge's own (`sizeWithinBudget`), not a second copy of
+ * it: a short-circuit with its own threshold is a short-circuit that drifts, and
+ * then either refuses inputs the judge would accept or materialises ones it
+ * would not. Separators are counted because the join adds them.
+ */
+function solutionFitsJudge(
+  runDir: string,
+  files: readonly string[],
+  goal: string,
+  criteria: string
+): boolean {
+  const separators = Math.max(0, files.length - 1) * SOLUTION_SEPARATOR.length;
+  const code =
+    files.reduce((sum, f) => sum + Bun.file(join(runDir, f)).size, 0) +
+    separators;
+
+  return sizeWithinBudget({
+    goal: Buffer.byteLength(goal, "utf8"),
+    criteria: Buffer.byteLength(criteria, "utf8"),
+    code,
+  });
+}
+
+/** What `judgeFiles` joins solution files with; counted in the size estimate so
+ *  the pre-read check bounds the same string the judge will actually see. */
+const SOLUTION_SEPARATOR = "\n\n";
+
 /** Read the solution and score it. Split out so the size check above can refuse
  *  without this ever running — the point of checking before reading. */
 async function judgeFiles(
@@ -234,7 +283,7 @@ async function judgeFiles(
 ): Promise<IJudgeScore> {
   const code = (
     await Promise.all(files.map((f) => Bun.file(join(runDir, f)).text()))
-  ).join("\n\n");
+  ).join(SOLUTION_SEPARATOR);
 
   return judge(provider, { goal, criteria, code });
 }
@@ -305,20 +354,23 @@ async function runTaskOnce(
       // different artifact than the one being measured — and on a multi-task
       // spec it silently ignored most of what the model wrote.
       const files = solutionFiles(spec);
-      // Sized BEFORE reading. Reading every file, joining, then encoding to
-      // count bytes copies the whole artifact twice before deciding it was too
-      // big to look at — so the path the budget is supposed to bound stays
-      // unbounded locally, just short of the model call. `size` is a stat, not a
-      // read.
-      const bytes = files.reduce(
-        (sum, f) => sum + Bun.file(join(runDir, f)).size,
-        0
-      );
-      const score = await (bytes > JUDGE_BUDGET.code
-        ? Promise.resolve(overBudgetScore())
-        : judgeFiles(opts.judgeProvider, runDir, files, spec.title, specText));
+      const score = await (solutionFitsJudge(
+        runDir,
+        files,
+        spec.title,
+        specText
+      )
+        ? judgeFiles(opts.judgeProvider, runDir, files, spec.title, specText)
+        : Promise.resolve(overBudgetScore()));
 
-      quality = score.scored ? score.overall : undefined;
+      // The acceptance guard is SKIPPED when a side has no quality figure, so
+      // "no signal" is a pass — and the judge's prompt contains candidate code,
+      // which can ask for prose or an out-of-range number and switch the guard
+      // off from inside the artifact being guarded. Anything the candidate can
+      // provoke is therefore FLOORED, not skipped. Only `unreachable` (a dead
+      // endpoint) stays unmeasured: infrastructure is nobody's doing, and the
+      // mechanical gate is the real oracle regardless.
+      quality = guardQuality(score);
     }
   }
 

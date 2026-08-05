@@ -334,7 +334,7 @@ export function buildRequestBody(
   // `reasoning_content` replayed (DeepSeek's cloud API 400s without it).
   const includeReasoning = p.replayReasoning === true;
 
-  return {
+  const body: Record<string, unknown> = {
     model: cfg.model,
     messages: messages.map((m) => toWire(m, includeReasoning)),
     ...profileFields(cfg, opts),
@@ -349,33 +349,37 @@ export function buildRequestBody(
       ? { stream: true, stream_options: { include_usage: true } }
       : {}),
     ...(cfg.extraBody ?? {}),
-    // AFTER extraBody, deliberately. extraBody is a per-model escape hatch and
-    // overriding the profile is its job — but a per-call cap is a caller saying
-    // "this specific request must not be allowed to run long", and a config
-    // shipping `extraBody.max_tokens` would silently defeat it. A side call
-    // (judge, classifier) that quietly loses its ceiling is exactly the bound
-    // that has to hold.
-    ...perCallTokenCap(cfg, opts),
   };
+
+  // Applied to the ASSEMBLED body, after extraBody, and via setPath rather than
+  // a spread. extraBody is a per-model escape hatch and overriding the profile
+  // is its job — but a per-call cap is a caller saying THIS request must not run
+  // long, and a config shipping `extraBody.max_tokens` would silently defeat it.
+  //
+  // setPath, because the cap may live at a NESTED path (`params.output_limit`).
+  // Spreading a freshly-built `{ params: { output_limit } }` over the body would
+  // replace the whole `params` object and erase every sibling the profile and
+  // extraBody had just written there.
+  applyPerCallTokenCap(body, cfg, opts);
+
+  return body;
 }
 
-/** The per-call token cap, re-asserted over `extraBody`. Empty unless the caller
- *  actually passed one, so a model's own override still wins by default. */
-function perCallTokenCap(
+/** Re-assert the caller's token cap over anything `extraBody` set. No-op unless
+ *  a finite cap was actually passed, so a model's own override still wins by
+ *  default. */
+function applyPerCallTokenCap(
+  body: Record<string, unknown>,
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
-): Record<string, unknown> {
+): void {
   const cap = opts.maxTokens;
 
   if (cap === undefined || !Number.isFinite(cap)) {
-    return {};
+    return;
   }
 
-  const body: Record<string, unknown> = {};
-
   setPath(body, profile(cfg).tokenCap ?? DEFAULT_TOKEN_CAP, cap);
-
-  return body;
 }
 
 /** Wire form of {@link IResponseFormat}. Written ahead of `extraBody` so a

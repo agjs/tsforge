@@ -46,30 +46,43 @@ test("parses a JSON quality score from the reviewer", async () => {
   expect(s.scored).toBe(true); // a real, usable score
 });
 
-test("an unparseable response is flagged scored:false (no usable signal)", async () => {
+test("an unparseable response from a SUCCESSFUL call scores at the floor", async () => {
+  // CHANGED, deliberately. This used to be scored:false so the caller skipped
+  // the quality loop rather than acting on a nonsense 0/5 — sensible when the
+  // judge was only a report. It is now an acceptance guard, and skipping is a
+  // PASS: candidate code sits in the judge's prompt and can ask the model to
+  // reply with prose, which would switch the guard off from inside the artifact
+  // being guarded.
+  //
+  // Flooring is safe as well as correct: the guard compares candidate against
+  // baseline, so a merely flaky judge floors both sides and nothing fires. It
+  // bites only when the CANDIDATE's code makes the judge unusable and the
+  // baseline's does not — the attack, not the weather.
   const s = await judge(providerSaying("hmm, looks alright I guess"), {
     goal: "g",
     criteria: "c",
     code: "x",
   });
 
-  // Must be marked unscored so the caller skips the quality loop rather than
-  // feeding the generator a nonsense "0/5" critique.
+  // `scored` stays FALSE — there is no verdict for the improvement loop to act
+  // on. What changed is that the acceptance guard no longer reads `scored`: it
+  // reads `outcome`, and floors anything the candidate could have provoked.
   expect(s.scored).toBe(false);
-  expect(s.overall).toBe(0);
-  expect(s.notes).toContain("unparseable");
+  expect(s.outcome).toBe("unusable");
 });
 
-test("parseable JSON lacking a valid overall is also flagged scored:false", async () => {
-  // Parses fine, but no usable 1–5 overall (missing / out of range → clamped to 0).
-  // That's still no signal — must not be treated as a real 0/5.
+test("parseable JSON lacking a valid overall also scores at the floor", async () => {
+  // Same reasoning as above, and the third door into the same bypass: asking the
+  // model for an out-of-range number is no harder than asking it for prose.
+  // Every route out of a SUCCESSFUL call scores; only a failed call may return
+  // no signal.
   const missing = await judge(
     providerSaying('{"design":4,"readability":4,"notes":"ok"}'),
     { goal: "g", criteria: "c", code: "x" }
   );
 
   expect(missing.scored).toBe(false);
-  expect(missing.overall).toBe(0);
+  expect(missing.outcome).toBe("unusable");
 
   const outOfRange = await judge(providerSaying('{"overall":9,"notes":"ok"}'), {
     goal: "g",
@@ -77,7 +90,7 @@ test("parseable JSON lacking a valid overall is also flagged scored:false", asyn
     code: "x",
   });
 
-  expect(outOfRange.scored).toBe(false);
+  expect(outOfRange.outcome).toBe("unusable");
 });
 
 test("a judge provider that throws is no-signal, not a crash", async () => {
@@ -148,12 +161,16 @@ test("the judge prompt is built only from goal/criteria/code", async () => {
 });
 
 test("falls back gracefully on an unparseable response", async () => {
+  // Graceful still means "does not throw and does not invent a score" — but the
+  // floor, not zero-and-unscored: unscored is a skipped acceptance guard, and
+  // the judge's prompt contains candidate code that could ask for exactly this.
   const s = await judge(providerSaying("no json here"), {
     goal: "g",
     criteria: "c",
     code: "x",
   });
 
-  expect(s.overall).toBe(0);
-  expect(s.notes.toLowerCase()).toContain("unparseable");
+  expect(s.scored).toBe(false);
+  expect(s.outcome).toBe("unusable");
+  expect(s.notes.toLowerCase()).toContain("unusable");
 });

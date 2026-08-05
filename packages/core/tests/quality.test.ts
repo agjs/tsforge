@@ -252,7 +252,7 @@ test("an unparseable judge response is no-signal — no improvement attempt", as
 
     expect(implementCalls).toBe(0); // never fed the model a nonsense "0/5" critique
     expect(result.attempts).toBe(0);
-    expect(result.notes).toContain("unparseable");
+    expect(result.notes).toContain("unusable");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
