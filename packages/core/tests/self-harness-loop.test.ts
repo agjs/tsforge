@@ -284,7 +284,7 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     // off entirely.
     const d = acceptanceDecision(
       withCyclesOn(withProgress(base, 0.3, 0.6), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.601), 50)
+      withCyclesOn(withProgress(base, 0.8, 0.61), 50)
     );
 
     expect(d.accepted).toBe(false);
@@ -295,6 +295,28 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     const d = acceptanceDecision(
       withProgress(base, 0.4, 0.6),
       withProgress(base, 0.7, 0.6)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("an unmeasured BASELINE fails closed too, not just a candidate", () => {
+    // A regression that only checked the candidate side would pass every other
+    // fail-closed test in this file.
+    const d = acceptanceDecision(
+      withProgress(base, undefined, undefined),
+      withProgress(base, 0.9, 0.9)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("not measured on both splits");
+  });
+
+  test("an exact 5pp gain is accepted despite binary floating point", () => {
+    // 0.45 - 0.40 is 0.04999999999999999.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.5),
+      withProgress(base, 0.45, 0.5)
     );
 
     expect(d.accepted).toBe(true);

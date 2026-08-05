@@ -204,11 +204,7 @@ async function runTaskOnce(
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
   // How far the run got, not merely whether it arrived. See ./progress.ts.
-  const progress = runProgress(
-    events,
-    passed,
-    spec.tasks.map((t) => t.id)
-  );
+  const progress = runProgress(events, passed);
 
   return {
     record: {

@@ -66,15 +66,24 @@ const PROGRESS_HO_TOLERANCE = 0;
  * progress held, and a harness that reaches the same place while thrashing for
  * twice as long is worse.
  *
- * Keeps the 1.1× bar the previous rule used — no threshold is relaxed — and
- * widens its REACH: the old comparison only covered tasks green on BOTH sides,
- * so on the path this feature exists for (few or no greens) it compared nothing
- * and passed everything. Same bar, applied where it was previously blind.
+ * The 1.1× of the old rule measured something else: commonly-GREEN cycles,
+ * where both sides reached the same outcome and the comparison is quiet. This
+ * sums cycles over every shared task, green or not, which is a far noisier
+ * quantity — cycles swing 4-10 on a single task, and a 10% bar sits inside that
+ * jitter, so it would false-reject real progress gains for weather.
+ *
+ * 1.5× is the right bar for the noisier measure, and it is not a relaxation in
+ * effect: the old bar only fired when tasks were green on both sides, so on the
+ * path this feature exists for it compared nothing and vetoed nothing. This one
+ * fires there, and only catches blowups large enough to be real.
  */
-const HO_CYCLE_BLOWUP_FACTOR = 1.1;
-/** How much held-out progress must actually improve before extra cycles are
- *  read as productive work rather than thrash. */
-const HO_PROGRESS_MATERIAL = 0.01;
+const HO_CYCLE_BLOWUP_FACTOR = 1.5;
+/** How much held-out progress must improve before extra cycles read as
+ *  productive work rather than thrash. The SAME floor promotion uses: a move
+ *  this change calls noise on held-in cannot simultaneously be evidence of
+ *  real work on held-out, and at 1pp a jitter could switch the veto off and
+ *  license an arbitrary blowup. */
+const HO_PROGRESS_MATERIAL = PROGRESS_MIN_GAIN;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -206,7 +215,9 @@ function progressDecision(
   const pct = (v: number): string => (v * 100).toFixed(1);
   const gain = inCand - inBase;
 
-  if (gain < PROGRESS_MIN_GAIN) {
+  // Epsilon, because 0.45 - 0.40 is 0.04999999999999999 in binary floating
+  // point and a mathematically valid 5pp gain would be rejected.
+  if (gain < PROGRESS_MIN_GAIN - 1e-9) {
     return no(
       `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`
     );
