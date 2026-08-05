@@ -21,6 +21,7 @@ export {
   allMustRun,
   solutionFiles,
   guardQuality,
+  solutionFitsJudge,
   SPEC_SLOW_THRESHOLD,
   type IEvaluateOptions,
   type IEvaluateOutcome,

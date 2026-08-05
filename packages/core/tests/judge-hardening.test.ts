@@ -235,6 +235,10 @@ describe("an unusable judge ANSWER is scored, not skipped", () => {
     };
     const score = await judge(dead, { goal: "g", criteria: "c", code: "a" });
 
+    // `outcome`, not `scored`: unreachable and unusable BOTH carry
+    // scored:false, so asserting that alone would pass even if transport errors
+    // were floored or 4xx were skipped — the two mistakes this split exists to
+    // keep apart.
     expect(score.outcome).toBe("unreachable");
   });
 

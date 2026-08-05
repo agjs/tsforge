@@ -114,9 +114,18 @@ const FRAMING_BYTES =
  *  call can legitimately need. */
 export const JUDGE_MAX_TOKENS = 512;
 
-/** The floor, SCORED — see the budget note. `scored: true` is the whole point:
- *  an unscored result is a skipped guard, which is exactly the free pass a
- *  candidate would aim for. */
+/**
+ * Too big to review, as a value.
+ *
+ * `scored: false` is deliberate and must stay: the improvement loop reads
+ * `scored`, and handing it "solution exceeds the reviewable size budget" as a
+ * critique to act on is the nonsense-critique spiral this design exists to
+ * avoid. The acceptance guard does not read `scored` — it reads `outcome`, and
+ * floors this. The two fields answer different questions for two callers with
+ * opposite needs; do not "fix" one to match the other. Setting `scored: true`
+ * re-opens the spiral, and reverting the guard to read `scored` re-opens the
+ * oversize free pass.
+ */
 const OVER_BUDGET: IJudgeScore = {
   overall: 1,
   correctness: 1,

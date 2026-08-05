@@ -171,17 +171,43 @@ describe("buildRequestBody: per-call maxTokens", () => {
 });
 
 describe("buildRequestBody: a NESTED per-call cap keeps its siblings", () => {
-  test("writing a nested cap does not erase the rest of its parent", () => {
-    // The cap may live at a nested path for a custom profile. Spreading a
-    // freshly built { params: { ... } } over the assembled body replaces the
-    // WHOLE parent, silently dropping every sibling the profile and extraBody
-    // had just written there.
+  /** A profile whose token cap lives UNDER a parent — the case a spread breaks
+   *  and setPath does not. `params` also carries the effort field, so a clobber
+   *  is observable rather than theoretical. */
+  const nested = {
+    reasoning: { effort: "params.effort", tokenCap: "params.output_limit" },
+    reasoningEffort: "high" as const,
+  };
+
+  test("the cap is written at the nested path", () => {
+    const out = body(nested, { maxTokens: 512 });
+
+    expect(out.params).toMatchObject({ output_limit: 512 });
+  });
+
+  test("writing it does not erase a sibling from the profile", () => {
+    // Spreading a freshly built { params: { output_limit } } over the assembled
+    // body replaces the WHOLE parent, taking the effort field with it.
+    const out = body(nested, { maxTokens: 512 });
+
+    expect(out.params).toMatchObject({ effort: "high", output_limit: 512 });
+  });
+
+  test("nor a sibling that extraBody put there", () => {
     const out = body(
-      { extraBody: { params: { keep_me: "yes", max_tokens: 99_999 } } },
+      { ...nested, extraBody: { params: { keep_me: "yes" } } },
       { maxTokens: 512 }
     );
-    const params = out.params;
 
-    expect(params).toMatchObject({ keep_me: "yes" });
+    expect(out.params).toMatchObject({ keep_me: "yes", output_limit: 512 });
+  });
+
+  test("and it still beats a nested cap extraBody set", () => {
+    const out = body(
+      { ...nested, extraBody: { params: { output_limit: 99_999 } } },
+      { maxTokens: 512 }
+    );
+
+    expect(out.params).toMatchObject({ output_limit: 512 });
   });
 });

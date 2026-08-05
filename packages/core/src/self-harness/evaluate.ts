@@ -240,6 +240,38 @@ export async function solutionFiles(
   return [...seen];
 }
 
+/**
+ * Score the solution, or refuse to — and an EMPTY scope is refused.
+ *
+ * Judging nothing does not return nothing: the model invents a number for an
+ * empty window, and that number becomes a quality reading for code it never saw.
+ * `qualityRepair` already refuses this case for the same reason.
+ *
+ * It also stopped being self-correcting once files were globbed. A literal
+ * missing path used to throw ENOENT and error the run, which at least blocked
+ * promotion; an unmatched glob quietly expands to nothing. So a candidate
+ * writing outside its declared scope while staying green would skip the quality
+ * and concision comparison altogether.
+ *
+ * Refusing means the FLOOR, not silence — silence skips the guard, which is a
+ * pass.
+ */
+async function scoreSolution(
+  provider: IProvider,
+  runDir: string,
+  files: readonly string[],
+  goal: string,
+  criteria: string
+): Promise<IJudgeScore> {
+  if (files.length === 0) {
+    return overBudgetScore();
+  }
+
+  return solutionFitsJudge(runDir, files, goal, criteria)
+    ? judgeFiles(provider, runDir, files, goal, criteria)
+    : overBudgetScore();
+}
+
 /** The quality figure the acceptance guard should see, or undefined for "not
  *  measured". See the call site for why an unusable answer is a 1 and not a
  *  skip. */
@@ -267,7 +299,7 @@ const QUALITY_FLOOR = 1;
  * then either refuses inputs the judge would accept or materialises ones it
  * would not. Separators are counted because the join adds them.
  */
-function solutionFitsJudge(
+export function solutionFitsJudge(
   runDir: string,
   files: readonly string[],
   goal: string,
@@ -371,14 +403,13 @@ async function runTaskOnce(
       // different artifact than the one being measured — and on a multi-task
       // spec it silently ignored most of what the model wrote.
       const files = await solutionFiles(runDir, spec);
-      const score = await (solutionFitsJudge(
+      const score = await scoreSolution(
+        opts.judgeProvider,
         runDir,
         files,
         spec.title,
         specText
-      )
-        ? judgeFiles(opts.judgeProvider, runDir, files, spec.title, specText)
-        : Promise.resolve(overBudgetScore()));
+      );
 
       // The acceptance guard is SKIPPED when a side has no quality figure, so
       // "no signal" is a pass — and the judge's prompt contains candidate code,

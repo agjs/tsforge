@@ -2,7 +2,12 @@ import { test, expect, describe } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { solutionFiles, guardQuality } from "../src/self-harness";
+import {
+  solutionFiles,
+  guardQuality,
+  solutionFitsJudge,
+} from "../src/self-harness";
+import { withinBudget, JUDGE_BUDGET } from "../src/eval";
 import type { IJudgeScore } from "../src/eval";
 
 /**
@@ -121,5 +126,73 @@ describe("guardQuality", () => {
     // The line that keeps flooring fair: a dead endpoint is nobody's doing, and
     // the mechanical gate is the real oracle regardless.
     expect(guardQuality(score("unreachable"))).toBeUndefined();
+  });
+});
+
+describe("solutionFitsJudge", () => {
+  /**
+   * The pre-read short-circuit: decide from file SIZES, so an artifact too big
+   * to review is never materialised twice just to conclude that. It must use the
+   * JUDGE's own arithmetic — a second threshold drifts, and then either refuses
+   * what the judge accepts or reads what it would refuse.
+   */
+  test("a normal solution fits", async () => {
+    const dir = await corpus();
+
+    try {
+      expect(solutionFitsJudge(dir, ["a.ts"], "goal", "criteria")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a solution past the code budget does not", async () => {
+    const dir = await corpus();
+
+    try {
+      await writeFile(join(dir, "big.ts"), "x".repeat(JUDGE_BUDGET.code + 1));
+
+      expect(solutionFitsJudge(dir, ["big.ts"], "goal", "criteria")).toBe(
+        false
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("files that each fit but together do not are refused", async () => {
+    // Summed, not checked one by one — otherwise a solution split across files
+    // walks straight past the ceiling.
+    const dir = await corpus();
+    const half = Math.floor(JUDGE_BUDGET.code / 2) + 1;
+
+    try {
+      await writeFile(join(dir, "h1.ts"), "x".repeat(half));
+      await writeFile(join(dir, "h2.ts"), "x".repeat(half));
+
+      expect(solutionFitsJudge(dir, ["h1.ts"], "goal", "criteria")).toBe(true);
+      expect(
+        solutionFitsJudge(dir, ["h1.ts", "h2.ts"], "goal", "criteria")
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("it agrees with the judge's own check on the same bytes", async () => {
+    // The anti-drift assertion: same content, same verdict, from sizes as from
+    // strings.
+    const dir = await corpus();
+    const code = "x".repeat(JUDGE_BUDGET.code + 1);
+
+    try {
+      await writeFile(join(dir, "big.ts"), code);
+
+      expect(solutionFitsJudge(dir, ["big.ts"], "g", "c")).toBe(
+        withinBudget({ goal: "g", criteria: "c", code })
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
