@@ -249,10 +249,24 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     // rejects the only signal the graded dimension adds.
     const d = acceptanceDecision(
       withCyclesOn(withProgress(base, 0.3, 0.4), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.7), 50)
+      withCyclesOn(withProgress(base, 0.8, 0.7), 9)
     );
 
     expect(d.accepted).toBe(true);
+  });
+
+  test("getting further buys more cycles, but not unlimited ones", () => {
+    // The exemption is bounded. Otherwise the smallest material move — 5pp, by
+    // definition the least that counts — would license any blowup at all, and a
+    // harness that grinds ten times as long is not a better one whatever ground
+    // it gained.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 5),
+      withCyclesOn(withProgress(base, 0.8, 0.7), 50)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("past the ceiling");
   });
 
   test("more cycles for NO extra ground is still thrash", () => {
@@ -284,7 +298,7 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     // and rejects exactly the candidate this feature exists to reward.
     const d = acceptanceDecision(
       withCyclesOn(withProgress(base, 0.3, 0.4), 5),
-      withCyclesOn(withProgress(base, 0.8, 0.45), 50)
+      withCyclesOn(withProgress(base, 0.8, 0.45), 9)
     );
 
     expect(d.accepted).toBe(true);

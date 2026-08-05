@@ -52,7 +52,24 @@ export function errorTrace(events: readonly ILoopEvent[]): number[] {
 const FAILED_RUN_CEILING = 0.99;
 
 /**
- * Fraction of the run's starting gate errors that it resolved.
+ * Added to the denominator so credit scales with the SIZE of what was cleared.
+ *
+ * A raw ratio makes small runs nearly binary: a run that opens on one error
+ * scores 0.99 if it clears it and 0 if it does not. On a four-run split that
+ * single lint is worth 25pp of `avgProgress` — five times the promotion floor —
+ * so one flaky formatting error would carry an edit through on its own, which is
+ * exactly the noise-acceptance this whole change exists to stop. It also made
+ * clearing one lint look like clearing 49 of 50.
+ *
+ * With this, a 1 → 0 failure scores 1/6 and a 50 → 5 scores 45/55. The
+ * shrinkage costs a large run almost nothing and costs a trivial one most of its
+ * credit, which is the right order.
+ */
+const PROGRESS_SHRINKAGE = 5;
+
+/**
+ * Fraction of the run's starting gate errors that it resolved, shrunk so that
+ * clearing a handful is not worth what clearing fifty is (`PROGRESS_SHRINKAGE`).
  *
  * A pass is 1 by definition. A failure is scored on the state it KEPT — first
  * reading against last — not the best it passed through. Crediting a transient
@@ -90,7 +107,12 @@ export function runProgress(
     return 0;
   }
 
-  return Math.min(FAILED_RUN_CEILING, clamp01((start - end) / start));
+  const resolved = Math.max(0, start - end);
+
+  return Math.min(
+    FAILED_RUN_CEILING,
+    clamp01(resolved / (start + PROGRESS_SHRINKAGE))
+  );
 }
 
 function clamp01(value: number): number {

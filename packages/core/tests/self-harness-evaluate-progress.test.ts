@@ -2,7 +2,11 @@ import { test, expect, describe } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evaluateHarness, meanProgress } from "../src/self-harness";
+import {
+  evaluateHarness,
+  meanProgress,
+  runProgress,
+} from "../src/self-harness";
 
 /**
  * The PRODUCTION path: does `evaluateHarness` actually put a graded score on
@@ -206,6 +210,18 @@ describe("evaluateHarness records the graded score", () => {
 
         expect(scores.every((v) => typeof v === "number")).toBe(true);
         expect(out.score.avgProgress).toBe(meanProgress(scores));
+
+        // And prove it is runProgress OF THE RUN'S OWN EVENTS that gets
+        // recorded, not some constant that happens to satisfy the mean. Both
+        // assertions above hold for `progress: 0` on every record; this one
+        // recomputes the score from the same event stream the evaluator saw.
+        expect(out.runs).toHaveLength(out.records.length);
+
+        for (const [i, run] of out.runs.entries()) {
+          expect(out.records[i]?.progress).toBe(
+            runProgress(run.events, run.passed)
+          );
+        }
       } finally {
         await rm(corpusDir, { recursive: true, force: true });
         await rm(runsDir, { recursive: true, force: true });

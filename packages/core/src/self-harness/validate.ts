@@ -86,6 +86,12 @@ const HO_CYCLE_BLOWUP_FACTOR = 1.1;
  *  license an arbitrary blowup. */
 const HO_PROGRESS_MATERIAL = PROGRESS_MIN_GAIN;
 
+/** The ceiling on that exemption. Getting further buys more cycles, not
+ *  unlimited ones — without a hard stop, the smallest material move (5pp, by
+ *  definition the least that counts) would license an unbounded blowup, and
+ *  "grinds twice as long" stops being a better harness whatever it gained. */
+const HO_CYCLE_EXEMPT_CEILING = 2;
+
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
  *  is testable without a live model. */
@@ -245,13 +251,18 @@ function progressDecision(
   // that spent cycles to get further — the path this feature rewards.
   const wentFurther = outCand - outBase >= HO_PROGRESS_MATERIAL - 1e-9;
 
-  if (
-    !wentFurther &&
-    cycles.tasks > 0 &&
-    cycles.cand > Math.max(cycles.base, 0) * HO_CYCLE_BLOWUP_FACTOR
-  ) {
+  // The exemption is bounded. Getting further earns more cycles; it does not
+  // earn unlimited ones, or a 5pp nudge — the smallest move that counts as
+  // material at all — would buy a 10× blowup. Above the ceiling the candidate is
+  // rejected however much ground it gained: at that point the edit is not making
+  // the model better at the task, it is making it grind.
+  const bar = wentFurther ? HO_CYCLE_EXEMPT_CEILING : HO_CYCLE_BLOWUP_FACTOR;
+
+  if (cycles.tasks > 0 && cycles.cand > Math.max(cycles.base, 0) * bar) {
     return no(
-      `held-out cycles blew up for no extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
+      wentFurther
+        ? `held-out cycles blew up past the ceiling even for extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_EXEMPT_CEILING)}×)`
+        : `held-out cycles blew up for no extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
     );
   }
 

@@ -37,8 +37,9 @@ export interface IRunRecord {
   /** Fraction of the starting gate errors this run resolved, in [0, 1]. Exactly
    *  1 only for a pass; a failed run is capped just below, so "clean gate but
    *  still failed" can never tie with a genuine pass. The graded signal the pass
-   *  bit hides — a failed run that clears 49 of 50 errors scores 0.98 rather
-   *  than being indistinguishable from one that cleared none.
+   *  bit hides — a failed run that clears 49 of 50 errors scores 0.89 rather
+   *  than being indistinguishable from one that cleared none. Shrunk toward
+   *  zero so clearing one lint is not worth what clearing fifty errors is.
    *
    *  Every COMPLETED run has one, including a run with no gate readings at all
    *  (which scores 0). It is absent only for an ERRORED run, which never reached

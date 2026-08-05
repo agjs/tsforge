@@ -41,14 +41,14 @@ describe("runProgress", () => {
     expect(runProgress([ev("red", 9)], true)).toBe(1);
   });
 
-  test("the real failed run scores 0.98, not 0", () => {
+  test("the real failed run scores 0.89, not 0", () => {
     // THE point of this module. Under pass/fail this run and one that did
     // nothing are the same number.
     const events = REAL_FAILED_RUN.map((n, i) =>
       ev(i === 0 ? "red" : "validated", n)
     );
 
-    expect(runProgress(events, false)).toBeCloseTo(0.98, 2);
+    expect(runProgress(events, false)).toBeCloseTo(49 / 55, 5);
   });
 
   test("reads the run as ONE series across tasks", () => {
@@ -63,7 +63,7 @@ describe("runProgress", () => {
       ev("validated", 5, "2"),
     ];
 
-    expect(runProgress(events, false)).toBeCloseTo(0.75, 5);
+    expect(runProgress(events, false)).toBeCloseTo(15 / 25, 5);
   });
 
   test("quitting early cannot outscore doing more work", () => {
@@ -92,7 +92,7 @@ describe("runProgress", () => {
       ev("validated", 3, "verify"),
     ];
 
-    expect(runProgress(events, false)).toBeCloseTo(0.625, 3);
+    expect(runProgress(events, false)).toBeCloseTo(5 / 13, 5);
   });
 
   test("a run that resolved nothing scores 0", () => {
@@ -106,7 +106,7 @@ describe("runProgress", () => {
     // after MAX_NEAR_GREEN_ROLLBACKS.
     const events = [ev("red", 10), ev("validated", 1), ev("validated", 6)];
 
-    expect(runProgress(events, false)).toBeCloseTo(0.4, 5);
+    expect(runProgress(events, false)).toBeCloseTo(4 / 15, 5);
   });
 
   test("a failed run whose gate went fully clean is still not a pass", () => {
@@ -114,7 +114,19 @@ describe("runProgress", () => {
     const score = runProgress(events, false);
 
     expect(score).toBeLessThan(1);
-    expect(score).toBeCloseTo(0.99, 2);
+    expect(score).toBeCloseTo(6 / 11, 5);
+  });
+
+  test("clearing one error is not worth what clearing fifty is", () => {
+    // Without shrinkage a 1 -> 0 failure scored 0.99, so on a four-run split one
+    // flaky lint moved avgProgress 25pp — five times the promotion floor — and
+    // could carry an edit through by itself.
+    const oneLint = runProgress([ev("red", 1), ev("validated", 0)], false);
+    const realWork = runProgress([ev("red", 50), ev("validated", 0)], false);
+
+    expect(oneLint).toBeCloseTo(1 / 6, 5);
+    expect(realWork).toBeCloseTo(50 / 55, 5);
+    expect(realWork).toBeGreaterThan(oneLint * 4);
   });
 
   test("getting worse than the start scores 0, never negative", () => {
