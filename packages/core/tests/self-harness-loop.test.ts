@@ -187,6 +187,27 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("held-out progress regressed");
   });
 
+  const withCyclesOn = (e: IHarnessEval, turns: number): IHarnessEval => ({
+    ...e,
+    heldOut: {
+      ...e.heldOut,
+      perTask: {
+        t: {
+          label: "t",
+          runs: 1,
+          passed: 0,
+          passRate: 0,
+          avgCycles: turns,
+          avgTurnsToGreen: null,
+          avgMs: 0,
+          avgQuality: 0,
+          avgLoc: 0,
+          failureClasses: {},
+        },
+      },
+    },
+  });
+
   test("held-out cycles blowing up blocks the gain, even with NO greens", () => {
     // avgTurnsToGreen is null here — nothing went green — which is exactly the
     // path this feature exists for. The previous guard compared only
@@ -219,6 +240,50 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
 
     expect(d.accepted).toBe(false);
     expect(d.reason).toContain("held-out cycles blew up");
+  });
+
+  test("spending more cycles to get FURTHER is not treated as thrash", () => {
+    // The category error: the bar was calibrated for same-outcome comparisons,
+    // but on the path this feature exists for the baseline often fails fast
+    // while a better candidate spends its budget clearing errors. Vetoing that
+    // rejects the only signal the graded dimension adds.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 5),
+      withCyclesOn(withProgress(base, 0.8, 0.7), 50)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("more cycles for NO extra ground is still thrash", () => {
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.6), 5),
+      withCyclesOn(withProgress(base, 0.8, 0.6), 50)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("no extra ground");
+  });
+
+  test("the bar scales to the headroom actually available", () => {
+    // On a nearly-green split every passing run contributes 1.0, so the most a
+    // candidate can gain is roughly failed/total. A flat 5pp floor made the
+    // dimension go dark exactly on the corpora we have — one failing run in
+    // twenty, fully fixed, moves the mean by 0.05 at best.
+    const nearlyGreen = acceptanceDecision(
+      withProgress(base, 0.95, 0.9),
+      withProgress(base, 0.98, 0.9)
+    );
+
+    expect(nearlyGreen.accepted).toBe(true);
+
+    // …but a candidate that moves almost nothing still clears neither bar.
+    const noise = acceptanceDecision(
+      withProgress(base, 0.95, 0.9),
+      withProgress(base, 0.952, 0.9)
+    );
+
+    expect(noise.accepted).toBe(false);
   });
 
   test("held-out holding exactly level is fine", () => {

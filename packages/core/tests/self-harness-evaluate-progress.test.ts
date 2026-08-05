@@ -205,6 +205,10 @@ describe("evaluateHarness records the graded score", () => {
         expect(out.score.passed).toBe(0);
         expect(progress).toBeGreaterThan(0);
         expect(progress).toBeLessThan(1);
+        // The split AGGREGATE too: a regression that records per-run progress
+        // and then drops or zeroes it on the way to the score object would
+        // otherwise pass, and the acceptance rule only ever reads the split.
+        expect(out.score.avgProgress).toBe(progress);
       } finally {
         await rm(corpusDir, { recursive: true, force: true });
         await rm(runsDir, { recursive: true, force: true });

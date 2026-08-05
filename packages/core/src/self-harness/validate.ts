@@ -39,6 +39,18 @@ const LOC_TOLERANCE_FACTOR = 1.25;
  * pass/fail scores as nothing.
  */
 const PROGRESS_MIN_GAIN = 0.05;
+/**
+ * …but measured against the HEADROOM that was actually available, not the raw
+ * split mean.
+ *
+ * Every passing run contributes 1.0 to the mean, so on a mostly-green split the
+ * most a candidate can possibly gain is roughly failed/total. With one failing
+ * run in twenty, completely fixing it moves the mean by 0.05 — right at the
+ * floor — so the graded dimension would go dark exactly on the corpora we have.
+ * Requiring a fraction of what was there to win keeps the bar meaningful on a
+ * nearly-green split without lowering it on a mostly-red one.
+ */
+const PROGRESS_MIN_HEADROOM_SHARE = 0.25;
 /** Held-out progress may not fall AT ALL. The paper's rule is non-regression on
  *  the held-out split; a tolerance here would permit promoting a candidate with
  *  measurably worse held-out behaviour, which is precisely what that split
@@ -192,9 +204,18 @@ function progressDecision(
   const pct = (v: number): string => (v * 100).toFixed(1);
   const gain = inCand - inBase;
 
-  if (gain < PROGRESS_MIN_GAIN) {
+  // Whichever bar is EASIER to clear, so neither a mostly-red nor a
+  // mostly-green split can render the dimension unusable — but both are real
+  // bars, and a candidate that moves nothing clears neither.
+  const headroom = 1 - inBase;
+  const required = Math.min(
+    PROGRESS_MIN_GAIN,
+    Math.max(headroom * PROGRESS_MIN_HEADROOM_SHARE, 0.005)
+  );
+
+  if (gain < required) {
     return no(
-      `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`
+      `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(required)}pp of the ${pct(headroom)}pp available)`
     );
   }
 
@@ -204,15 +225,22 @@ function progressDecision(
     );
   }
 
+  // The cycle guard asks "same place, slower?" — so it only applies when
+  // held-out progress did NOT improve. Spending more cycles to get FURTHER is
+  // the behaviour this whole feature exists to reward; vetoing it would make
+  // the graded dimension self-defeating precisely when the baseline fails fast
+  // and the candidate works the problem. Thrash is more cycles for no more
+  // ground, and that is what this catches.
   const cycles = commonCycles(baseline.heldOut, candidate.heldOut);
+  const wentFurther = outCand > outBase;
 
   if (
+    !wentFurther &&
     cycles.tasks > 0 &&
-    cycles.base > 0 &&
-    cycles.cand > cycles.base * HO_CYCLE_BLOWUP_FACTOR
+    cycles.cand > Math.max(cycles.base, 0) * HO_CYCLE_BLOWUP_FACTOR
   ) {
     return no(
-      `held-out cycles blew up (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
+      `held-out cycles blew up for no extra ground (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
     );
   }
 

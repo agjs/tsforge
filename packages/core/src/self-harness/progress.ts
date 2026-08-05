@@ -55,10 +55,13 @@ export function taskTraces(events: readonly ILoopEvent[]): ITaskTrace[] {
 
 /** What one task achieved: the fraction of ITS starting errors it cleared.
  *
- *  The BEST state within that task, not its last — a task that reaches 1 error
- *  and thrashes back to 6 demonstrated it could reach 1, the harness keeps a
- *  near-green checkpoint for exactly that reason, and cycles already penalise
- *  the thrash. Scoped to the task so a neighbour's zero cannot leak in. */
+ *  The BEST state within that task, not its last, because the harness LOCKS a
+ *  near-green checkpoint when it reaches one — so the best state is a state the
+ *  run actually banked and can return to, not a peak it merely passed through.
+ *  (An earlier note here claimed cycles penalise a rebound; that is no longer
+ *  true on the deciding path, where cycles are only a held-out veto. The
+ *  checkpoint is the real justification, and it stands on its own.)
+ *  Scoped to the task so a neighbour's zero cannot leak in. */
 function taskProgress(trace: ITaskTrace): number {
   const start = trace.counts[0];
 
