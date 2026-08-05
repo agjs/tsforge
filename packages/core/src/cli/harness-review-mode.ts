@@ -124,6 +124,36 @@ export function buildBinaryInvocation(
   };
 }
 
+/** How long a reviewer gets to honour SIGTERM before SIGKILL. Long enough for a
+ *  normal shutdown, short enough that an unkillable reviewer cannot hold the
+ *  panel. */
+const KILL_GRACE_MS = 2_000;
+/** How long to keep draining stdout AFTER a kill. A descendant can hold the pipe
+ *  open long past the reviewer's own exit; the output is discarded on a timeout
+ *  regardless, so waiting for EOF buys nothing. */
+const POST_KILL_DRAIN_MS = 1_000;
+
+/** Read a stream to EOF, but stop shortly after `killed()` turns true. */
+async function readBounded(
+  stream: ReadableStream<Uint8Array>,
+  killed: () => boolean
+): Promise<string> {
+  const text = new Response(stream).text();
+
+  return await Promise.race([
+    text,
+    (async (): Promise<string> => {
+      while (!killed()) {
+        await Bun.sleep(50);
+      }
+
+      await Bun.sleep(POST_KILL_DRAIN_MS);
+
+      return "";
+    })(),
+  ]);
+}
+
 export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
@@ -159,21 +189,43 @@ export async function runBinary(
   const timer = setTimeout(() => {
     timedOut = true;
     proc.kill();
+    // SIGTERM is a request. A reviewer that ignores it — or installs a handler
+    // and takes its time — would otherwise keep the whole panel blocked past a
+    // budget that exists precisely to stop that. SIGKILL is not refusable.
+    killHard = setTimeout(() => {
+      proc.kill(9);
+    }, KILL_GRACE_MS);
   }, r.timeoutMs);
+  let killHard: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    const stdout = await new Response(proc.stdout).text();
-    const code = await proc.exited;
+    // Cleared the MOMENT the process exits, not after stdout finishes draining.
+    // A reviewer can finish under budget while its output is still being read
+    // (a big review, a busy event loop), and a timer firing during that drain
+    // would mark a completed review as a timeout and throw its answer away —
+    // the exact false signal this change exists to remove, and most likely near
+    // the budget edge under concurrent panel load.
+    const exited = proc.exited.then((code) => {
+      clearTimeout(timer);
+
+      return code;
+    });
+    // Bounded because a KILLED process can leave a descendant holding the
+    // stdout pipe open (a backgrounded child inherits it), and reading to EOF
+    // would then wait for that descendant rather than for the reviewer. On a
+    // timeout the output is discarded anyway, so giving up on it is free.
+    const stdout = await readBounded(proc.stdout, () => timedOut);
+    const code = await exited;
 
     // A killed process is NOT a success, whatever it exited with. A binary can
     // trap SIGTERM and exit 0, which would otherwise report `ok: true,
-    // timedOut: true` — and invokeBinary only inspects timedOut on the failure
-    // branch, so an over-budget reviewer would be parsed and counted as having
-    // reviewed. Whatever it managed to print before we killed it is a partial
-    // answer, and a partial answer is not a review.
+    // timedOut: true` — and an over-budget reviewer's partial output would be
+    // parsed and counted as a real review. Whatever it managed to print before
+    // we killed it is a partial answer, and a partial answer is not a review.
     return { ok: code === 0 && !timedOut, stdout, timedOut };
   } finally {
     clearTimeout(timer);
+    clearTimeout(killHard);
 
     if (tmpPath !== undefined) {
       await rm(tmpPath, { force: true });

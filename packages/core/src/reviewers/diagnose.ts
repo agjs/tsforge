@@ -76,11 +76,23 @@ async function invokeBinary(
       stdin
     );
 
+    // The kill, checked first — same reasoning as the review path. A runner may
+    // report `ok: true, timedOut: true`, and parsing stdout there counts a
+    // diagnosis we cut off mid-sentence as a real vote. A partial answer is not
+    // a diagnosis any more than it is a review.
+    if (res.timedOut) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
+      };
+    }
+
     if (!res.ok) {
       return {
         status: "errored",
         reviewerId: reviewer.id,
-        error: "binary exited non-zero or timed out",
+        error: "binary exited non-zero",
       };
     }
 

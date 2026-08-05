@@ -229,6 +229,43 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(r.ok).toBe(false);
   }, 30_000);
 
+  test("a binary that IGNORES SIGTERM is still killed, not waited on", async () => {
+    // SIGTERM is a request. Without escalation an unkillable reviewer holds the
+    // whole panel past a budget that exists to stop exactly that, and the
+    // timeout outcome never arrives. The trap test above exits voluntarily and
+    // so cannot catch this.
+    const started = Date.now();
+    const r = await runBinary(
+      {
+        argv: ["sh", "-c", "trap '' TERM; sleep 20 & wait"],
+        input: "arg",
+        timeoutMs: 500,
+      },
+      ""
+    );
+
+    expect(r.timedOut).toBe(true);
+    expect(r.ok).toBe(false);
+    // Budget + grace + drain, not the full 20s.
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 30_000);
+
+  test("a success near the budget is not retro-flagged as a timeout", async () => {
+    // The race: a reviewer can finish under budget while its output is still
+    // draining, and a timer firing during that drain would mark a completed
+    // review as timed out and throw its answer away.
+    const r = await runBinary(
+      { argv: ["sh", "-c", "echo done"], input: "arg", timeoutMs: 900 },
+      ""
+    );
+
+    await Bun.sleep(1200);
+
+    expect(r.timedOut).toBe(false);
+    expect(r.ok).toBe(true);
+    expect(r.stdout).toContain("done");
+  }, 30_000);
+
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {
     const r = await runBinary(
       { argv: ["sh", "-c", "exit 3"], input: "arg", timeoutMs: 30_000 },
@@ -321,6 +358,24 @@ describe("cause classification through reviewerInvoke", () => {
     });
 
     expect(out[0]).toMatchObject({ cause: "unparseable" });
+  });
+
+  test("every failure carries elapsed ms, not just a cause", async () => {
+    // A runner that omitted ms on failures would otherwise pass the suite, and
+    // "how long did it burn" is half the diagnostic.
+    const out = await reviewerInvoke(binaryPanel(), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+    });
+    const outcome = out[0];
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(typeof outcome.ms).toBe("number");
+      expect(Number.isFinite(outcome.ms)).toBe(true);
+    }
   });
 
   test("a model whose call throws is cause=threw", async () => {
