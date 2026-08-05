@@ -187,11 +187,11 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("held-out progress regressed");
   });
 
-  test("held-out cycles blowing up blocks the gain", () => {
-    // Cycles no longer ACCEPT anything (as a signal they took noise: a claimed
-    // −49% delivered −11% on re-measurement). But a harness that reaches the
-    // same place while thrashing for twice as long is worse, so a loose one-way
-    // blowup guard stays.
+  test("held-out cycles blowing up blocks the gain, even with NO greens", () => {
+    // avgTurnsToGreen is null here — nothing went green — which is exactly the
+    // path this feature exists for. The previous guard compared only
+    // commonly-GREEN tasks, so it saw zero tasks here and passed everything
+    // while the candidate thrashed for four times as long.
     const withCycles = (e: IHarnessEval, turns: number): IHarnessEval => ({
       ...e,
       heldOut: {
@@ -203,7 +203,7 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
             passed: 1,
             passRate: 1,
             avgCycles: turns,
-            avgTurnsToGreen: turns,
+            avgTurnsToGreen: null,
             avgMs: 0,
             avgQuality: 0,
             avgLoc: 0,

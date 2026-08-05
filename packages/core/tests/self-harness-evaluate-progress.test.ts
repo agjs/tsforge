@@ -25,6 +25,66 @@ function inertProvider(): IProvider {
   };
 }
 
+/** A TWO-task scratch corpus, so a run can solve one task and not the other. */
+async function twoTaskCorpus(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-progress-corpus2-"));
+  const task = join(dir, "pair");
+
+  await mkdir(task, { recursive: true });
+  await writeFile(
+    join(task, "pair.spec.md"),
+    [
+      "---",
+      "id: pair",
+      "title: Pair",
+      "verify: bun test",
+      "mode: scratch",
+      "---",
+      "",
+      "## Acceptance criteria",
+      "",
+      "A1. `one()` returns 1. A2. `two()` returns 2.",
+      "",
+      "## Tasks",
+      "",
+      "1. [one] Implement one",
+      "   accept: bun test one.test.ts",
+      "   files: one.ts",
+      "   context: one.test.ts",
+      "",
+      "2. [two] Implement two",
+      "   accept: bun test two.test.ts",
+      "   files: two.ts",
+      "   context: two.test.ts",
+      "",
+    ].join("\n")
+  );
+
+  for (const [n, v] of [
+    ["one", 1],
+    ["two", 2],
+  ] as const) {
+    await writeFile(
+      join(task, `${n}.test.ts`),
+      [
+        'import { test, expect } from "bun:test";',
+        `import { ${n} } from "./${n}";`,
+        "",
+        `test("${n}", () => {`,
+        `  expect(${n}()).toBe(${String(v)});`,
+        "});",
+        "",
+      ].join("\n")
+    );
+    await writeFile(
+      join(task, `${n}.ts`),
+      `export function ${n}() {\n  return ${String(v)};\n}\n`
+    );
+  }
+
+  return dir;
+}
+
 /** A one-task scratch corpus whose test cannot pass without a source file, so a
  *  run that writes nothing ends red with a known error count. */
 async function corpus(): Promise<string> {
@@ -144,4 +204,60 @@ describe("evaluateHarness records the graded score", () => {
       }
     })();
   }, 120_000);
+
+  test("solving one of two tasks scores in BETWEEN, not 0 and not 1", () => {
+    // Guards the task-id whitelist. The inert-model test above expects 0, which
+    // is ALSO what a broken filter produces — so it cannot tell "no progress"
+    // from "every task excluded". This one can: if the filter stopped matching
+    // real task ids, this would be 0 and the test fails.
+    return (async () => {
+      const corpusDir = await twoTaskCorpus();
+      const runsDir = await mkdtemp(join(tmpdir(), "tsforge-progress-pair-"));
+      let turn = 0;
+
+      try {
+        const out = await evaluateHarness(["pair"], {
+          corpusDir,
+          runsDir,
+          // Solves task `one` on its first turn, then refuses to do anything
+          // else — so task `one` greens and task `two` never resolves.
+          provider: {
+            complete: () => {
+              turn += 1;
+
+              return Promise.resolve(
+                turn === 1
+                  ? {
+                      content: "",
+                      toolCalls: [
+                        {
+                          id: "1",
+                          name: "create",
+                          arguments: {
+                            file: "one.ts",
+                            content:
+                              "export function one() {\n  return 1;\n}\n",
+                          },
+                        },
+                      ],
+                    }
+                  : { content: "I will not.", toolCalls: [] }
+              );
+            },
+          },
+          repeats: 1,
+          overlay: null,
+        });
+
+        const progress = out.records[0]?.progress;
+
+        expect(out.score.passed).toBe(0);
+        expect(progress).toBeGreaterThan(0);
+        expect(progress).toBeLessThan(1);
+      } finally {
+        await rm(corpusDir, { recursive: true, force: true });
+        await rm(runsDir, { recursive: true, force: true });
+      }
+    })();
+  }, 180_000);
 });

@@ -53,10 +53,15 @@ const PROGRESS_HO_TOLERANCE = 0;
  * re-measurement), which is why they no longer decide anything. But dropping
  * them entirely left held-out free to get arbitrarily slower as long as its
  * progress held, and a harness that reaches the same place while thrashing for
- * twice as long is worse. A loose one-way threshold catches that without
- * letting noise promote anything.
+ * twice as long is worse.
+ *
+ * Looser in threshold than the 1.1× this replaced, and far stricter in reach:
+ * the old bar only compared tasks green on BOTH sides, so on the path this
+ * feature exists for — few or no greens — it compared nothing and passed
+ * everything. A bar that runs at 1.25× catches more real regressions than a
+ * tighter one that never fires.
  */
-const HO_CYCLE_BLOWUP_FACTOR = 1.5;
+const HO_CYCLE_BLOWUP_FACTOR = 1.25;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -79,11 +84,15 @@ export interface IAcceptanceDecision {
   readonly deltaOut: number;
 }
 
-/** Summed avgTurnsToGreen over tasks green in BOTH evaluations of one split —
- *  the only apples-to-apples cycle comparison (a task green on one side only
- *  would smuggle a pass delta into a cycle delta). Used solely as a blowup
- *  guard; nothing is accepted on the strength of a cycle number. */
-function commonGreenCycles(
+/** Summed avgCycles over tasks present in BOTH evaluations of one split.
+ *
+ *  Cycles spent, green or not. The green-only version of this guard did not run
+ *  where it was needed: on the path this whole feature exists for — equal pass
+ *  counts, progress driven by residual-error reduction — there are few or no
+ *  commonly-green tasks, so the comparison had zero tasks and silently passed
+ *  everything. A candidate could thrash for arbitrarily long and still clear the
+ *  progress bar. Counting every run's cycles makes the guard actually fire. */
+function commonCycles(
   base: ISplitScore,
   cand: ISplitScore
 ): { base: number; cand: number; tasks: number } {
@@ -92,15 +101,11 @@ function commonGreenCycles(
   let tasks = 0;
 
   for (const [task, summary] of Object.entries(base.perTask)) {
-    const candTurns = cand.perTask[task]?.avgTurnsToGreen;
+    const candCycles = cand.perTask[task]?.avgCycles;
 
-    if (
-      summary.avgTurnsToGreen !== null &&
-      candTurns !== null &&
-      candTurns !== undefined
-    ) {
-      baseSum += summary.avgTurnsToGreen;
-      candSum += candTurns;
+    if (candCycles !== undefined) {
+      baseSum += summary.avgCycles;
+      candSum += candCycles;
       tasks += 1;
     }
   }
@@ -200,7 +205,7 @@ function progressDecision(
     );
   }
 
-  const cycles = commonGreenCycles(baseline.heldOut, candidate.heldOut);
+  const cycles = commonCycles(baseline.heldOut, candidate.heldOut);
 
   if (
     cycles.tasks > 0 &&
