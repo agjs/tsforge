@@ -245,10 +245,10 @@ function isParseMode(v: unknown): v is BinaryParseMode {
 /**
  * A model entry by name — OWN properties only.
  *
- * `parseModelsConfig` builds its registry with a null prototype, so this is
- * belt-and-braces THERE. It earns its place on config that did not come through
- * the parser: `resolvePanel` and friends are exported and take a caller-supplied
- * `IModelsConfig`, and a plain object literal inherits from Object.prototype —
+ * The registry is a PLAIN object (see parseModelsConfig for why Object.create(null)
+ * was tried and dropped), so it inherits from Object.prototype and this is load
+ * bearing everywhere, not belt-and-braces. A caller-supplied `IModelsConfig` —
+ * `resolvePanel` and friends are exported and take one — has the same shape:
  * `models["constructor"]` resolves to a function rather than undefined, so a
  * plain index read reports "yes, that model exists" and hands on something that
  * is not a model.
@@ -526,7 +526,20 @@ export async function loadModelsConfig(): Promise<IModelsConfig> {
 }
 
 /** Write the registry: dir 0700, file 0600 (it may hold an inline key). */
+/** Names that must never reach the file, whatever built the config. */
+function assertSafeNames(cfg: IModelsConfig): void {
+  if (Object.hasOwn(cfg.models, "__proto__")) {
+    throw new Error('models.json: "__proto__" is not a usable model name');
+  }
+}
+
 export async function saveModelsConfig(cfg: IModelsConfig): Promise<void> {
+  // Checked HERE as well as at parse. The reason for refusing the name is that
+  // it must not reach the file — models.json is read by other tools, where a
+  // plain parse-and-spread poisons whatever consumes it — and this function is
+  // exported and takes a config the caller built, which the parser never saw.
+  assertSafeNames(cfg);
+
   const dir = join(process.env.TSFORGE_HOME ?? homedir(), ".tsforge");
 
   await mkdir(dir, { recursive: true, mode: 0o700 });

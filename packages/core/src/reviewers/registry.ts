@@ -18,9 +18,13 @@ export type ResolvedReviewer =
       input: BinaryInputMode;
       timeoutMs: number;
       parse: BinaryParseMode;
-      /** Carried through from config so the panel can tell whether two reviewers
-       *  are the same model. Absent when the binary did not declare one. */
-      fronts?: string;
+      /** Identity of the model behind this command, when it declared one.
+       *
+       *  Computed where the entry was already resolved rather than looked up
+       *  again later: a second lookup needs an "entry missing" branch, that
+       *  branch cannot be reached, and an unreachable branch that quietly opts a
+       *  reviewer out of the duplicate check is worse than no branch. */
+      fingerprint?: string;
     };
 
 export interface IPanel {
@@ -29,13 +33,22 @@ export interface IPanel {
   skipped: { id: string; reason: string }[];
 }
 
-/** Lowercased host AND PORT of a base URL; the raw lowercased string if it won't
- *  parse. The port matters: two endpoints on one machine — :8888 and :9999 —
- *  are genuinely different models however alike their ids, and dropping it
- *  collapses them into one. */
+/**
+ * Lowercased HOSTNAME of a base URL; the raw lowercased string if it won't parse.
+ *
+ * Hostname, not host. Including the port reads as more precise and is a
+ * RELAXATION: it makes identity finer, so two endpoints on one machine serving
+ * the same model id stop counting as one model and both get to vote. The
+ * likeliest thing that looks like that is a single model served twice on one
+ * box, which is the self-review this exists to prevent.
+ *
+ * Coarser errs toward refusing a genuine second reviewer, which is visible in
+ * the skip list. Finer errs toward letting one model vote twice, which is not
+ * visible at all — it just shows up as agreement.
+ */
 function normHost(baseUrl: string): string {
   try {
-    return new URL(baseUrl).host.toLowerCase();
+    return new URL(baseUrl).hostname.toLowerCase();
   } catch {
     return baseUrl.toLowerCase();
   }
@@ -100,7 +113,6 @@ function resolveBinary(
     input: reviewer.input,
     timeoutMs: reviewer.timeoutMs,
     parse: reviewer.parse,
-    ...(reviewer.fronts === undefined ? {} : { fronts: reviewer.fronts }),
   };
 
   if (reviewer.fronts === undefined) {
@@ -121,7 +133,7 @@ function resolveBinary(
   const independence = checkModelIndependence(reviewer.fronts, entry, active);
 
   return independence.ok
-    ? { kept }
+    ? { kept: { ...kept, fingerprint: fingerprintOf(entry) } }
     : { skipped: { id: reviewer.id, reason: independence.reason } };
 }
 
@@ -154,38 +166,23 @@ function resolveOne(
     : { skipped: { id: reviewer.id, reason: independence.reason } };
 }
 
+/** Identity of a model entry: hostname and model id. */
+function fingerprintOf(entry: IModelEntry): string {
+  return `${normHost(entry.baseUrl)}|${entry.model.toLowerCase()}`;
+}
+
 /**
- * A stable identity for the model behind a reviewer, or null when it cannot be
- * known.
+ * The identity a reviewer votes under, or null when it cannot be known.
  *
- * Null for an UNDECLARED binary — an opaque command whose model nothing reveals
- * — and those are left alone rather than guessed at, so two undeclared CLIs are
- * both kept. Declaring `fronts` is what buys the check, here as well as against
- * the builder.
+ * Null only for an UNDECLARED binary — an opaque command whose model nothing
+ * reveals — and those are left alone rather than guessed at, so two undeclared
+ * CLIs both vote. Declaring `fronts` is what buys the check, against other
+ * reviewers as well as against the builder.
  */
-function modelFingerprint(
-  reviewer: ResolvedReviewer,
-  cfg: IModelsConfig
-): string | null {
-  if (reviewer.kind === "model") {
-    return `${normHost(reviewer.entry.baseUrl)}|${reviewer.entry.model.toLowerCase()}`;
-  }
-
-  const fronts = reviewer.fronts;
-
-  if (fronts === undefined) {
-    return null;
-  }
-
-  // Not a fail-open `undefined -> null`: resolveBinary already returned `skipped`
-  // for a fronts that names nothing, so anything reaching here resolves. An
-  // unreachable branch that quietly opts a reviewer out of the check is worse
-  // than no branch.
-  const entry = modelByName(cfg.models, fronts);
-
-  return entry === undefined
-    ? null
-    : `${normHost(entry.baseUrl)}|${entry.model.toLowerCase()}`;
+function votingIdentity(reviewer: ResolvedReviewer): string | null {
+  return reviewer.kind === "model"
+    ? fingerprintOf(reviewer.entry)
+    : (reviewer.fingerprint ?? null);
 }
 
 export function resolvePanel(
@@ -217,7 +214,7 @@ export function resolvePanel(
       continue;
     }
 
-    const fingerprint = modelFingerprint(kept, cfg);
+    const fingerprint = votingIdentity(kept);
     const already = fingerprint === null ? undefined : voting.get(fingerprint);
 
     if (already !== undefined) {

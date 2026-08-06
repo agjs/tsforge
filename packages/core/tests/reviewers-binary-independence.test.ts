@@ -1,6 +1,10 @@
 import { test, expect, describe } from "bun:test";
 import { resolvePanel } from "../src/reviewers/registry";
-import { parseModelsConfig, modelByName } from "../src/models-config";
+import {
+  parseModelsConfig,
+  modelByName,
+  saveModelsConfig,
+} from "../src/models-config";
 import type { IModelsConfig, IModelEntry } from "../src/models-config";
 
 /**
@@ -433,11 +437,14 @@ describe("a fronts declaration on the wrong reviewer kind", () => {
   });
 });
 
-describe("the fingerprint keeps the port", () => {
-  test("two endpoints on one host with the same model id both vote", () => {
-    // Genuinely different servers — :8888 and :9999 on the same machine — are
-    // different models however alike their ids, and dropping the port collapses
-    // them into one and silently discards a real reviewer.
+describe("identity is by HOSTNAME, deliberately coarse", () => {
+  test("two ports on one host count as one model", () => {
+    // Including the port reads as more precise and is a RELAXATION: it makes
+    // identity finer, so two endpoints on one machine serving the same model id
+    // both get to vote. The likeliest thing that looks like that is one model
+    // served twice on one box — the self-review this exists to prevent. Coarser
+    // errs toward refusing a genuine second reviewer; finer errs toward letting
+    // one model vote twice, and only the second failure is silent.
     const a: IModelEntry = { baseUrl: "http://spark:8888/v1", model: "m" };
     const b: IModelEntry = { baseUrl: "http://spark:9999/v1", model: "m" };
     const panel = resolvePanel(
@@ -455,6 +462,27 @@ describe("the fingerprint keeps the port", () => {
       { name: "builder", entry: local }
     );
 
-    expect(panel.reviewers.map((r) => r.id)).toEqual(["first", "second"]);
+    expect(panel.reviewers.map((r) => r.id)).toEqual(["first"]);
+    expect(panel.skipped[0]?.reason).toContain("one model, one vote");
+  });
+});
+
+describe("saving cannot emit a poisoned key either", () => {
+  test("a hand-built config with a __proto__ model is refused at save", () => {
+    // The refusal exists so the name never reaches models.json, which other
+    // tools parse — so it has to sit on the WRITE path too, not only the parse
+    // path, because saveModelsConfig is exported and takes a config the parser
+    // never saw.
+    const models: Record<string, IModelEntry> = { builder: local };
+
+    Object.defineProperty(models, "__proto__", {
+      value: local,
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(saveModelsConfig({ active: "builder", models })).rejects.toThrow(
+      /__proto__/
+    );
   });
 });
