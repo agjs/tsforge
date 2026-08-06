@@ -17,6 +17,9 @@ export type ResolvedReviewer =
       input: BinaryInputMode;
       timeoutMs: number;
       parse: BinaryParseMode;
+      /** Carried through from config so the panel can tell whether two reviewers
+       *  are the same model. Absent when the binary did not declare one. */
+      fronts?: string;
     };
 
 export interface IPanel {
@@ -108,6 +111,7 @@ function resolveBinary(
     input: reviewer.input,
     timeoutMs: reviewer.timeoutMs,
     parse: reviewer.parse,
+    ...(reviewer.fronts === undefined ? {} : { fronts: reviewer.fronts }),
   };
 
   if (reviewer.fronts === undefined) {
@@ -161,6 +165,36 @@ function resolveOne(
     : { skipped: { id: reviewer.id, reason: independence.reason } };
 }
 
+/**
+ * A stable identity for the model behind a reviewer, or null when it cannot be
+ * known.
+ *
+ * Null for an UNDECLARED binary — an opaque command whose model nothing reveals
+ * — and those are left alone rather than guessed at, so two undeclared CLIs are
+ * both kept. Declaring `fronts` is what buys the check, here as well as against
+ * the builder.
+ */
+function modelFingerprint(
+  reviewer: ResolvedReviewer,
+  cfg: IModelsConfig
+): string | null {
+  if (reviewer.kind === "model") {
+    return `${normHost(reviewer.entry.baseUrl)}|${reviewer.entry.model.toLowerCase()}`;
+  }
+
+  const fronts = reviewer.fronts;
+
+  if (fronts === undefined) {
+    return null;
+  }
+
+  const entry = modelEntry(cfg.models, fronts);
+
+  return entry === undefined
+    ? null
+    : `${normHost(entry.baseUrl)}|${entry.model.toLowerCase()}`;
+}
+
 export function resolvePanel(
   cfg: IModelsConfig,
   active: { name: string; entry: IModelEntry }
@@ -173,16 +207,39 @@ export function resolvePanel(
   const reviewers: ResolvedReviewer[] = [];
   const skipped: { id: string; reason: string }[] = [];
 
+  // Which models are already voting. Independence was only ever checked against
+  // the BUILDER, so two reviewers fronting one model both counted and a single
+  // model cast two votes — a panel that agrees with itself while reporting
+  // agreement of 2, which is the number the whole gate is read through.
+  const voting = new Map<string, string>();
+
   for (const r of panel?.reviewers ?? []) {
     const { kept, skipped: skip } = resolveOne(r, cfg, active);
-
-    if (kept !== undefined) {
-      reviewers.push(kept);
-    }
 
     if (skip !== undefined) {
       skipped.push(skip);
     }
+
+    if (kept === undefined) {
+      continue;
+    }
+
+    const fingerprint = modelFingerprint(kept, cfg);
+    const already = fingerprint === null ? undefined : voting.get(fingerprint);
+
+    if (already !== undefined) {
+      skipped.push({
+        id: kept.id,
+        reason: `same model as reviewer "${already}" — one model, one vote`,
+      });
+      continue;
+    }
+
+    if (fingerprint !== null) {
+      voting.set(fingerprint, kept.id);
+    }
+
+    reviewers.push(kept);
   }
 
   return { reviewers, minReviewers, skipped };

@@ -242,6 +242,22 @@ function isParseMode(v: unknown): v is BinaryParseMode {
   return v === "json-fence" || v === "raw";
 }
 
+/**
+ * A model entry by name — OWN properties only.
+ *
+ * `models` is a plain object literal, so it inherits from Object.prototype and
+ * `models["constructor"]` (also toString, valueOf, __proto__) resolves to an
+ * inherited value rather than undefined. Every "is this a configured model?"
+ * check in this file was a plain index read, so `active: "constructor"` passed
+ * validation and then handed a FUNCTION to whatever resolved the active model.
+ */
+export function modelByName(
+  models: Record<string, IModelEntry>,
+  name: string
+): IModelEntry | undefined {
+  return Object.hasOwn(models, name) ? models[name] : undefined;
+}
+
 function parseModelReviewer(
   raw: Record<string, unknown>,
   models: Record<string, IModelEntry>
@@ -250,7 +266,7 @@ function parseModelReviewer(
     throw new Error("models.json: model reviewer needs { id, entry }");
   }
 
-  if (models[raw.entry] === undefined) {
+  if (modelByName(models, raw.entry) === undefined) {
     throw new Error(
       `models.json: reviewer entry "${raw.entry}" is not a configured model`
     );
@@ -384,7 +400,7 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     models[name] = entry;
   }
 
-  if (models[raw.active] === undefined) {
+  if (modelByName(models, raw.active) === undefined) {
     throw new Error(
       `models.json: active "${raw.active}" is not one of: ${Object.keys(models).join(", ")}`
     );
@@ -429,7 +445,10 @@ function parseCapabilities(
       );
     }
 
-    if (typeof target !== "string" || models[target] === undefined) {
+    if (
+      typeof target !== "string" ||
+      modelByName(models, target) === undefined
+    ) {
       throw new Error(
         `models.json: capability "${cap}" must name a model: ${Object.keys(models).join(", ")}`
       );
@@ -479,7 +498,7 @@ export async function saveModelsConfig(cfg: IModelsConfig): Promise<void> {
 export async function setActiveModel(name: string): Promise<IModelsConfig> {
   const cfg = await loadModelsConfig();
 
-  if (cfg.models[name] === undefined) {
+  if (modelByName(cfg.models, name) === undefined) {
     throw new Error(
       `unknown model "${name}" — configured: ${Object.keys(cfg.models).join(", ")}`
     );
@@ -540,7 +559,10 @@ export async function resolveActiveModel(): Promise<{
 
   const cfg = await loadModelsConfig();
 
-  return { name: cfg.active, entry: cfg.models[cfg.active] ?? LOCAL_DEFAULT };
+  return {
+    name: cfg.active,
+    entry: modelByName(cfg.models, cfg.active) ?? LOCAL_DEFAULT,
+  };
 }
 
 /** Resolve a model by its registry name, falling back to the active model when
@@ -562,10 +584,13 @@ export async function resolveModelByName(
   }
 
   const cfg = await loadModelsConfig();
-  const entry = cfg.models[name];
+  const entry = modelByName(cfg.models, name);
 
   return entry === undefined
-    ? { name: cfg.active, entry: cfg.models[cfg.active] ?? LOCAL_DEFAULT }
+    ? {
+        name: cfg.active,
+        entry: modelByName(cfg.models, cfg.active) ?? LOCAL_DEFAULT,
+      }
     : { name, entry };
 }
 
@@ -619,7 +644,7 @@ export async function resolveCapabilityModel(
   const cfg = await loadModelsConfig();
 
   if (envModel !== undefined && envModel.length > 0) {
-    const entry = cfg.models[envModel];
+    const entry = modelByName(cfg.models, envModel);
 
     if (entry === undefined) {
       throw new Error(
@@ -631,9 +656,11 @@ export async function resolveCapabilityModel(
   }
 
   const target = cfg.capabilities?.[cap];
+  const mapped =
+    target === undefined ? undefined : modelByName(cfg.models, target);
 
-  if (target !== undefined && cfg.models[target] !== undefined) {
-    return { name: target, entry: cfg.models[target] };
+  if (target !== undefined && mapped !== undefined) {
+    return { name: target, entry: mapped };
   }
 
   return null;

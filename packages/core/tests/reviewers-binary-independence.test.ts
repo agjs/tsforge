@@ -186,3 +186,95 @@ describe("entry lookup is own-properties only", () => {
     expect(panel.skipped[0]?.reason).toContain("not in models");
   });
 });
+
+describe("one model, one vote", () => {
+  /**
+   * Independence was only ever checked against the BUILDER. Two reviewers
+   * fronting the same model both counted, so a single model cast two votes —
+   * and the panel reported agreement of 2, which is the number the gate is read
+   * through. A model agreeing with itself is not agreement.
+   */
+  test("a model reviewer and a binary fronting it do not both vote", () => {
+    const panel = resolvePanel(
+      cfg([
+        { kind: "model", id: "api", entry: "elsewhere" },
+        { ...binary, id: "cli", fronts: "elsewhere" },
+      ]),
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers.map((r) => r.id)).toEqual(["api"]);
+    expect(panel.skipped[0]?.reason).toContain("one model, one vote");
+  });
+
+  test("two model reviewers on the same host and model id collapse to one", () => {
+    const panel = resolvePanel(
+      {
+        active: "builder",
+        models: { builder: local, a: other, b: { ...other } },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            { kind: "model", id: "first", entry: "a" },
+            { kind: "model", id: "second", entry: "b" },
+          ],
+        },
+      },
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers.map((r) => r.id)).toEqual(["first"]);
+  });
+
+  test("genuinely different models both vote", () => {
+    const third: IModelEntry = {
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "z-ai/glm-5.2",
+    };
+    const panel = resolvePanel(
+      {
+        active: "builder",
+        models: { builder: local, a: other, b: third },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            { kind: "model", id: "first", entry: "a" },
+            { kind: "model", id: "second", entry: "b" },
+          ],
+        },
+      },
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers.map((r) => r.id)).toEqual(["first", "second"]);
+  });
+
+  test("two UNDECLARED binaries both vote — nothing says they are the same", () => {
+    // The limit of what can be known. Guessing that two opaque commands are one
+    // model would disable working panels on a hunch.
+    const panel = resolvePanel(
+      cfg([
+        { ...binary, id: "cli-a" },
+        { ...binary, id: "cli-b" },
+      ]),
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers.map((r) => r.id)).toEqual(["cli-a", "cli-b"]);
+  });
+});
+
+describe("__proto__ specifically", () => {
+  test("it yields an object rather than a function, and is still refused", () => {
+    // Called out in the helper's own doc and behaves unlike the others:
+    // models["__proto__"] is Object.prototype, an OBJECT, so a truthiness check
+    // would not have saved it either.
+    const panel = resolvePanel(cfg([{ ...binary, fronts: "__proto__" }]), {
+      name: "builder",
+      entry: local,
+    });
+
+    expect(panel.reviewers).toHaveLength(0);
+    expect(panel.skipped[0]?.reason).toContain("not in models");
+  });
+});
