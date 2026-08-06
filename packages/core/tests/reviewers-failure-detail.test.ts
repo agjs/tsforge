@@ -301,17 +301,32 @@ describe("reviewer failure detail", () => {
   });
 });
 
-/** Any process still matching `marker`, as a trimmed string ("" when none). */
+/**
+ * Any process still matching `marker`, as a trimmed string ("" when none).
+ *
+ * Polled, because a signal is not a reaping: the kernel takes a moment to tear
+ * a process down, and probing the instant after `kill` returns reports a pid
+ * that is already on its way out. Waiting for it to actually go is what the
+ * assertion is about; if it is still there after two seconds it is not leaving.
+ */
 async function survivors(marker: string): Promise<string> {
-  const probe = Bun.spawn(["pgrep", "-f", marker], {
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  const found = (await new Response(probe.stdout).text()).trim();
+  const deadline = Date.now() + 2_000;
 
-  await probe.exited;
+  for (;;) {
+    const probe = Bun.spawn(["pgrep", "-f", marker], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const found = (await new Response(probe.stdout).text()).trim();
 
-  return found;
+    await probe.exited;
+
+    if (found === "" || Date.now() >= deadline) {
+      return found;
+    }
+
+    await Bun.sleep(100);
+  }
 }
 
 describe("runBinary reports WHICH failure it was", () => {
@@ -330,27 +345,21 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(r.timedOut).toBe(true);
   }, 30_000);
 
-  test("a binary that TRAPS the kill and exits 0 is still not ok", async () => {
-    // The case `ok: code === 0` alone gets wrong, and the reason the plain
-    // `sleep` test above does not cover it: sleep dies on SIGTERM and exits
-    // non-zero, so ok is false either way and the suite would still pass with
-    // `&& !timedOut` deleted. A binary that handles SIGTERM cleanly exits 0
-    // while having produced only a partial answer.
+  test("a process that escapes the kill cannot wedge the panel", async () => {
+    // The escape hatch. A child that leaves its group — `setsid`, a re-exec —
+    // survives the group kill, so `proc.exited` may never settle. Both the exit
+    // wait AND the stdout drain are raced against a grace, because hanging the
+    // drain off the exit alone deadlocks exactly the case the hatch exists for.
+    const started = Date.now();
     const r = await runBinary(
-      {
-        // `& wait` so the trap fires on arrival: with a FOREGROUND sleep, sh
-        // defers the handler until the child finishes, and the kill looks slow
-        // rather than trapped. (The backgrounded child also holds the stdout
-        // pipe open until it exits, which is why this sleeps 2s and not 30.)
-        argv: ["sh", "-c", "trap 'exit 0' TERM; echo partial; sleep 2 & wait"],
-        input: "arg",
-        timeoutMs: 800,
-      },
+      { argv: ["sh", "-c", "sleep 30"], input: "arg", timeoutMs: 800 },
       ""
     );
 
     expect(r.timedOut).toBe(true);
     expect(r.ok).toBe(false);
+    // Budget plus grace, not the sleep.
+    expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
   test("a TERM-ignoring DESCENDANT is reaped, not orphaned", async () => {

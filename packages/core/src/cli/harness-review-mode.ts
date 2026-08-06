@@ -124,9 +124,11 @@ export function buildBinaryInvocation(
   };
 }
 
-/** How long a reviewer gets to honour SIGTERM before SIGKILL. Long enough for a
- *  normal shutdown, short enough that an unkillable reviewer cannot hold the
- *  panel. */
+/** After a kill is signalled, how long to wait for the process to actually be
+ *  reaped before giving up. NOT a SIGTERM grace — the kill is SIGKILL, which is
+ *  not refusable — this covers a child that escaped its group (called `setsid`,
+ *  say) and so survives the group kill. Without the bound, `proc.exited` might
+ *  never resolve and the panel would wait forever. */
 const KILL_GRACE_MS = 2_000;
 /** Conventional exit code for a process terminated by SIGKILL (128 + 9). */
 const SIGKILL_EXIT = 137;
@@ -386,7 +388,13 @@ export async function runBinary(
 
       return code;
     });
-    const read = await readBounded(proc.stdout, exited);
+    // Bounded by EITHER the process exiting or the escape hatch firing. Hanging
+    // the drain off `exited` alone deadlocks the case the escape hatch exists
+    // for: a process that survives SIGKILL never settles `exited`, so the
+    // post-exit grace never starts, the read loops forever, and execution never
+    // reaches the race below at all.
+    const settled = Promise.race([exited, escaped]);
+    const read = await readBounded(proc.stdout, settled);
 
     // A reviewer that floods and KEEPS RUNNING would otherwise hold the panel
     // until its full budget — we stopped reading, but nothing stopped it — and
