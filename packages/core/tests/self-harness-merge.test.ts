@@ -144,10 +144,72 @@ describe("the merge cannot silently drop a field", () => {
     // its own assertion.
     const carried = new Map(Object.entries(merged.score));
 
+    // Named, not a silent `typeof !== "object"` skip. Today that only means
+    // perTask, but any future nested field would drop out of coverage with no
+    // signal while the docblock above still advertised the pair as structural.
+    const NESTED = new Set(["perTask"]);
+
     for (const [key, value] of Object.entries(input.score)) {
-      if (value !== undefined && typeof value !== "object") {
+      if (NESTED.has(key)) {
+        continue;
+      }
+
+      if (value !== undefined) {
         expect(carried.get(key)).toBeDefined();
       }
     }
+  });
+});
+
+describe("an empty merge", () => {
+  test("yields nothing measured, not a zero", () => {
+    // Reachable: evaluateSplitResilient pushes no outcome when the task list is
+    // empty, or when every attempt for every task throws. A zero here would be
+    // a measured claim about a split that never ran, and the acceptance rule
+    // reads `undefined` as fail-closed precisely so that cannot happen.
+    const merged = mergeOutcomes([]);
+
+    expect(merged.score.avgProgress).toBeUndefined();
+    expect(merged.score.runs).toBe(0);
+    expect(merged.score.passed).toBe(0);
+    expect(merged.score.errored).toBe(0);
+  });
+});
+
+describe("meanOfSignaled — the quality and concision means", () => {
+  /**
+   * This helper came across from an untested script along with the merge, and
+   * nothing asserted what it computes: every fixture set both to 0 and the only
+   * assertion that touched them was `toBeDefined()`, which any number passes.
+   * The convention it encodes is not obvious and is easy to "simplify" away.
+   */
+  const scored = (avgQuality: number, avgLoc: number): IEvaluateOutcome => ({
+    records: [],
+    runs: [],
+    score: {
+      passed: 0,
+      runs: 0,
+      errored: 0,
+      avgQuality,
+      avgLoc,
+      perTask: {},
+    },
+  });
+
+  test("averages only the outcomes that carry a signal", () => {
+    // 0 means "not measured here" — quality needs a judge call and loc needs a
+    // shipped solution, so most tasks have neither. Counting the zeros would
+    // drag the mean toward however many tasks failed.
+    const merged = mergeOutcomes([scored(4, 100), scored(0, 0), scored(2, 50)]);
+
+    expect(merged.score.avgQuality).toBeCloseTo(3, 5);
+    expect(merged.score.avgLoc).toBeCloseTo(75, 5);
+  });
+
+  test("no signal at all stays 0, not NaN", () => {
+    const merged = mergeOutcomes([scored(0, 0), scored(0, 0)]);
+
+    expect(merged.score.avgQuality).toBe(0);
+    expect(merged.score.avgLoc).toBe(0);
   });
 });
