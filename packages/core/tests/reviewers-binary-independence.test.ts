@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { resolvePanel } from "../src/reviewers/registry";
-import { parseModelsConfig } from "../src/models-config";
+import { parseModelsConfig, modelByName } from "../src/models-config";
 import type { IModelsConfig, IModelEntry } from "../src/models-config";
 
 /**
@@ -319,22 +319,40 @@ describe("the prototype hardening at its real call sites", () => {
     ).toThrow();
   });
 
-  test("a model actually NAMED __proto__ is stored, not swallowed", () => {
-    // JSON.parse makes `__proto__` a genuine own property, but assigning it back
-    // with `models[name] = entry` SETS THE PROTOTYPE instead of adding a key —
-    // the model vanishes and every later lookup runs against a poisoned object.
+  test("a model named __proto__ is REFUSED, not quietly stored", () => {
+    // Policy changed from storing it to rejecting it. A null-prototype registry
+    // could hold it safely, but saveModelsConfig serialises with JSON.stringify
+    // and would write a literal "__proto__" key back into models.json — a file
+    // other tools parse, where a plain JSON.parse and spread poisons whatever
+    // reads it. Refusing the name costs a user nothing.
+    //
     // Built as TEXT: `{ __proto__: ... }` in a JS object literal sets the
-    // prototype before JSON.stringify ever sees it, so the key would be gone
-    // before the code under test ran. Only JSON.parse makes it a real property.
-    const cfg = parseModelsConfig(
-      JSON.parse(
-        '{"active":"builder","models":{"builder":{"baseUrl":"http://x/v1","model":"m"},' +
-          '"__proto__":{"baseUrl":"http://y/v1","model":"n"}}}'
+    // prototype before JSON.stringify sees it, so the key would be gone before
+    // the code under test ran. Only JSON.parse makes it a real property.
+    expect(() =>
+      parseModelsConfig(
+        JSON.parse(
+          '{"active":"builder","models":{"builder":{"baseUrl":"http://x/v1","model":"m"},' +
+            '"__proto__":{"baseUrl":"http://y/v1","model":"n"}}}'
+        )
       )
-    );
+    ).toThrow(/__proto__/);
+  });
 
-    expect(Object.hasOwn(cfg.models, "__proto__")).toBe(true);
-    expect(cfg.models.builder?.model).toBe("m");
+  test("an inherited name is never a configured model, whatever the shape", () => {
+    // The registry is a plain object, so `models.constructor` IS an inherited
+    // function — the guarantee is that no lookup treats it as a model, not that
+    // the property is absent.
+    const cfg = parseModelsConfig({
+      active: "builder",
+      models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+    });
+
+    for (const name of ["constructor", "toString", "valueOf", "__proto__"]) {
+      expect(modelByName(cfg.models, name)).toBeUndefined();
+    }
+
+    expect(modelByName(cfg.models, "builder")?.model).toBe("m");
   });
 });
 
@@ -363,5 +381,80 @@ describe("fronts is validated against the registry at parse time", () => {
         },
       })
     ).toThrow(/not a configured model/);
+  });
+});
+
+describe("caller-supplied config, which the parser never saw", () => {
+  /**
+   * Where `modelByName` still earns its place. Every runtime resolver loads
+   * through `parseModelsConfig`, whose registry now has a null prototype — so
+   * those sites cannot hit an inherited name at all, and testing them would be
+   * asserting against a shape the parser can no longer produce.
+   *
+   * `resolvePanel` is different: it is exported and takes an `IModelsConfig` the
+   * caller built, which is an ordinary object literal with Object.prototype
+   * behind it. That is the case below, and the one the harness itself hits from
+   * tests and tools.
+   */
+  test("an inherited name in a hand-built registry resolves to nothing", () => {
+    const panel = resolvePanel(
+      {
+        active: "builder",
+        models: { builder: local },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [{ kind: "model", id: "r", entry: "toString" }],
+        },
+      },
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers).toHaveLength(0);
+    expect(panel.skipped[0]?.reason).toContain("not in models");
+  });
+});
+
+describe("a fronts declaration on the wrong reviewer kind", () => {
+  test("a MODEL reviewer carrying `fronts` is rejected", () => {
+    // Only the binary path reads it, so a model reviewer with one looks
+    // annotated and is not — the silent declaration this field exists to stop.
+    expect(() =>
+      parseModelsConfig({
+        active: "builder",
+        models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            { kind: "model", id: "r", entry: "builder", fronts: "builder" },
+          ],
+        },
+      })
+    ).toThrow(/fronts/);
+  });
+});
+
+describe("the fingerprint keeps the port", () => {
+  test("two endpoints on one host with the same model id both vote", () => {
+    // Genuinely different servers — :8888 and :9999 on the same machine — are
+    // different models however alike their ids, and dropping the port collapses
+    // them into one and silently discards a real reviewer.
+    const a: IModelEntry = { baseUrl: "http://spark:8888/v1", model: "m" };
+    const b: IModelEntry = { baseUrl: "http://spark:9999/v1", model: "m" };
+    const panel = resolvePanel(
+      {
+        active: "builder",
+        models: { builder: local, a, b },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            { kind: "model", id: "first", entry: "a" },
+            { kind: "model", id: "second", entry: "b" },
+          ],
+        },
+      },
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers.map((r) => r.id)).toEqual(["first", "second"]);
   });
 });

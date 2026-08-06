@@ -29,10 +29,13 @@ export interface IPanel {
   skipped: { id: string; reason: string }[];
 }
 
-/** Lowercased hostname of a base URL; the raw lowercased string if it won't parse. */
+/** Lowercased host AND PORT of a base URL; the raw lowercased string if it won't
+ *  parse. The port matters: two endpoints on one machine — :8888 and :9999 —
+ *  are genuinely different models however alike their ids, and dropping it
+ *  collapses them into one. */
 function normHost(baseUrl: string): string {
   try {
-    return new URL(baseUrl).hostname.toLowerCase();
+    return new URL(baseUrl).host.toLowerCase();
   } catch {
     return baseUrl.toLowerCase();
   }
@@ -174,6 +177,10 @@ function modelFingerprint(
     return null;
   }
 
+  // Not a fail-open `undefined -> null`: resolveBinary already returned `skipped`
+  // for a fronts that names nothing, so anything reaching here resolves. An
+  // unreachable branch that quietly opts a reviewer out of the check is worse
+  // than no branch.
   const entry = modelByName(cfg.models, fronts);
 
   return entry === undefined

@@ -245,11 +245,13 @@ function isParseMode(v: unknown): v is BinaryParseMode {
 /**
  * A model entry by name — OWN properties only.
  *
- * `models` is a plain object literal, so it inherits from Object.prototype and
- * `models["constructor"]` (also toString, valueOf, __proto__) resolves to an
- * inherited value rather than undefined. Every "is this a configured model?"
- * check in this file was a plain index read, so `active: "constructor"` passed
- * validation and then handed a FUNCTION to whatever resolved the active model.
+ * `parseModelsConfig` builds its registry with a null prototype, so this is
+ * belt-and-braces THERE. It earns its place on config that did not come through
+ * the parser: `resolvePanel` and friends are exported and take a caller-supplied
+ * `IModelsConfig`, and a plain object literal inherits from Object.prototype —
+ * `models["constructor"]` resolves to a function rather than undefined, so a
+ * plain index read reports "yes, that model exists" and hands on something that
+ * is not a model.
  */
 export function modelByName(
   models: Record<string, IModelEntry>,
@@ -269,6 +271,15 @@ function parseModelReviewer(
   if (modelByName(models, raw.entry) === undefined) {
     throw new Error(
       `models.json: reviewer entry "${raw.entry}" is not a configured model`
+    );
+  }
+
+  // A `fronts` here is a declaration that will never be read: only the binary
+  // path consults it, so a model reviewer carrying one looks annotated and is
+  // not. That is the same silent-declaration failure `fronts` exists to remove.
+  if (raw.fronts !== undefined) {
+    throw new Error(
+      'models.json: "fronts" belongs on a binary reviewer — a model reviewer declares its model with "entry"'
     );
   }
 
@@ -400,6 +411,13 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     );
   }
 
+  // A plain object, deliberately. `Object.create(null)` would remove the
+  // inherited names structurally and was the better shape, but it returns `any`
+  // — so adopting it means either a forbidden `as` cast or an eslint-disable at
+  // the heart of config parsing, and neither is worth it here. The two holes it
+  // would have closed are closed anyway: `__proto__` is refused as a name just
+  // below, which is the only key whose ASSIGNMENT does something other than add
+  // a property, and every read goes through `modelByName`.
   const models: Record<string, IModelEntry> = {};
 
   for (const [name, entry] of Object.entries(raw.models)) {
@@ -409,19 +427,20 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
       );
     }
 
+    // Rejected rather than stored. A null-prototype registry could hold it
+    // safely, but `saveModelsConfig` serialises with JSON.stringify and would
+    // write a literal `"__proto__"` key back into models.json — a file other
+    // tools parse, where a plain `JSON.parse` + spread poisons whatever reads
+    // it. Refusing the name costs a user nothing and stops us emitting a
+    // hazard.
+    if (name === "__proto__") {
+      throw new Error('models.json: "__proto__" is not a usable model name');
+    }
+
     assertNumericFields(name, entry);
     assertImageApi(name, entry);
     assertReasoning(name, entry);
-    // defineProperty, not assignment: `models["__proto__"] = entry` SETS THE
-    // PROTOTYPE rather than adding a key, and JSON.parse makes `__proto__` a
-    // genuine own property, so a registry with a model of that name silently
-    // loses it — and poisons the object every later lookup runs against.
-    Object.defineProperty(models, name, {
-      value: entry,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    models[name] = entry;
   }
 
   if (modelByName(models, raw.active) === undefined) {
