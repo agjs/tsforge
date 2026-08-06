@@ -102,9 +102,14 @@ describe("the merge cannot silently drop a field", () => {
    * original bug. Asserting `avgProgress` survives only covers the field I
    * already know about — a hand-written fixture listing every key cannot notice
    * the merge omitting a key, which is exactly how `avgProgress` was lost for a
-   * week. This compares the merged score's shape against the input's, so the
-   * NEXT field added to ISplitScore is covered without anyone remembering to
-   * add a case.
+   * week.
+   *
+   * What this buys, precisely: a new OPTIONAL field can be added to the fixture
+   * and dropped by the merge, and these turn red. A new REQUIRED field is a
+   * compile error in the fixture first, so someone edits this file either way —
+   * the value there is that adding it to the fixture is enough, with no separate
+   * assertion to remember. It is not automatic coverage of a field nobody
+   * touches, and claiming that was overselling it.
    */
   test("every key of the input score appears on the merged score", () => {
     const input = outcome([run("a", true, 1)]);
@@ -133,9 +138,15 @@ describe("the merge cannot silently drop a field", () => {
     };
     const merged = mergeOutcomes([input]);
 
+    // A Map off Object.entries, not a dynamic index. Indexing a known-type
+    // object by a runtime string needs an `as` to compile, and the rule against
+    // those exists precisely so a test cannot silence the type system to reach
+    // its own assertion.
+    const carried = new Map(Object.entries(merged.score));
+
     for (const [key, value] of Object.entries(input.score)) {
       if (value !== undefined && typeof value !== "object") {
-        expect(merged.score[key as keyof typeof merged.score]).toBeDefined();
+        expect(carried.get(key)).toBeDefined();
       }
     }
   });

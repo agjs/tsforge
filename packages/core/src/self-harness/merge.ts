@@ -24,8 +24,10 @@ function meanOfSignaled(values: readonly number[]): number {
  *    shipped solution), so most runs have nothing to contribute and a
  *    run-weighted mean would be dominated by which tasks happened to pass.
  *
- * Matching evaluateHarness's own aggregation, which splits the same way for the
- * same reason.
+ * evaluateHarness splits the same way for the same reason. That is intent, not a
+ * verified invariant — nothing here checks the two stay in step, and the last
+ * comment claiming they were identical went stale without anyone noticing,
+ * which is how this function came to drop a field for a week.
  *
  * PRECONDITION: one outcome per task. `perTask` is last-write-wins on a key
  * collision while the counts sum, so passing two outcomes for the same task
