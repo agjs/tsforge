@@ -143,7 +143,14 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse(GOOD_DIAGNOSIS)),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+          stoppedBy: "eof" as const,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -171,7 +178,14 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
             modelResponse(`Sure, here you go:\n${GOOD_DIAGNOSIS}\nThanks`)
           ),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+          stoppedBy: "eof" as const,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -191,7 +205,14 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("not json")),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+          stoppedBy: "eof" as const,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -218,12 +239,151 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("")),
       }),
-      runBinary: () => Promise.resolve({ ok: false, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: false,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+          stoppedBy: "eof" as const,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
 
     expect(outcome?.status).toBe("errored");
+  });
+
+  test("a TIMED-OUT binary's partial JSON is not counted as a vote", async () => {
+    // The diagnose path had the same `ok`-only check the review path lost: a
+    // runner reporting ok:true alongside timedOut:true would have its output
+    // parsed, so a diagnosis cut off mid-sentence counted as a real one. A
+    // partial answer is not a diagnosis any more than it is a review.
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 4321,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      // Deliberately VALID output: the point is that it is refused for having
+      // been cut off, not for being malformed.
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: GOOD_DIAGNOSIS,
+          timedOut: true,
+          truncated: false,
+          stoppedBy: "eof" as const,
+        }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(outcome.error).toContain("4321");
+      expect(outcome.error).toContain("timeout");
+    }
+  });
+
+  test("a TRUNCATED binary's output is not counted as a vote either", async () => {
+    // Parallel to the timeout case, and the same asymmetry: the review path
+    // refuses a prefix while diagnose fell through to "binary exited non-zero",
+    // blaming the binary for something the harness did — or, for a runner
+    // reporting ok:true alongside the flag, counting a cut-off diagnosis as a
+    // real one.
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 1000,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      // A real production combination: the ceiling was hit, so the read stopped
+      // on `size`. The previous fixture said truncated with stoppedBy "eof",
+      // which runBinary can never produce — so it exercised neither real case.
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: GOOD_DIAGNOSIS,
+          timedOut: false,
+          truncated: true,
+          stoppedBy: "size" as const,
+        }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(outcome.error).toContain("flooded");
+    }
+  });
+
+  test("a timed-out diagnosis with an orphaned pipe reports the TIMEOUT", async () => {
+    // Both flags true with a deadline stop is a binary killed at its budget
+    // whose child still holds stdout. The timeout is why it died; reporting
+    // truncation hides that on the path that happens most.
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 8888,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: false,
+          stdout: "partial",
+          timedOut: true,
+          truncated: true,
+          stoppedBy: "deadline" as const,
+        }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(outcome.error).toContain("8888");
+    }
   });
 
   test("a binary reviewer returning valid JSON on stdout becomes a vote", async () => {
@@ -245,7 +405,14 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("")),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: GOOD_DIAGNOSIS,
+          timedOut: false,
+          truncated: false,
+          stoppedBy: "eof" as const,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);

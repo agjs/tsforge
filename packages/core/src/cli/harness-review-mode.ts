@@ -124,10 +124,179 @@ export function buildBinaryInvocation(
   };
 }
 
+/** After a kill is signalled, how long to wait for the process to actually be
+ *  reaped before giving up. NOT a SIGTERM grace — the kill is SIGKILL, which is
+ *  not refusable — this covers a child that escaped its group (called `setsid`,
+ *  say) and so survives the group kill. Without the bound, `proc.exited` might
+ *  never resolve and the panel would wait forever. */
+const KILL_GRACE_MS = 2_000;
+/** Conventional exit code for a process terminated by SIGKILL (128 + 9). */
+const SIGKILL_EXIT = 137;
+/**
+ * How long to keep draining stdout after the process itself has gone.
+ *
+ * A descendant inherits the pipe, so `Response.text()` waits for EOF — which
+ * means the LAST child, not the reviewer. That hangs the panel whether the
+ * reviewer was killed or exited cleanly on its own, so the bound is tied to the
+ * process exiting rather than to the kill.
+ */
+const POST_EXIT_DRAIN_MS = 2_000;
+
+/**
+ * Hard ceiling on a reviewer's stdout. A review is a small JSON object; anything
+ * past this is a runaway, and reading it to EOF would let one noisy reviewer
+ * exhaust the harness.
+ */
+export const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+
+/** What running a reviewer binary produced. */
+export interface IBinaryRun {
+  ok: boolean;
+  stdout: string;
+  timedOut: boolean;
+  truncated: boolean;
+  /** WHY the read ended, forwarded rather than collapsed. `truncated` alone
+   *  cannot tell a flood from a pipe still open after the process went, and the
+   *  two point at different problems — so a caller reporting the failure needs
+   *  the distinction that readBounded already computed. */
+  stoppedBy: IBoundedRead["stoppedBy"];
+}
+
+/** Mutable read state, held in an object so a closure can flip it. */
+interface IReadState {
+  expired: boolean;
+  /** Set once the read has finished and cleaned up, so a late deadline callback
+   *  does not arm a timer with nobody left to clear it. */
+  done: boolean;
+  stoppedBy: IBoundedRead["stoppedBy"];
+}
+
+/** What a bounded read produced, and why it stopped. */
+interface IBoundedRead {
+  text: string;
+  /** `size` — the reviewer flooded us past the ceiling. `deadline` — the pipe
+   *  was still open when the post-exit grace ran out. `eof` — the normal end. */
+  stoppedBy: "eof" | "size" | "deadline";
+  /** True whenever the read did not reach EOF.
+   *
+   *  Deliberately blunt. Whether an orphan holding the pipe is idle or still
+   *  writing cannot be decided from here: a writer slower than the grace window
+   *  looks exactly like a writer that has finished, and a heuristic on "did
+   *  bytes arrive during the grace" only catches the loud half. Not reaching EOF
+   *  means we cannot claim the answer is complete, so we do not.
+   *
+   *  The cost is a reviewer that backgrounds work having its review refused —
+   *  visibly, with cause `truncated`, which is the whole point of these
+   *  diagnostics. The alternative is passing a prefix off as a finished review,
+   *  and a wrong verdict is worse than a missing one. */
+  truncated: boolean;
+}
+
+/**
+ * Read a stream to EOF, or stop shortly after the process is gone — keeping
+ * whatever arrived, and saying whether anything was probably lost.
+ *
+ * Bounded by a FLAG, not by racing the deadline each iteration. `Promise.race`
+ * resolves with the first ALREADY-SETTLED entry in array order, so once a
+ * descendant keeps the pipe permanently readable, `reader.read()` wins every
+ * round forever and the deadline never gets a turn — the bound silently stops
+ * bounding for exactly the noisy-child case it exists to handle.
+ *
+ * Chunk by chunk, because racing a whole `Response.text()` throws away
+ * everything already read the moment it gives up: a reviewer that answered and
+ * exited, leaving a background child holding the pipe, would lose a complete
+ * answer for the sake of the child.
+ */
+export async function readBounded(
+  stream: ReadableStream<Uint8Array>,
+  gone: Promise<unknown>
+): Promise<IBoundedRead> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const state: IReadState = { expired: false, done: false, stoppedBy: "eof" };
+  let bytes = 0;
+  let text = "";
+
+  // A clearable timer, not Bun.sleep: an un-cancellable sleep starts on EVERY
+  // run the moment the process exits and keeps the event loop alive for its full
+  // grace, healthy reviewers included.
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = gone.then(
+    () =>
+      new Promise<void>((resolve) => {
+        // The read can finish before the process does — EOF on a reviewer that
+        // is still shutting down — and this callback then runs AFTER cleanup,
+        // arming a timer nothing will ever clear and holding the event loop open
+        // past every healthy run. That is the uncancellable tail all over again,
+        // just reached from the other side.
+        if (state.done) {
+          resolve();
+
+          return;
+        }
+
+        graceTimer = setTimeout(() => {
+          state.expired = true;
+          resolve();
+        }, POST_EXIT_DRAIN_MS);
+      })
+  );
+
+  try {
+    for (;;) {
+      if (state.expired) {
+        state.stoppedBy = "deadline";
+        break;
+      }
+
+      const next = await Promise.race([reader.read(), deadline]);
+
+      // `deadline` resolves to undefined; the flag above ends the loop on the
+      // next pass, so this only skips one iteration.
+      if (next === undefined) {
+        continue;
+      }
+
+      if (next.done) {
+        break;
+      }
+
+      // The ceiling is checked AFTER the read, not before. Breaking on a full
+      // buffer first would call a stream of exactly MAX_STDOUT_BYTES truncated,
+      // though its next read is EOF and nothing was lost — the documented
+      // runaway condition is output PAST the ceiling.
+      const room = MAX_STDOUT_BYTES - bytes;
+
+      if (next.value.length > room) {
+        // Sliced to the remaining allowance: appending whole and checking
+        // afterwards lets the text overrun by a full chunk, which for a reviewer
+        // emitting megabyte chunks is not a rounding error.
+        bytes += room;
+        text += decoder.decode(next.value.subarray(0, room), { stream: true });
+        state.stoppedBy = "size";
+        break;
+      }
+
+      bytes += next.value.length;
+      text += decoder.decode(next.value, { stream: true });
+    }
+  } finally {
+    state.done = true;
+    clearTimeout(graceTimer);
+    await reader.cancel().catch(() => undefined);
+  }
+
+  return {
+    text: text + decoder.decode(),
+    stoppedBy: state.stoppedBy,
+    truncated: state.stoppedBy !== "eof",
+  };
+}
+
 export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
-): Promise<{ ok: boolean; stdout: string }> {
+): Promise<IBinaryRun> {
   const tmpPath =
     r.input === "tempfile"
       ? join(tmpdir(), `tsforge-review-${randomUUID()}.txt`)
@@ -146,23 +315,122 @@ export async function runBinary(
   // reviewer in a throwaway temp dir confines every side effect there; the real repo is untouchable.
   const sandbox = await mkdtemp(join(tmpdir(), "tsforge-review-sandbox-"));
   const invocation = buildBinaryInvocation(r, stdin, tmpPath);
+  // `detached: true` makes the reviewer its OWN process-group leader, so the
+  // kill below takes down the whole group — the `sh -c` wrapper AND anything it
+  // backgrounded. This is how lib/fs/process.ts already does it, and it is the
+  // portable way to get a new group (setsid is not on macOS).
+  //
+  // An earlier version of this walked the tree with `pgrep` instead, on the
+  // stated premise that Bun.spawn could not create a group. That was simply
+  // false — the pattern was already in this repo — and the walk could not work
+  // anyway: SIGTERM makes a well-behaved parent exit, its TERM-ignoring child is
+  // re-parented to init, and there is nothing left to walk from.
   const proc = Bun.spawn(invocation.cmd, {
     cwd: sandbox,
     stdin: invocation.stdinBytes,
     stdout: "pipe",
     stderr: "ignore",
+    detached: true,
   });
+  // Recorded rather than inferred: a killed process exits non-zero, so the exit
+  // code alone cannot distinguish "we killed it at the budget" from "it failed
+  // on its own". Only the killer knows.
+  // In an object for the same reason as the read state below: the timer flips
+  // this from a callback, and control-flow analysis cannot see that.
+  const kill = { timedOut: false };
   const timer = setTimeout(() => {
-    proc.kill();
+    kill.timedOut = true;
+    killGroup();
   }, r.timeoutMs);
+  // NOTE: the trigger for this cannot be reproduced portably from a test — a
+  // process that survives SIGKILL means one that left its group (setsid, a
+  // re-exec), and there is no shell-level way to arrange that on both macOS and
+  // Linux. What IS tested is the mechanism it depends on: readBounded abandons a
+  // stream that never ends once the promise it was given settles.
+  //
+  // Resolves only once a kill has been signalled AND the process still has not
+  // been reaped a grace later — i.e. it escaped its group and survived SIGKILL.
+  // Raced against `proc.exited` so the wait below always settles; without it an
+  // un-reapable reviewer wedges the panel forever. Same shape as process.ts.
+  let resolveEscaped: (() => void) | null = null;
+  const escaped = new Promise<void>((resolve) => {
+    resolveEscaped = resolve;
+  });
+  const escape: { timer: ReturnType<typeof setTimeout> | null } = {
+    timer: null,
+  };
+
+  /**
+   * Kill the whole group, falling back to the lone child when the group is gone
+   * (ESRCH) or not permitted (EPERM). Never throws.
+   *
+   * SIGKILL directly rather than SIGTERM-then-escalate: the budget has already
+   * expired by the time this runs, and a reviewer that asked for more time by
+   * ignoring SIGTERM is the case the budget exists for.
+   */
+  const killGroup = (): void => {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      try {
+        proc.kill(9);
+      } catch {
+        // Already exited.
+      }
+    }
+
+    escape.timer ??= setTimeout(() => resolveEscaped?.(), KILL_GRACE_MS);
+  };
 
   try {
-    const stdout = await new Response(proc.stdout).text();
-    const code = await proc.exited;
+    // Cleared the MOMENT the process exits, not after stdout finishes draining.
+    // A reviewer can finish under budget while its output is still being read
+    // (a big review, a descendant holding the pipe), and a timer firing during
+    // that drain would mark a completed review as timed out and throw its answer
+    // away — the exact false signal this change exists to remove, and likeliest
+    // near the budget edge under concurrent panel load.
+    const exited = proc.exited.then((code) => {
+      clearTimeout(timer);
 
-    return { ok: code === 0, stdout };
+      return code;
+    });
+    // Bounded by EITHER the process exiting or the escape hatch firing. Hanging
+    // the drain off `exited` alone deadlocks the case the escape hatch exists
+    // for: a process that survives SIGKILL never settles `exited`, so the
+    // post-exit grace never starts, the read loops forever, and execution never
+    // reaches the race below at all.
+    const settled = Promise.race([exited, escaped]);
+    const read = await readBounded(proc.stdout, settled);
+
+    // A reviewer that floods and KEEPS RUNNING would otherwise hold the panel
+    // until its full budget — we stopped reading, but nothing stopped it — and
+    // the budget timer would then fire, so a runaway stdout got reported as a
+    // timeout and pointed the operator at the wrong knob. Once the ceiling is
+    // hit there is nothing left to wait for.
+    if (read.stoppedBy === "size") {
+      clearTimeout(timer);
+      killGroup();
+    }
+
+    // Raced, so a process that outlived SIGKILL cannot hold the panel.
+    const code = await Promise.race([exited, escaped.then(() => SIGKILL_EXIT)]);
+
+    return {
+      ok: code === 0 && !kill.timedOut && !read.truncated,
+      stdout: read.text,
+      // A size stop kills the process itself, so a budget timer that fires
+      // afterwards is describing our own kill, not an over-budget reviewer.
+      timedOut: kill.timedOut && read.stoppedBy !== "size",
+      truncated: read.truncated,
+      stoppedBy: read.stoppedBy,
+    };
   } finally {
     clearTimeout(timer);
+    // Every reviewer, not only the ones that misbehaved: a reviewer that exits
+    // cleanly can still leave a backgrounded child holding resources, and
+    // killing an already-empty group costs nothing.
+    killGroup();
+    clearTimeout(escape.timer ?? undefined);
 
     if (tmpPath !== undefined) {
       await rm(tmpPath, { force: true });
@@ -263,16 +531,90 @@ export async function persistVerdict(
   }
 }
 
+/**
+ * Flatten untrusted text to a single printable line.
+ *
+ * Reviewer ids and error strings reach the terminal verbatim, and neither is
+ * ours: an error message can carry a remote provider's response body, and a
+ * cached verdict is read back off disk. An embedded newline forges an extra
+ * verdict line — `! x did not review` followed by a fabricated `harness-review:
+ * PASS` — and an escape sequence can rewrite what a CI log appears to say.
+ * Neither belongs in a summary someone reads to decide whether to merge.
+ */
+function oneLine(value: string): string {
+  let out = "";
+
+  // A code-point walk: a control-character regex is disallowed here, and
+  // spread/split on a string mishandles astral characters.
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    // C0 (newline and ESC among them), DEL, C1 — plus the Unicode line/paragraph
+    // separators, which a terminal breaks on exactly like a newline, and the
+    // bidi overrides, which can visually reorder a line into something it does
+    // not say.
+    const control =
+      code < 0x20 ||
+      code === 0x7f ||
+      (code >= 0x80 && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      (code >= 0x202a && code <= 0x202e) ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x2066 && code <= 0x2069);
+
+    out += control ? " " : ch;
+  }
+
+  const flattened = out.trim();
+
+  return flattened.length > MAX_FAILURE_TEXT
+    ? `${flattened.slice(0, MAX_FAILURE_TEXT)}…`
+    : flattened;
+}
+
+/** Enough for a real message, short of letting a reviewer paste a novel into the
+ *  summary. */
+const MAX_FAILURE_TEXT = 300;
+
 export function formatVerdict(v: IVerdict): string {
   const head = v.blocked ? "BLOCK" : "PASS";
   const lines = [
-    `harness-review: ${head} — ${v.reason}`,
-    `reviewers ok: ${String(v.reviewers.ok)}  errored: ${String(v.reviewers.errored)}  (builder: ${v.identity})`,
+    // The reason can be derived straight from a reviewer-controlled finding, so
+    // it is no more ours than the failure text below it.
+    `harness-review: ${head} — ${oneLine(v.reason)}`,
+    `reviewers ok: ${String(v.reviewers.ok)}  errored: ${String(v.reviewers.errored)}  (builder: ${oneLine(v.identity)})`,
   ];
+
+  // Name every reviewer that dropped out, with why and how long it took. A bare
+  // "errored: 2" is the same line whether two binaries are misconfigured or the
+  // whole panel timed out, and those need opposite responses.
+  const failures = v.failures ?? [];
+
+  for (const f of failures) {
+    const took =
+      f.ms === undefined ? "" : ` after ${(f.ms / 1000).toFixed(1)}s`;
+
+    lines.push(
+      `  ! ${oneLine(f.reviewerId)} did not review (${f.cause ?? "error"})${took}: ${oneLine(f.error)}`
+    );
+  }
+
+  // SAY when detail is missing rather than printing a shorter list that looks
+  // complete. A cached artifact from an older build, or one whose entries did
+  // not survive parsing, otherwise silently regresses to count-only — the state
+  // this change exists to leave behind — with nothing to indicate it.
+  const undetailed = v.reviewers.errored - failures.length;
+
+  if (undetailed > 0) {
+    lines.push(
+      `  ! ${String(undetailed)} further reviewer failure(s) with no readable detail`
+    );
+  }
 
   for (const f of v.ranked) {
     lines.push(
-      `  [${f.severity}/${f.findingCode}] ${f.file ?? "?"} — ${f.issue} (agreement ${String(f.agreement)})`
+      `  [${f.severity}/${f.findingCode}] ${oneLine(f.file ?? "?")} — ${oneLine(f.issue)} (agreement ${String(f.agreement)})`
     );
   }
 
@@ -355,7 +697,10 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const panel = resolvePanel(cfg, active);
 
   for (const s of panel.skipped) {
-    process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
+    // Config-derived, so no more ours than a reviewer's own output.
+    process.stdout.write(
+      `skipped reviewer ${oneLine(s.id)}: ${oneLine(s.reason)}\n`
+    );
   }
 
   const treeHashRes = await gitRunner(["write-tree"]);

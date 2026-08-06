@@ -18,10 +18,24 @@ export interface IInvokeDeps {
   runBinary: (
     r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
     stdin: string
-  ) => Promise<{ ok: boolean; stdout: string }>;
+    // REQUIRED, not optional. Optional means an existing or alternative runner
+    // compiles without reporting it, and every omitted timeout is then
+    // classified as a non-zero exit — restoring the exact conflation this
+    // change exists to remove, silently.
+  ) => Promise<{
+    ok: boolean;
+    stdout: string;
+    timedOut: boolean;
+    /** True when the read stopped early, so `stdout` is a PREFIX. Distinct from
+     *  a bad answer: the reviewer may have been perfectly fine. */
+    truncated: boolean;
+    /** Why it stopped — a flood and a pipe left open point at different
+     *  problems, and a boolean cannot say which. */
+    stoppedBy: "eof" | "size" | "deadline";
+  }>;
 }
 
-function reviewFrom(id: string, rawText: string): ReviewOutcome {
+function reviewFrom(id: string, rawText: string, ms: number): ReviewOutcome {
   let review: IReview | null;
 
   try {
@@ -31,8 +45,14 @@ function reviewFrom(id: string, rawText: string): ReviewOutcome {
   }
 
   return review === null
-    ? { status: "errored", reviewerId: id, error: "unparseable review output" }
-    : { status: "ok", review };
+    ? {
+        status: "errored",
+        reviewerId: id,
+        error: "unparseable review output",
+        cause: "unparseable",
+        ms,
+      }
+    : { status: "ok", review, ms };
 }
 
 async function invokeModel(
@@ -40,18 +60,22 @@ async function invokeModel(
   request: IReviewRequest,
   deps: IInvokeDeps
 ): Promise<ReviewOutcome> {
+  const started = Date.now();
+
   try {
     const res = await deps.makeProvider(reviewer.entry).complete([
       { role: "system", content: REVIEW_SYSTEM_PROMPT },
       { role: "user", content: renderReviewPrompt(request) },
     ]);
 
-    return reviewFrom(reviewer.id, res.content);
+    return reviewFrom(reviewer.id, res.content, Date.now() - started);
   } catch (err) {
     return {
       status: "errored",
       reviewerId: reviewer.id,
       error: err instanceof Error ? err.message : String(err),
+      cause: "threw",
+      ms: Date.now() - started,
     };
   }
 }
@@ -70,6 +94,8 @@ async function invokeBinary(
   request: IReviewRequest,
   deps: IInvokeDeps
 ): Promise<ReviewOutcome> {
+  const started = Date.now();
+
   try {
     // Binaries have no separate system channel, so the review contract (JSON
     // schema + reject-by-default + rubric) must be prepended to their single
@@ -86,11 +112,65 @@ async function invokeBinary(
       stdin
     );
 
+    // Checked BEFORE ok, not inside the failure branch. runBinary already forces
+    // ok=false on a kill, but this must not depend on that: any runner meeting
+    // the contract could report `ok: true, timedOut: true`, and reading stdout
+    // there would count a reviewer we killed mid-sentence as having reviewed.
+    // Whatever it printed before the kill is a partial answer, and a partial
+    // answer is not a review.
+    // ORDER MATTERS, and only a FLOOD outranks a timeout.
+    //
+    // A flood is its own finding: we killed the reviewer for it, so a budget
+    // timer firing afterwards describes our own kill, and calling that a timeout
+    // sends the operator to raise a limit that was never the problem.
+    //
+    // A deadline stop is the opposite. The common shape is a reviewer killed at
+    // its budget whose background child still holds the pipe — both flags true,
+    // but the TIMEOUT is why it died and the open pipe is a consequence.
+    // Reporting truncation there would hide the real cause on the exact path
+    // runBinary's own comments describe as normal for an agentic reviewer.
+    if (res.truncated && res.stoppedBy === "size") {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "reviewer flooded stdout past the ceiling",
+        cause: "truncated",
+        ms: Date.now() - started,
+      };
+    }
+
+    if (res.timedOut) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
+        cause: "timeout",
+        ms: Date.now() - started,
+      };
+    }
+
+    if (res.truncated) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "reviewer output was still open when the read gave up",
+        cause: "truncated",
+        ms: Date.now() - started,
+      };
+    }
+
+    // Timeout and non-zero exit are DIFFERENT facts and the old message reported
+    // them as one. A timeout means the budget is too small for the work — raise
+    // it, or drop the reviewer. A non-zero exit means the binary is broken and
+    // the budget is irrelevant. Told apart, the fix is obvious; conflated, the
+    // only way to find out is to time the binary by hand.
     if (!res.ok) {
       return {
         status: "errored",
         reviewerId: reviewer.id,
-        error: "binary exited non-zero or timed out",
+        error: "binary exited non-zero",
+        cause: "exit",
+        ms: Date.now() - started,
       };
     }
 
@@ -99,12 +179,14 @@ async function invokeBinary(
         ? extractBinaryJson(res.stdout)
         : res.stdout;
 
-    return reviewFrom(reviewer.id, payload);
+    return reviewFrom(reviewer.id, payload, Date.now() - started);
   } catch (err) {
     return {
       status: "errored",
       reviewerId: reviewer.id,
       error: err instanceof Error ? err.message : String(err),
+      cause: "threw",
+      ms: Date.now() - started,
     };
   }
 }

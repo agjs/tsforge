@@ -19,6 +19,7 @@ function ok(
   return {
     status: "ok",
     review: { reviewerId: id, verdict, findings, summary: "" },
+    ms: 0,
   };
 }
 
@@ -50,8 +51,20 @@ describe("aggregate", () => {
     // an outage would keep poisoning the cache exactly as before.
     const allErrored = aggregate(
       [
-        { status: "errored", reviewerId: "a", error: "connection refused" },
-        { status: "errored", reviewerId: "b", error: "connection refused" },
+        {
+          status: "errored",
+          reviewerId: "a",
+          error: "connection refused",
+          cause: "threw",
+          ms: 0,
+        },
+        {
+          status: "errored",
+          reviewerId: "b",
+          error: "connection refused",
+          cause: "threw",
+          ms: 0,
+        },
       ],
       opts
     );
@@ -65,7 +78,13 @@ describe("aggregate", () => {
     const oneShort = aggregate(
       [
         ok("a", "approve"),
-        { status: "errored", reviewerId: "b", error: "timeout" },
+        {
+          status: "errored",
+          reviewerId: "b",
+          error: "timeout",
+          cause: "threw",
+          ms: 0,
+        },
       ],
       opts
     );
@@ -94,7 +113,13 @@ describe("aggregate", () => {
     const v = aggregate(
       [
         ok("a", "approve"),
-        { status: "errored", reviewerId: "b", error: "timeout" },
+        {
+          status: "errored",
+          reviewerId: "b",
+          error: "timeout",
+          cause: "threw",
+          ms: 0,
+        },
       ],
       opts
     );
