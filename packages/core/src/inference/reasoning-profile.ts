@@ -87,11 +87,17 @@ export const REASONING_PRESETS: Readonly<
   /** A DeepSeek checkpoint served by a template-driven runtime (vLLM, SGLang).
    *  `thinking` here is a kwarg of the DeepSeek-V4 CHAT TEMPLATE, which the
    *  runtime merely forwards — it is not a vLLM-wide field, which is why this
-   *  is keyed to the model family and not to the server. */
+   *  is keyed to the model family and not to the server.
+   *
+   *  No `budget`: vLLM's V2 model runner answers `thinking_token_budget` with a
+   *  400 ("not yet supported ... run with VLLM_USE_V2_MODEL_RUNNER=0"), and V2
+   *  is the default. The field survived here because the unsupported-field
+   *  learner retries without it, so every turn worked — at the cost of a wasted
+   *  round trip per process and a 400 in the server log each time. Qwen keeps
+   *  its `budget`; that path is served by runtimes that accept the field. */
   "deepseek-local": {
     thinking: { path: "chat_template_kwargs.thinking" },
     effort: "chat_template_kwargs.reasoning_effort",
-    budget: "thinking_token_budget",
   },
 
   /** OpenAI o-series: effort only, renamed token cap, no temperature. */

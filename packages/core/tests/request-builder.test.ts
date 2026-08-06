@@ -129,13 +129,19 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
-  test("deepseek-local forwards thinking_token_budget (a vLLM param, like qwen)", () => {
+  test("deepseek-local omits thinking_token_budget — the V2 runner 400s on it", () => {
     const b = body(
       { reasoning: "deepseek-local" },
       { enableThinking: true, thinkingTokenBudget: 2048 }
     );
 
-    expect(b.thinking_token_budget).toBe(2048);
+    // The budget is dropped, not relocated: nothing anywhere in the body
+    // carries 2048, so this fails if a later edit reintroduces the field under
+    // any path.
+    expect(b.thinking_token_budget).toBeUndefined();
+    expect(JSON.stringify(b)).not.toContain("2048");
+    // The controls the runner DOES accept still go out.
+    expect(b.chat_template_kwargs).toEqual({ thinking: true });
   });
 
   test.each([
