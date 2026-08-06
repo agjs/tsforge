@@ -94,17 +94,6 @@ export interface IModelsConfig {
   capabilities?: Partial<Record<CapabilityName, string>>;
   /** Optional panel of model + binary reviewers for collaborative review. */
   reviewPanel?: IReviewPanel;
-  /**
-   * Why the panel could not be parsed, when it could not.
-   *
-   * A malformed REVIEWER must not take the registry down with it. Every command
-   * loads this file — `/model`, capability routing, a plain build — and a typo
-   * in a reviewer annotation used to make all of them fail to start, which is a
-   * blast radius wildly out of proportion to the mistake. The panel is dropped
-   * and the reason kept, so review refuses loudly (it has no panel) while
-   * everything else carries on.
-   */
-  reviewPanelError?: string;
 }
 
 export interface IReviewerModel {
@@ -469,26 +458,14 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
   }
 
   const capabilities = parseCapabilities(raw.capabilities, models);
-  // Scoped: a bad reviewer costs you the panel, not the registry.
-  let reviewPanel: IReviewPanel | undefined;
-  let reviewPanelError: string | undefined;
-
-  try {
-    reviewPanel = parseReviewPanel(raw.reviewPanel, models);
-  } catch (err) {
-    reviewPanelError = err instanceof Error ? err.message : String(err);
-  }
+  const reviewPanel = parseReviewPanel(raw.reviewPanel, models);
 
   const withCaps =
     capabilities === undefined
       ? { active: raw.active, models }
       : { active: raw.active, models, capabilities };
 
-  return {
-    ...withCaps,
-    ...(reviewPanel === undefined ? {} : { reviewPanel }),
-    ...(reviewPanelError === undefined ? {} : { reviewPanelError }),
-  };
+  return reviewPanel === undefined ? withCaps : { ...withCaps, reviewPanel };
 }
 
 /** Validate the optional `capabilities` block: known keys only, each pointing at

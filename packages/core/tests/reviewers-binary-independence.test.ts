@@ -155,13 +155,8 @@ describe("parsing the fronts declaration", () => {
     // The failure this field exists to remove, reintroduced one level up:
     // dropping a typo means the author believes they declared independence
     // while the binary takes the undeclared path and votes anyway.
-    // Reported on the config rather than thrown: a bad reviewer costs the
-    // panel, not the registry — see "a broken panel costs the panel" below.
     for (const bad of [123, true, null, ["builder"], {}, ""]) {
-      const cfg = parseModelsConfig(withFronts(bad));
-
-      expect(cfg.reviewPanel).toBeUndefined();
-      expect(cfg.reviewPanelError).toContain("fronts");
+      expect(() => parseModelsConfig(withFronts(bad))).toThrow(/fronts/);
     }
   });
 });
@@ -319,7 +314,7 @@ describe("the prototype hardening at its real call sites", () => {
   });
 
   test("a model reviewer naming an inherited entry is rejected at parse", () => {
-    expect(
+    expect(() =>
       parseModelsConfig(
         registry({
           reviewPanel: {
@@ -327,8 +322,8 @@ describe("the prototype hardening at its real call sites", () => {
             reviewers: [{ kind: "model", id: "r", entry: "constructor" }],
           },
         })
-      ).reviewPanelError
-    ).toBeDefined();
+      )
+    ).toThrow();
   });
 
   test("a model named __proto__ is REFUSED, not quietly stored", () => {
@@ -373,26 +368,26 @@ describe("fronts is validated against the registry at parse time", () => {
     // The model path throws when `entry` names nothing; this one only checked
     // the TYPE, so "buidler" parsed fine and surfaced later as a reviewer
     // quietly skipped in the middle of a review.
-    const cfg = parseModelsConfig({
-      active: "builder",
-      models: { builder: { baseUrl: "http://x/v1", model: "m" } },
-      reviewPanel: {
-        minReviewers: 2,
-        reviewers: [
-          {
-            kind: "binary",
-            id: "cli",
-            argv: ["cli"],
-            input: "arg",
-            timeoutMs: 1000,
-            parse: "raw",
-            fronts: "buidler",
-          },
-        ],
-      },
-    });
-
-    expect(cfg.reviewPanelError).toContain("not a configured model");
+    expect(() =>
+      parseModelsConfig({
+        active: "builder",
+        models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            {
+              kind: "binary",
+              id: "cli",
+              argv: ["cli"],
+              input: "arg",
+              timeoutMs: 1000,
+              parse: "raw",
+              fronts: "buidler",
+            },
+          ],
+        },
+      })
+    ).toThrow(/not a configured model/);
   });
 });
 
@@ -432,18 +427,18 @@ describe("a fronts declaration on the wrong reviewer kind", () => {
   test("a MODEL reviewer carrying `fronts` is rejected", () => {
     // Only the binary path reads it, so a model reviewer with one looks
     // annotated and is not — the silent declaration this field exists to stop.
-    const cfg = parseModelsConfig({
-      active: "builder",
-      models: { builder: { baseUrl: "http://x/v1", model: "m" } },
-      reviewPanel: {
-        minReviewers: 2,
-        reviewers: [
-          { kind: "model", id: "r", entry: "builder", fronts: "builder" },
-        ],
-      },
-    });
-
-    expect(cfg.reviewPanelError).toContain("fronts");
+    expect(() =>
+      parseModelsConfig({
+        active: "builder",
+        models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            { kind: "model", id: "r", entry: "builder", fronts: "builder" },
+          ],
+        },
+      })
+    ).toThrow(/fronts/);
   });
 });
 
@@ -485,95 +480,35 @@ describe("a declaration on the wrong reviewer kind — both directions", () => {
   });
 
   test("a BINARY reviewer carrying `entry` is refused", () => {
-    // The mirror I added and did not test. Only the model path reads `entry`,
-    // so a binary with one looks like it named its model and did not.
-    const cfg = parseModelsConfig(
-      registry({
-        kind: "binary",
-        id: "cli",
-        argv: ["cli"],
-        input: "arg",
-        timeoutMs: 1000,
-        parse: "raw",
-        entry: "builder",
-      })
-    );
-
-    expect(cfg.reviewPanel).toBeUndefined();
-    expect(cfg.reviewPanelError).toContain("entry");
+    // The mirror I added a commit ago and did not test, while claiming both
+    // directions were covered. Only the model path reads `entry`, so a binary
+    // with one looks like it named its model and did not.
+    expect(() =>
+      parseModelsConfig(
+        registry({
+          kind: "binary",
+          id: "cli",
+          argv: ["cli"],
+          input: "arg",
+          timeoutMs: 1000,
+          parse: "raw",
+          entry: "builder",
+        })
+      )
+    ).toThrow(/entry/);
   });
 
   test("a MODEL reviewer carrying `fronts` is refused", () => {
-    const cfg = parseModelsConfig(
-      registry({ kind: "model", id: "r", entry: "builder", fronts: "builder" })
-    );
-
-    expect(cfg.reviewPanel).toBeUndefined();
-    expect(cfg.reviewPanelError).toContain("fronts");
-  });
-});
-
-describe("a broken panel costs the panel, not the registry", () => {
-  /**
-   * Every command loads this file. A typo in a reviewer annotation used to make
-   * `parseModelsConfig` throw, so `/model`, capability routing and a plain build
-   * all failed to start — a blast radius wildly out of proportion to the
-   * mistake, and one this session managed to inflict for real by another route.
-   */
-  test("the models still load when the panel does not", () => {
-    const cfg = parseModelsConfig({
-      active: "builder",
-      models: {
-        builder: { baseUrl: "http://x/v1", model: "m" },
-        other: { baseUrl: "http://y/v1", model: "n" },
-      },
-      capabilities: { vision: "other" },
-      reviewPanel: {
-        minReviewers: 2,
-        reviewers: [
-          {
-            kind: "binary",
-            id: "cli",
-            argv: ["cli"],
-            input: "arg",
-            timeoutMs: 1000,
-            parse: "raw",
-            fronts: 123,
-          },
-        ],
-      },
-    });
-
-    expect(Object.keys(cfg.models).sort()).toEqual(["builder", "other"]);
-    expect(cfg.active).toBe("builder");
-    expect(cfg.capabilities?.vision).toBe("other");
-    // Dropped and EXPLAINED — a review refuses on this rather than running with
-    // an empty panel and blaming the endpoint.
-    expect(cfg.reviewPanel).toBeUndefined();
-    expect(cfg.reviewPanelError).toContain("fronts");
-  });
-});
-
-describe("an unverified reviewer is named, not just counted", () => {
-  test("an undeclared binary is listed as unverified", () => {
-    // It counts toward quorum on the config author's word, and a caller reading
-    // `reviewers.length` cannot tell it from a checked one.
-    const panel = resolvePanel(cfg([binary]), {
-      name: "builder",
-      entry: local,
-    });
-
-    expect(panel.reviewers).toHaveLength(1);
-    expect(panel.unverified).toEqual(["cli"]);
-  });
-
-  test("a declared binary is not", () => {
-    const panel = resolvePanel(cfg([{ ...binary, fronts: "elsewhere" }]), {
-      name: "builder",
-      entry: local,
-    });
-
-    expect(panel.unverified).toEqual([]);
+    expect(() =>
+      parseModelsConfig(
+        registry({
+          kind: "model",
+          id: "r",
+          entry: "builder",
+          fronts: "builder",
+        })
+      )
+    ).toThrow(/fronts/);
   });
 });
 

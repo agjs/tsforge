@@ -21,7 +21,7 @@ function jsonProvider(body: unknown): IProvider {
 }
 
 function panelWith(...reviewers: IPanel["reviewers"]): IPanel {
-  return { reviewers, minReviewers: 2, skipped: [], unverified: [] };
+  return { reviewers, minReviewers: 2, skipped: [] };
 }
 
 describe("reviewerInvoke", () => {

@@ -23,12 +23,7 @@ export type ResolvedReviewer =
        *  Computed where the entry was already resolved rather than looked up
        *  again later: a second lookup needs an "entry missing" branch, that
        *  branch cannot be reached, and an unreachable branch that quietly opts a
-       *  reviewer out of the duplicate check is worse than no branch.
-       *
-       *  Its ABSENCE is the machine-readable trace that this reviewer's
-       *  independence was never verified: it declared no model, so it is exempt
-       *  from the duplicate check and counts toward quorum on the config
-       *  author's word. `unverifiedReviewers` names them. */
+       *  reviewer out of the duplicate check is worse than no branch. */
       fingerprint?: string;
     };
 
@@ -36,10 +31,6 @@ export interface IPanel {
   reviewers: ResolvedReviewer[];
   minReviewers: number;
   skipped: { id: string; reason: string }[];
-  /** Reviewers counting toward quorum whose independence could not be checked —
-   *  binaries that declared no model. Not an error, but not a verified vote
-   *  either, and a caller reading `reviewers.length` cannot tell them apart. */
-  unverified: string[];
 }
 
 /**
@@ -194,14 +185,6 @@ function votingIdentity(reviewer: ResolvedReviewer): string | null {
     : (reviewer.fingerprint ?? null);
 }
 
-/** Kept reviewers whose model is unknown, so nothing about their independence
- *  was checked. */
-function unverifiedOf(reviewers: readonly ResolvedReviewer[]): string[] {
-  return reviewers
-    .filter((r) => r.kind === "binary" && r.fingerprint === undefined)
-    .map((r) => r.id);
-}
-
 export function resolvePanel(
   cfg: IModelsConfig,
   active: { name: string; entry: IModelEntry }
@@ -249,10 +232,5 @@ export function resolvePanel(
     reviewers.push(kept);
   }
 
-  return {
-    reviewers,
-    minReviewers,
-    skipped,
-    unverified: unverifiedOf(reviewers),
-  };
+  return { reviewers, minReviewers, skipped };
 }
