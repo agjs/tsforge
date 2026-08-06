@@ -332,22 +332,19 @@ const UNSCOREABLE: IJudgeScore = {
   outcome: "unusable",
 };
 
+/** 4xx statuses that say something about the SETUP rather than the request body:
+ *  credentials, a missing model or route, a method the endpoint does not serve.
+ *  None of these change with the candidate's code. */
+const CONFIG_STATUSES = new Set([401, 402, 403, 404, 405, 410]);
+
 /**
  * Whether a failed judge call was the ENDPOINT's problem rather than the
  * candidate's.
  *
  * Only this class may return no signal, because no signal skips the acceptance
  * guard. A transport error arrives as a plain Error and is not attributable to
- * anyone; a server that answered with a status is classified by it — 4xx means
- * "your request is wrong", and for this call the request is mostly candidate
- * code, while 408/429/5xx are the server asking for the same request later or
- * failing on its own.
+ * anyone; a server that answered with a status is classified by it.
  */
-/** 4xx statuses that say something about the SETUP rather than the request body:
- *  credentials, a missing model or route, a method the endpoint does not serve.
- *  None of these change with the candidate's code. */
-const CONFIG_STATUSES = new Set([401, 402, 403, 404, 405, 410]);
-
 function isInfrastructureFailure(err: unknown): boolean {
   if (!(err instanceof ModelRequestError)) {
     // No status at all: a socket error, DNS, an abort. Not attributable.

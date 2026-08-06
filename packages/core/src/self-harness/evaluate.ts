@@ -350,6 +350,7 @@ export function solutionFitsJudge(
   criteria: string
 ): boolean {
   const separators = Math.max(0, files.length - 1) * SOLUTION_SEPARATOR.length;
+  const fileCount = files.length;
   const code =
     files.reduce((sum, f) => sum + Bun.file(join(runDir, f)).size, 0) +
     separators;
@@ -357,14 +358,19 @@ export function solutionFitsJudge(
   return sizeWithinBudget({
     goal: Buffer.byteLength(goal, "utf8"),
     criteria: Buffer.byteLength(criteria, "utf8"),
-    // Divided, because DISK bytes are not the bytes the judge counts. `text()`
-    // strips a BOM and decodes UTF-16, so a file can shrink on the way in: 2
-    // bytes per ASCII character in UTF-16 become 1 in UTF-8, and that is the
-    // worst case — no encoding this reads produces fewer disk bytes than decoded
-    // ones. Comparing raw size directly would refuse a UTF-16 solution at half
-    // the budget it actually costs, which is the false-refusal this check is
-    // built never to make.
-    code: Math.ceil(code / MAX_DECODE_SHRINK),
+    // DISK bytes are not the bytes the judge counts: `text()` strips a BOM and
+    // decodes UTF-16, so a file shrinks on the way in. Halved for the UTF-16
+    // ASCII worst case (two bytes per character become one), FLOORED rather than
+    // rounded up, and one byte allowed per file for a stripped BOM.
+    //
+    // The rounding is the whole game. A UTF-16 file of exactly the cap occupies
+    // 2*(n+1) bytes with its BOM, and rounding UP gives n+1 — one over, so the
+    // check refuses a solution the judge accepts at precisely the boundary where
+    // it matters. Under-counting is free here; over-counting floors real work.
+    code: Math.max(
+      0,
+      Math.floor(code / MAX_DECODE_SHRINK) - Math.max(1, fileCount)
+    ),
   });
 }
 

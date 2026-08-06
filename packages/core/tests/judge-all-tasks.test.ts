@@ -275,6 +275,58 @@ describe("solutionFitsJudge", () => {
     }
   });
 
+  test("a UTF-16 file of EXACTLY the cap is not refused", async () => {
+    // The boundary the earlier tests all missed by using cap-100 or 2000-byte
+    // payloads. n characters in UTF-16 with a BOM occupy 2*(n+1) bytes, so
+    // rounding the halved size UP gives n+1 — one over, refusing at precisely
+    // the point where the judge accepts.
+    const dir = await corpus();
+    const text = "x".repeat(JUDGE_BUDGET.code);
+
+    try {
+      await writeFile(
+        join(dir, "edge.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+
+      expect(withinBudget({ goal: "", criteria: "", code: text })).toBe(true);
+      expect(solutionFitsJudge(dir, ["edge.ts"], "", "")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("two UTF-16 files summing to the cap are not refused either", async () => {
+    // The same off-by-one reached through the join: two BOMs and the separator.
+    const dir = await corpus();
+    // Room for the separator AND its escape cost: the join adds two newlines,
+    // and a newline is two characters once serialised.
+    const half = Math.floor((JUDGE_BUDGET.code - 4) / 2);
+    const text = "x".repeat(half);
+
+    try {
+      await writeFile(
+        join(dir, "a16.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+      await writeFile(
+        join(dir, "b16.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+
+      expect(
+        withinBudget({
+          goal: "",
+          criteria: "",
+          code: `${text}\n\n${text}`,
+        })
+      ).toBe(true);
+      expect(solutionFitsJudge(dir, ["a16.ts", "b16.ts"], "", "")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a UTF-16 file is not refused at half its real budget", async () => {
     // The larger version of the same mistake: UTF-16 ASCII is two disk bytes per
     // character and one after decoding, so comparing raw size directly refuses a
