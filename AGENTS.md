@@ -45,3 +45,15 @@ Remote: https://github.com/agjs/tsforge
 - Cyclomatic complexity ≤ 20
 - Interfaces prefixed `I`; types live in `*.types.ts`
 - No new logic file without a behavioral test sibling
+- **A test is not coverage until it has failed.** Before claiming a line is
+  tested, break it and watch the test go red. `expect(x).toBeDefined()` passes
+  against `{}` as readily as against the value you meant, so an assertion that
+  cannot fail proves nothing about the line beneath it.
+- **Never describe a change you have not read back.** A scripted edit that
+  matches nothing fails silently, so `grep` the new text before writing it into
+  a commit message. Four commits in one session described fixes that were never
+  in the file.
+- **Put logic in `src/`, not `scripts/`.** Tests import from `src/`, so a
+  function parked in a script has no natural place for a test sibling and tends
+  not to get one. The graded score reached the acceptance rule for a week only
+  in theory, because the merge step that dropped it sat in a script.
