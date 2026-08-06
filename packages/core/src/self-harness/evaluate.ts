@@ -226,7 +226,7 @@ function gateSpec(
 export async function solutionFiles(
   cwd: string,
   spec: { tasks: readonly { files: readonly string[] }[] }
-): Promise<string[]> {
+): Promise<ISolutionScope> {
   const seen = new Set<string>();
 
   for (const pattern of spec.tasks.flatMap((t) => t.files)) {
@@ -239,20 +239,31 @@ export async function solutionFiles(
       // Stop ENUMERATING, not just reading. The byte budget bounds content, but
       // discovery ran ahead of it: a scope matching a hundred thousand empty
       // files costs a hundred thousand directory entries and stats before
-      // anything concludes it was too big. Past this the solution is
-      // unreviewable by count alone, and the caller refuses it.
-      if (seen.size > MAX_SOLUTION_FILES) {
-        return [...seen];
+      // anything concludes it was too big.
+      if (seen.size >= MAX_SOLUTION_FILES) {
+        return { files: [...seen], complete: false };
       }
     }
   }
 
-  return [...seen];
+  return { files: [...seen], complete: true };
 }
 
 /** More files than any real solution has. Past this the scope is not a solution
  *  scope, and enumerating further only costs. */
 export const MAX_SOLUTION_FILES = 2_000;
+
+/** A discovered scope, and whether enumeration actually FINISHED.
+ *
+ *  Reported rather than inferred from the count. Having the caller re-derive it
+ *  by comparing length against the same constant means two comparisons that must
+ *  agree forever: flip one to `>=` and the other still reads `>`, and a 2000-file
+ *  prefix of a larger tree gets reviewed as though it were the whole solution —
+ *  an incomplete scope silently passed off as a complete one. */
+export interface ISolutionScope {
+  files: string[];
+  complete: boolean;
+}
 
 /**
  * Score the solution, or refuse to — and an EMPTY scope is refused.
@@ -273,18 +284,19 @@ export const MAX_SOLUTION_FILES = 2_000;
 export async function scoreSolution(
   provider: IProvider,
   runDir: string,
-  files: readonly string[],
+  scope: ISolutionScope,
   goal: string,
   criteria: string
 ): Promise<IJudgeScore> {
-  if (files.length === 0) {
+  const { files } = scope;
+
+  if (scope.files.length === 0) {
     return emptyScopeScore();
   }
 
-  // By COUNT, before any stat: solutionFiles stops enumerating past this, so a
-  // scope matching more than a real solution ever does is refused without the
-  // filesystem work of measuring it.
-  if (files.length > MAX_SOLUTION_FILES) {
+  // Enumeration gave up, so this is a PREFIX of the real scope. Reviewing it
+  // would score a fraction of the solution as though it were all of it.
+  if (!scope.complete) {
     return overBudgetScore();
   }
 
@@ -423,11 +435,11 @@ async function runTaskOnce(
       // measures the whole spec, so scoring quality on task 1 alone judged a
       // different artifact than the one being measured — and on a multi-task
       // spec it silently ignored most of what the model wrote.
-      const files = await solutionFiles(runDir, spec);
+      const scope = await solutionFiles(runDir, spec);
       const score = await scoreSolution(
         opts.judgeProvider,
         runDir,
-        files,
+        scope,
         spec.title,
         specText
       );

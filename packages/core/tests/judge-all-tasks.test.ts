@@ -7,6 +7,7 @@ import {
   guardQuality,
   solutionFitsJudge,
   scoreSolution,
+  MAX_SOLUTION_FILES,
 } from "../src/self-harness";
 import type { IProvider } from "../src/inference";
 import { withinBudget, JUDGE_BUDGET } from "../src/eval";
@@ -36,11 +37,12 @@ describe("solutionFiles", () => {
     const dir = await corpus();
 
     try {
-      const files = await solutionFiles(dir, {
+      const scope = await solutionFiles(dir, {
         tasks: [{ files: ["a.ts"] }, { files: ["src/b.ts"] }],
       });
 
-      expect(files.sort()).toEqual(["a.ts", "src/b.ts"]);
+      expect(scope.files.sort()).toEqual(["a.ts", "src/b.ts"]);
+      expect(scope.complete).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -50,11 +52,11 @@ describe("solutionFiles", () => {
     const dir = await corpus();
 
     try {
-      const files = await solutionFiles(dir, {
+      const scope = await solutionFiles(dir, {
         tasks: [{ files: ["src/**/*.ts"] }],
       });
 
-      expect(files.sort()).toEqual(["src/b.ts", "src/deep/c.ts"]);
+      expect(scope.files.sort()).toEqual(["src/b.ts", "src/deep/c.ts"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -67,11 +69,11 @@ describe("solutionFiles", () => {
     const dir = await corpus();
 
     try {
-      const files = await solutionFiles(dir, {
+      const scope = await solutionFiles(dir, {
         tasks: [{ files: ["src/**/*.ts"] }, { files: ["src/b.ts"] }],
       });
 
-      expect(files.filter((f) => f === "src/b.ts")).toHaveLength(1);
+      expect(scope.files.filter((f) => f === "src/b.ts")).toHaveLength(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -81,9 +83,12 @@ describe("solutionFiles", () => {
     const dir = await corpus();
 
     try {
-      expect(
-        await solutionFiles(dir, { tasks: [{ files: ["nope/*.ts"] }] })
-      ).toEqual([]);
+      const scope = await solutionFiles(dir, {
+        tasks: [{ files: ["nope/*.ts"] }],
+      });
+
+      expect(scope.files).toEqual([]);
+      expect(scope.complete).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -122,6 +127,13 @@ describe("guardQuality", () => {
 
   test("an oversized solution is FLOORED, not skipped", () => {
     expect(guardQuality(score("oversized"))).toBe(1);
+  });
+
+  test("an empty scope is FLOORED — it is the candidate's doing too", () => {
+    // Covered indirectly through scoreSolution, but not in the table itself: a
+    // "simplified" catch-all that mapped empty to undefined would skip the guard
+    // and leave the table green.
+    expect(guardQuality(score("empty"))).toBe(1);
   });
 
   test("an unreachable endpoint stays UNMEASURED", () => {
@@ -217,7 +229,13 @@ describe("scoreSolution — the composed refusal path", () => {
     const dir = await corpus();
 
     try {
-      const score = await scoreSolution(neverCalled, dir, [], "g", "c");
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: [], complete: true },
+        "g",
+        "c"
+      );
 
       // Not "unreachable" and not absent: either would make heldOutGuards treat
       // avgQuality as unsignaled and skip the quality comparison entirely.
@@ -235,7 +253,13 @@ describe("scoreSolution — the composed refusal path", () => {
     const dir = await corpus();
 
     try {
-      const empty = await scoreSolution(neverCalled, dir, [], "g", "c");
+      const empty = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: [], complete: true },
+        "g",
+        "c"
+      );
 
       expect(empty.notes).toContain("no files in scope");
       expect(empty.outcome).not.toBe("oversized");
@@ -250,7 +274,13 @@ describe("scoreSolution — the composed refusal path", () => {
     try {
       await writeFile(join(dir, "big.ts"), "x".repeat(JUDGE_BUDGET.code + 1));
 
-      const score = await scoreSolution(neverCalled, dir, ["big.ts"], "g", "c");
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: ["big.ts"], complete: true },
+        "g",
+        "c"
+      );
 
       expect(score.outcome).toBe("oversized");
       expect(guardQuality(score)).toBe(1);
@@ -281,11 +311,70 @@ describe("scoreSolution — the composed refusal path", () => {
     };
 
     try {
-      const score = await scoreSolution(provider, dir, ["a.ts"], "g", "c");
+      const score = await scoreSolution(
+        provider,
+        dir,
+        { files: ["a.ts"], complete: true },
+        "g",
+        "c"
+      );
 
       expect(called).toBe(1);
       expect(score.outcome).toBe("scored");
       expect(guardQuality(score)).toBe(4);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("an incomplete scope is refused, not reviewed as if it were whole", () => {
+  /**
+   * The coupling that used to be implicit. Enumeration stopping and the caller
+   * refusing were two comparisons against the same constant, and they had to
+   * agree forever: flip one to `>=` while the other reads `>` and a 2000-file
+   * prefix of a larger tree gets reviewed as though it were the entire solution.
+   * `complete` is reported by the enumerator now, so there is nothing to infer.
+   */
+  const neverCalled: IProvider = {
+    complete: () => {
+      throw new Error("an incomplete scope must not reach the judge");
+    },
+  };
+
+  test("enumeration reports itself incomplete at the cap", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-manyfiles-"));
+
+    try {
+      await Promise.all(
+        Array.from({ length: MAX_SOLUTION_FILES + 50 }, (_unused, i) =>
+          writeFile(join(dir, `f${String(i)}.ts`), "export const x = 1;\n")
+        )
+      );
+
+      const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
+
+      expect(scope.complete).toBe(false);
+      expect(scope.files.length).toBeLessThanOrEqual(MAX_SOLUTION_FILES);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("and the caller refuses it at the floor, without reading", async () => {
+    const dir = await corpus();
+
+    try {
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: ["a.ts"], complete: false },
+        "g",
+        "c"
+      );
+
+      expect(score.outcome).toBe("oversized");
+      expect(guardQuality(score)).toBe(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
