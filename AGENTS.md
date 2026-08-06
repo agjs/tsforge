@@ -53,7 +53,8 @@ Remote: https://github.com/agjs/tsforge
   matches nothing fails silently, so `grep` the new text before writing it into
   a commit message. Four commits in one session described fixes that were never
   in the file.
-- **Put logic in `src/`, not `scripts/`.** Tests import from `src/`, so a
-  function parked in a script has no natural place for a test sibling and tends
-  not to get one. The graded score reached the acceptance rule for a week only
-  in theory, because the merge step that dropped it sat in a script.
+- **Scripts orchestrate; `src/` decides.** A file in `scripts/` is an entry
+  point — parse args, call into `src/`, print. Any function it would be a bug to
+  get wrong belongs in `src/`, where a test can import it. The graded score
+  reached the acceptance rule for a week only in theory, because the merge step
+  that dropped it sat in a script.
