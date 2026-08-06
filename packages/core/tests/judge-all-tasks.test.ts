@@ -164,11 +164,19 @@ describe("solutionFitsJudge", () => {
     }
   });
 
-  test("a solution past the code budget does not", async () => {
+  test("a solution FAR past the budget does not", async () => {
+    // The threshold is double the byte cap, not the cap. Disk bytes can
+    // overstate the decoded payload by up to 2x (UTF-16 ASCII is two bytes per
+    // character, one after decoding), so refusing at the cap itself would reject
+    // solutions the judge would have accepted. This check exists to avoid
+    // materialising the hopeless, not to give the verdict.
     const dir = await corpus();
 
     try {
-      await writeFile(join(dir, "big.ts"), "x".repeat(JUDGE_BUDGET.code + 1));
+      await writeFile(
+        join(dir, "big.ts"),
+        "x".repeat(JUDGE_BUDGET.code * 2 + 8)
+      );
 
       expect(solutionFitsJudge(dir, ["big.ts"], "goal", "criteria")).toBe(
         false
@@ -178,15 +186,32 @@ describe("solutionFitsJudge", () => {
     }
   });
 
+  test("a solution just over the cap is READ, then refused by the judge", async () => {
+    // The deliberate consequence: one read of a file that turns out not to fit.
+    // Cheap, and the only way to keep this from ever refusing work the judge
+    // would have scored.
+    const dir = await corpus();
+    const code = "x".repeat(JUDGE_BUDGET.code + 1);
+
+    try {
+      await writeFile(join(dir, "over.ts"), code);
+
+      expect(solutionFitsJudge(dir, ["over.ts"], "", "")).toBe(true);
+      expect(withinBudget({ goal: "", criteria: "", code })).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("files that each fit but together do not are refused", async () => {
     // Summed, not checked one by one — otherwise a solution split across files
     // walks straight past the ceiling.
     const dir = await corpus();
-    const half = Math.floor(JUDGE_BUDGET.code / 2) + 1;
+    const chunk = JUDGE_BUDGET.code + 8;
 
     try {
-      await writeFile(join(dir, "h1.ts"), "x".repeat(half));
-      await writeFile(join(dir, "h2.ts"), "x".repeat(half));
+      await writeFile(join(dir, "h1.ts"), "x".repeat(chunk));
+      await writeFile(join(dir, "h2.ts"), "x".repeat(chunk));
 
       expect(solutionFitsJudge(dir, ["h1.ts"], "goal", "criteria")).toBe(true);
       expect(
@@ -224,6 +249,52 @@ describe("solutionFitsJudge", () => {
     }
   });
 
+  test("a BOM does not make it refuse a file the judge accepts", async () => {
+    // Disk bytes are not the judge's bytes: text() strips the BOM, so a file of
+    // BOM + (cap - 1) ASCII is 2 bytes over on disk and comfortably under once
+    // decoded. Probed AT the boundary, where the earlier invariant test could
+    // not reach — it only used 2000-byte payloads.
+    const dir = await corpus();
+
+    try {
+      await writeFile(
+        join(dir, "bom.ts"),
+        `\ufeff${"x".repeat(JUDGE_BUDGET.code - 1)}`
+      );
+
+      expect(solutionFitsJudge(dir, ["bom.ts"], "", "")).toBe(true);
+      expect(
+        withinBudget({
+          goal: "",
+          criteria: "",
+          code: "x".repeat(JUDGE_BUDGET.code - 1),
+        })
+      ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a UTF-16 file is not refused at half its real budget", async () => {
+    // The larger version of the same mistake: UTF-16 ASCII is two disk bytes per
+    // character and one after decoding, so comparing raw size directly refuses a
+    // solution costing half what the number suggests.
+    const dir = await corpus();
+    const text = "x".repeat(JUDGE_BUDGET.code - 100);
+
+    try {
+      await writeFile(
+        join(dir, "wide.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+
+      expect(solutionFitsJudge(dir, ["wide.ts"], "", "")).toBe(true);
+      expect(withinBudget({ goal: "", criteria: "", code: text })).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a quote-heavy file may pass the pre-read and still be refused", async () => {
     // The permitted direction of disagreement, pinned so nobody "fixes" it into
     // symmetry by making the pre-read guess at escape cost and over-refuse.
@@ -240,18 +311,17 @@ describe("solutionFitsJudge", () => {
     }
   });
 
-  test("it agrees with the judge's own check on the same bytes", async () => {
-    // Same verdict from sizes as from strings for ASCII, where escaping costs
-    // nothing and the two counts coincide.
+  test("it agrees with the judge on something hopeless", async () => {
+    // Where the two do coincide: far enough past the ceiling that no decoding
+    // difference could rescue it, both refuse.
     const dir = await corpus();
-    const code = "x".repeat(JUDGE_BUDGET.code + 1);
+    const code = "x".repeat(JUDGE_BUDGET.code * 2 + 8);
 
     try {
       await writeFile(join(dir, "big.ts"), code);
 
-      expect(solutionFitsJudge(dir, ["big.ts"], "g", "c")).toBe(
-        withinBudget({ goal: "g", criteria: "c", code })
-      );
+      expect(solutionFitsJudge(dir, ["big.ts"], "g", "c")).toBe(false);
+      expect(withinBudget({ goal: "g", criteria: "c", code })).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -260,11 +330,10 @@ describe("solutionFitsJudge", () => {
 
 describe("scoreSolution — the composed refusal path", () => {
   /**
-   * The end-to-end assertion the isolated helpers cannot make. Each piece was
+   * The end-to-end assertions the isolated helpers cannot make. Each piece is
    * covered separately — globbing can return [], oversized floors — while the
    * branch that JOINS them was not, so swapping the empty-scope refusal for a
-   * skip would leave every other test green and hand back the free pass this
-   * round exists to close.
+   * skip would leave every other test green and hand back a free pass.
    */
   const neverCalled: IProvider = {
     complete: () => {

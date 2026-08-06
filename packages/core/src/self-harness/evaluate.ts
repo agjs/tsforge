@@ -334,8 +334,9 @@ const QUALITY_FLOOR = 1;
  * The arithmetic is the judge's own (`sizeWithinBudget`), not a second copy of
  * it. Separators are counted because the join adds them.
  *
- * ONE-SIDED, though, and deliberately. File sizes are raw bytes, while the judge
- * also counts what JSON escaping adds — so this sees a number that is never
+ * ONE-SIDED, though, and deliberately. The judge counts what JSON escaping adds
+ * and this does not, while disk bytes can also OVERSTATE the decoded payload
+ * (see MAX_DECODE_SHRINK) — both adjusted so this side never sees a number
  * larger than the real one. That makes it safe in the direction that matters: it
  * can never refuse something the judge would have accepted. It CAN pass through
  * a solution the judge then refuses (a file of nothing but quotes doubles when
@@ -356,9 +357,21 @@ export function solutionFitsJudge(
   return sizeWithinBudget({
     goal: Buffer.byteLength(goal, "utf8"),
     criteria: Buffer.byteLength(criteria, "utf8"),
-    code,
+    // Divided, because DISK bytes are not the bytes the judge counts. `text()`
+    // strips a BOM and decodes UTF-16, so a file can shrink on the way in: 2
+    // bytes per ASCII character in UTF-16 become 1 in UTF-8, and that is the
+    // worst case — no encoding this reads produces fewer disk bytes than decoded
+    // ones. Comparing raw size directly would refuse a UTF-16 solution at half
+    // the budget it actually costs, which is the false-refusal this check is
+    // built never to make.
+    code: Math.ceil(code / MAX_DECODE_SHRINK),
   });
 }
+
+/** Most a file can shrink between disk and decoded text: UTF-16 ASCII is two
+ *  bytes per character and becomes one in UTF-8. Anything narrower than the
+ *  truth here turns the pre-read into a false refusal. */
+const MAX_DECODE_SHRINK = 2;
 
 /** What `judgeFiles` joins solution files with; counted in the size estimate so
  *  the pre-read check bounds the same string the judge will actually see. */
