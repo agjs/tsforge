@@ -17,6 +17,31 @@ export interface IJudgeScore {
    *  caller must treat this as "no signal" — never as a real 0/5 critique to act
    *  on, or it feeds the generator a nonsense "improve this" instruction. */
   scored: boolean;
+  /**
+   * WHY there is or isn't a score, because the two callers need opposite things
+   * from the same answer.
+   *
+   * `qualityRepair` drives an improvement loop: it must act only on a real
+   * verdict, since "a reviewer scored you 1/5: judge response unusable" is a
+   * critique nothing can be done about, and live the model spiralled on exactly
+   * that. The self-harness acceptance guard is the mirror image: it is SKIPPED
+   * when a side has no score, so "no signal" there is a free pass — and the
+   * judge's prompt contains candidate code, which can ask the model for prose
+   * or an out-of-range number and switch the guard off from inside the artifact
+   * being guarded.
+   *
+   * So: `unusable`, `oversized`, `incomplete` and `empty` are all the
+   * candidate's doing and the guard FLOORS every one of them, while the improvement loop ignores them.
+   * `unreachable` is infrastructure, attributable to nobody, and both ignore it
+   * — it is the only outcome that leaves quality unmeasured.
+   */
+  outcome:
+    | "scored"
+    | "unusable"
+    | "oversized"
+    | "incomplete"
+    | "empty"
+    | "unreachable";
 }
 
 export interface IRunRecord {

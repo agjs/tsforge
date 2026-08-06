@@ -18,8 +18,17 @@ import { runSpec } from "../loop";
 import { runAccept, parserFor } from "../validate";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
-import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
-import type { IRunRecord } from "../eval";
+import {
+  classifyRun,
+  countTaskLoc,
+  judge,
+  overBudgetScore,
+  emptyScopeScore,
+  incompleteScopeScore,
+  sizeWithinBudget,
+  summarize,
+} from "../eval";
+import type { IJudgeScore, IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
 import { meanProgress, runProgress } from "./progress";
@@ -200,6 +209,196 @@ function gateSpec(
   };
 }
 
+/**
+ * Every file the spec's solution lives in, deduped, in first-mention order.
+ *
+ * ALL tasks, not `spec.tasks[0]`. The judge used to read the first task's files
+ * while `countTaskLoc` two lines away measured every task's — so quality and
+ * size described different artifacts, and on a multi-task spec most of what the
+ * model wrote was never looked at.
+ *
+ * GLOBBED, for the same reason. `ITask.files` holds scope patterns, not paths,
+ * so treating `src/**\/*.ts` as a filename either errors on a file that does not
+ * exist or silently reviews nothing — and `countTaskLoc` expands them, so a
+ * literal reading would put quality and size back on different sets by another
+ * route. Deduped because two tasks may legitimately name the same file, and
+ * sending it twice wastes budget and shows the judge a doubled artifact.
+ */
+export async function solutionFiles(
+  cwd: string,
+  spec: { tasks: readonly { files: readonly string[] }[] }
+): Promise<ISolutionScope> {
+  const seen = new Set<string>();
+
+  for (const pattern of spec.tasks.flatMap((t) => t.files)) {
+    for await (const rel of new Bun.Glob(pattern).scan({
+      cwd,
+      onlyFiles: true,
+    })) {
+      seen.add(rel);
+
+      // Stop ENUMERATING, not just reading. The byte budget bounds content, but
+      // discovery ran ahead of it: a scope matching a hundred thousand empty
+      // files costs a hundred thousand directory entries and stats before
+      // anything concludes it was too big.
+      // STRICTLY greater: stopping AT the cap labels a scope of exactly
+      // MAX_SOLUTION_FILES incomplete even though enumeration had finished, and
+      // floors a solution that was perfectly reviewable.
+      if (seen.size > MAX_SOLUTION_FILES) {
+        return { files: [...seen], complete: false };
+      }
+    }
+  }
+
+  return { files: [...seen], complete: true };
+}
+
+/** More files than any real solution has. Past this the scope is not a solution
+ *  scope, and enumerating further only costs. */
+export const MAX_SOLUTION_FILES = 2_000;
+
+/** A discovered scope, and whether enumeration actually FINISHED.
+ *
+ *  Reported rather than inferred from the count. Having the caller re-derive it
+ *  by comparing length against the same constant means two comparisons that must
+ *  agree forever: flip one to `>=` and the other still reads `>`, and a 2000-file
+ *  prefix of a larger tree gets reviewed as though it were the whole solution —
+ *  an incomplete scope silently passed off as a complete one. */
+export interface ISolutionScope {
+  files: string[];
+  complete: boolean;
+}
+
+/**
+ * Score the solution, or refuse to — and an EMPTY scope is refused.
+ *
+ * Judging nothing does not return nothing: the model invents a number for an
+ * empty window, and that number becomes a quality reading for code it never saw.
+ * `qualityRepair` already refuses this case for the same reason.
+ *
+ * It also stopped being self-correcting once files were globbed. A literal
+ * missing path used to throw ENOENT and error the run, which at least blocked
+ * promotion; an unmatched glob quietly expands to nothing. So a candidate
+ * writing outside its declared scope while staying green would skip the quality
+ * and concision comparison altogether.
+ *
+ * Refusing means the FLOOR, not silence — silence skips the guard, which is a
+ * pass.
+ */
+export async function scoreSolution(
+  provider: IProvider,
+  runDir: string,
+  scope: ISolutionScope,
+  goal: string,
+  criteria: string
+): Promise<IJudgeScore> {
+  const { files } = scope;
+
+  if (scope.files.length === 0) {
+    return emptyScopeScore();
+  }
+
+  // Enumeration gave up, so this is a PREFIX of the real scope. Reviewing it
+  // would score a fraction of the solution as though it were all of it.
+  if (!scope.complete) {
+    return incompleteScopeScore();
+  }
+
+  return solutionFitsJudge(runDir, files, goal, criteria)
+    ? judgeFiles(provider, runDir, files, goal, criteria)
+    : overBudgetScore();
+}
+
+/** The quality figure the acceptance guard should see, or undefined for "not
+ *  measured". See the call site for why an unusable answer is a 1 and not a
+ *  skip. */
+export function guardQuality(score: IJudgeScore): number | undefined {
+  if (score.outcome === "scored") {
+    return score.overall;
+  }
+
+  return score.outcome === "unreachable" ? undefined : QUALITY_FLOOR;
+}
+
+/** Bottom of the judge's 1–5 scale. */
+const QUALITY_FLOOR = 1;
+
+/**
+ * Whether the solution is small enough to judge, decided from file SIZES.
+ *
+ * Sized before reading. Reading every file, joining them, and then encoding the
+ * result to count bytes copies the whole artifact twice before concluding it was
+ * too big to look at — so the path the budget exists to bound stayed unbounded
+ * locally, just short of the model call. `Bun.file().size` is a stat.
+ *
+ * The arithmetic is the judge's own (`sizeWithinBudget`), not a second copy of
+ * it. Separators are counted because the join adds them.
+ *
+ * ONE-SIDED, though, and deliberately. The judge counts what JSON escaping adds
+ * and this does not, while disk bytes can also OVERSTATE the decoded payload
+ * (see MAX_DECODE_SHRINK) — both adjusted so this side never sees a number
+ * larger than the real one. That makes it safe in the direction that matters: it
+ * can never refuse something the judge would have accepted. It CAN pass through
+ * a solution the judge then refuses (a file of nothing but quotes doubles when
+ * serialised), which costs one read of a file already known to be under the raw
+ * cap. A conservative skip is an optimisation; a wrong verdict would not be.
+ */
+export function solutionFitsJudge(
+  runDir: string,
+  files: readonly string[],
+  goal: string,
+  criteria: string
+): boolean {
+  const separators = Math.max(0, files.length - 1) * SOLUTION_SEPARATOR.length;
+  const fileCount = files.length;
+  const code =
+    files.reduce((sum, f) => sum + Bun.file(join(runDir, f)).size, 0) +
+    separators;
+
+  return sizeWithinBudget({
+    goal: Buffer.byteLength(goal, "utf8"),
+    criteria: Buffer.byteLength(criteria, "utf8"),
+    // DISK bytes are not the bytes the judge counts: `text()` strips a BOM and
+    // decodes UTF-16, so a file shrinks on the way in. Halved for the UTF-16
+    // ASCII worst case (two bytes per character become one), FLOORED rather than
+    // rounded up, and one byte allowed per file for a stripped BOM.
+    //
+    // The rounding is the whole game. A UTF-16 file of exactly the cap occupies
+    // 2*(n+1) bytes with its BOM, and rounding UP gives n+1 — one over, so the
+    // check refuses a solution the judge accepts at precisely the boundary where
+    // it matters. Under-counting is free here; over-counting floors real work.
+    code: Math.max(
+      0,
+      Math.floor(code / MAX_DECODE_SHRINK) - Math.max(1, fileCount)
+    ),
+  });
+}
+
+/** Most a file can shrink between disk and decoded text: UTF-16 ASCII is two
+ *  bytes per character and becomes one in UTF-8. Anything narrower than the
+ *  truth here turns the pre-read into a false refusal. */
+const MAX_DECODE_SHRINK = 2;
+
+/** What `judgeFiles` joins solution files with; counted in the size estimate so
+ *  the pre-read check bounds the same string the judge will actually see. */
+const SOLUTION_SEPARATOR = "\n\n";
+
+/** Read the solution and score it. Split out so the size check above can refuse
+ *  without this ever running — the point of checking before reading. */
+async function judgeFiles(
+  provider: IProvider,
+  runDir: string,
+  files: readonly string[],
+  goal: string,
+  criteria: string
+): Promise<IJudgeScore> {
+  const code = (
+    await Promise.all(files.map((f) => Bun.file(join(runDir, f)).text()))
+  ).join(SOLUTION_SEPARATOR);
+
+  return judge(provider, { goal, criteria, code });
+}
+
 interface ITaskRunOutput {
   readonly record: IRunRecord;
   readonly run: IMinedRun;
@@ -259,22 +458,29 @@ async function runTaskOnce(
       )
     ).totalLoc;
 
-    const firstTask = spec.tasks[0];
-
-    if (opts.judgeProvider !== undefined && firstTask !== undefined) {
+    if (opts.judgeProvider !== undefined && spec.tasks.length > 0) {
       const specText = await Bun.file(join(runDir, `${taskId}.spec.md`)).text();
-      const code = (
-        await Promise.all(
-          firstTask.files.map((f) => Bun.file(join(runDir, f)).text())
-        )
-      ).join("\n\n");
-      const score = await judge(opts.judgeProvider, {
-        goal: spec.title,
-        criteria: specText,
-        code,
-      });
+      // EVERY task's files, not just the first. `loc` two lines up already
+      // measures the whole spec, so scoring quality on task 1 alone judged a
+      // different artifact than the one being measured — and on a multi-task
+      // spec it silently ignored most of what the model wrote.
+      const scope = await solutionFiles(runDir, spec);
+      const score = await scoreSolution(
+        opts.judgeProvider,
+        runDir,
+        scope,
+        spec.title,
+        specText
+      );
 
-      quality = score.scored ? score.overall : undefined;
+      // The acceptance guard is SKIPPED when a side has no quality figure, so
+      // "no signal" is a pass — and the judge's prompt contains candidate code,
+      // which can ask for prose or an out-of-range number and switch the guard
+      // off from inside the artifact being guarded. Anything the candidate can
+      // provoke is therefore FLOORED, not skipped. Only `unreachable` (a dead
+      // endpoint) stays unmeasured: infrastructure is nobody's doing, and the
+      // mechanical gate is the real oracle regardless.
+      quality = guardQuality(score);
     }
   }
 

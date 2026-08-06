@@ -128,3 +128,86 @@ describe("buildRequestBody: per-call temperature override", () => {
     expect(b.temperature).toBeUndefined();
   });
 });
+
+describe("buildRequestBody: per-call maxTokens", () => {
+  test("a per-call cap reaches the wire", () => {
+    expect(body({}, { maxTokens: 512 }).max_tokens).toBe(512);
+  });
+
+  test("it overrides the config default", () => {
+    expect(body({ maxTokens: 16_384 }, { maxTokens: 512 }).max_tokens).toBe(
+      512
+    );
+  });
+
+  test("without one, the config default still applies", () => {
+    expect(body({ maxTokens: 16_384 }, {}).max_tokens).toBe(16_384);
+  });
+
+  test("a per-call cap beats extraBody, which is merged last", () => {
+    // extraBody is a per-model escape hatch and overriding the profile is its
+    // job — but a per-call cap is a caller saying THIS request must not run
+    // long. A config shipping extraBody.max_tokens would otherwise silently
+    // defeat a side call's ceiling, which is the one bound that has to hold.
+    expect(
+      body({ extraBody: { max_tokens: 99_999 } }, { maxTokens: 512 }).max_tokens
+    ).toBe(512);
+  });
+
+  test("extraBody still wins when the caller passed no cap", () => {
+    expect(body({ extraBody: { max_tokens: 99_999 } }, {}).max_tokens).toBe(
+      99_999
+    );
+  });
+
+  test("a non-finite per-call cap is ignored, not sent as null", () => {
+    // JSON.stringify turns NaN into null, which a server reads as an explicit
+    // choice rather than "unset" — the same trap the config path already
+    // guards.
+    expect(
+      body({ maxTokens: 4096 }, { maxTokens: Number.NaN }).max_tokens
+    ).toBe(4096);
+  });
+});
+
+describe("buildRequestBody: a NESTED per-call cap keeps its siblings", () => {
+  /** A profile whose token cap lives UNDER a parent — the case a spread breaks
+   *  and setPath does not. `params` also carries the effort field, so a clobber
+   *  is observable rather than theoretical. */
+  const nested = {
+    reasoning: { effort: "params.effort", tokenCap: "params.output_limit" },
+    reasoningEffort: "high" as const,
+  };
+
+  test("the cap is written at the nested path", () => {
+    const out = body(nested, { maxTokens: 512 });
+
+    expect(out.params).toMatchObject({ output_limit: 512 });
+  });
+
+  test("writing it does not erase a sibling from the profile", () => {
+    // Spreading a freshly built { params: { output_limit } } over the assembled
+    // body replaces the WHOLE parent, taking the effort field with it.
+    const out = body(nested, { maxTokens: 512 });
+
+    expect(out.params).toMatchObject({ effort: "high", output_limit: 512 });
+  });
+
+  test("nor a sibling that extraBody put there", () => {
+    const out = body(
+      { ...nested, extraBody: { params: { keep_me: "yes" } } },
+      { maxTokens: 512 }
+    );
+
+    expect(out.params).toMatchObject({ keep_me: "yes", output_limit: 512 });
+  });
+
+  test("and it still beats a nested cap extraBody set", () => {
+    const out = body(
+      { ...nested, extraBody: { params: { output_limit: 99_999 } } },
+      { maxTokens: 512 }
+    );
+
+    expect(out.params).toMatchObject({ output_limit: 512 });
+  });
+});

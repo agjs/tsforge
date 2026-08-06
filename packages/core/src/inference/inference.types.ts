@@ -102,6 +102,16 @@ export interface ICompleteOptions {
    * still handle a non-JSON reply.
    */
   responseFormat?: IResponseFormat;
+  /**
+   * Per-call cap on response tokens, overriding the model config's `maxTokens`.
+   *
+   * For side calls that are not the main agent loop — a quality judge, a
+   * classifier — where the config default (generous, sized for whole-file tool
+   * output) is orders of magnitude more than the call can legitimately need. An
+   * unbounded side call is a server that ignored the cap away from spending the
+   * whole context on one reply.
+   */
+  maxTokens?: number;
 }
 
 /** How a reply is constrained. `schema` is an opaque JSON Schema — the shape

@@ -111,7 +111,17 @@ function profileFields(
   // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
   // which a server reads as an explicit choice, not "unset" — fall back to the
   // provider default instead (matches the temperature/repetitionPenalty guard).
-  const configured = cfg.maxTokens;
+  // Per-call first, then config. A side call (judge, classifier) knows its own
+  // ceiling better than the model-wide default, which is sized for whole-file
+  // tool-call output.
+  //
+  // The finiteness check is on the per-call value SPECIFICALLY, not just the
+  // result: `??` does not catch NaN, so a bad per-call value would sail past it
+  // and then fail the check below — discarding the config's perfectly good cap
+  // along with it and falling all the way back to the provider default.
+  const perCall = opts.maxTokens;
+  const configured =
+    perCall !== undefined && Number.isFinite(perCall) ? perCall : cfg.maxTokens;
 
   setPath(
     body,
@@ -324,7 +334,7 @@ export function buildRequestBody(
   // `reasoning_content` replayed (DeepSeek's cloud API 400s without it).
   const includeReasoning = p.replayReasoning === true;
 
-  return {
+  const body: Record<string, unknown> = {
     model: cfg.model,
     messages: messages.map((m) => toWire(m, includeReasoning)),
     ...profileFields(cfg, opts),
@@ -340,6 +350,36 @@ export function buildRequestBody(
       : {}),
     ...(cfg.extraBody ?? {}),
   };
+
+  // Applied to the ASSEMBLED body, after extraBody, and via setPath rather than
+  // a spread. extraBody is a per-model escape hatch and overriding the profile
+  // is its job — but a per-call cap is a caller saying THIS request must not run
+  // long, and a config shipping `extraBody.max_tokens` would silently defeat it.
+  //
+  // setPath, because the cap may live at a NESTED path (`params.output_limit`).
+  // Spreading a freshly-built `{ params: { output_limit } }` over the body would
+  // replace the whole `params` object and erase every sibling the profile and
+  // extraBody had just written there.
+  applyPerCallTokenCap(body, cfg, opts);
+
+  return body;
+}
+
+/** Re-assert the caller's token cap over anything `extraBody` set. No-op unless
+ *  a finite cap was actually passed, so a model's own override still wins by
+ *  default. */
+function applyPerCallTokenCap(
+  body: Record<string, unknown>,
+  cfg: IOpenAICompatibleConfig,
+  opts: ICompleteOptions
+): void {
+  const cap = opts.maxTokens;
+
+  if (cap === undefined || !Number.isFinite(cap)) {
+    return;
+  }
+
+  setPath(body, profile(cfg).tokenCap ?? DEFAULT_TOKEN_CAP, cap);
 }
 
 /** Wire form of {@link IResponseFormat}. Written ahead of `extraBody` so a

@@ -1,0 +1,636 @@
+import { test, expect, describe } from "bun:test";
+import { mkdtemp, rm, mkdir, writeFile, chmod } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  solutionFiles,
+  guardQuality,
+  solutionFitsJudge,
+  scoreSolution,
+  MAX_SOLUTION_FILES,
+} from "../src/self-harness";
+import type { IProvider } from "../src/inference";
+import { withinBudget, JUDGE_BUDGET } from "../src/eval";
+import type { IJudgeScore } from "../src/eval";
+
+/**
+ * Two bugs in one place. The judge read `spec.tasks[0]` only, so on a multi-task
+ * spec it scored the first task's files while `countTaskLoc` beside it measured
+ * EVERY task's — quality and size describing different artifacts. And it read
+ * `files` as literal paths, though they are scope GLOBS, which countTaskLoc
+ * expands: a spec scoped to `src/**` reviewed nothing at all.
+ */
+
+async function corpus(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-solfiles-"));
+
+  await mkdir(join(dir, "src", "deep"), { recursive: true });
+  await writeFile(join(dir, "a.ts"), "export const a = 1;\n");
+  await writeFile(join(dir, "src", "b.ts"), "export const b = 2;\n");
+  await writeFile(join(dir, "src", "deep", "c.ts"), "export const c = 3;\n");
+
+  return dir;
+}
+
+describe("solutionFiles", () => {
+  test("collects EVERY task's files, not just the first", async () => {
+    const dir = await corpus();
+
+    try {
+      const scope = await solutionFiles(dir, {
+        tasks: [{ files: ["a.ts"] }, { files: ["src/b.ts"] }],
+      });
+
+      expect(scope.files.sort()).toEqual(["a.ts", "src/b.ts"]);
+      expect(scope.complete).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("expands globs, because ITask.files holds patterns not paths", async () => {
+    const dir = await corpus();
+
+    try {
+      const scope = await solutionFiles(dir, {
+        tasks: [{ files: ["src/**/*.ts"] }],
+      });
+
+      expect(scope.files.sort()).toEqual(["src/b.ts", "src/deep/c.ts"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("dedupes a file two tasks both match", async () => {
+    // Two tasks may legitimately edit the same file, and overlapping globs make
+    // it likelier. Sending it twice wastes budget and shows the judge a doubled
+    // artifact.
+    const dir = await corpus();
+
+    try {
+      const scope = await solutionFiles(dir, {
+        tasks: [{ files: ["src/**/*.ts"] }, { files: ["src/b.ts"] }],
+      });
+
+      expect(scope.files.filter((f) => f === "src/b.ts")).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a pattern matching nothing contributes nothing, and does not throw", async () => {
+    const dir = await corpus();
+
+    try {
+      const scope = await solutionFiles(dir, {
+        tasks: [{ files: ["nope/*.ts"] }],
+      });
+
+      expect(scope.files).toEqual([]);
+      expect(scope.complete).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("guardQuality", () => {
+  /**
+   * The security decision itself: which judge outcomes the acceptance guard
+   * FLOORS and which it lets through unmeasured. Unmeasured means the guard is
+   * skipped, which is a pass — so anything the candidate could have provoked has
+   * to carry a number.
+   */
+  const score = (
+    outcome: IJudgeScore["outcome"],
+    overall = 4
+  ): IJudgeScore => ({
+    overall,
+    correctness: overall,
+    design: overall,
+    readability: overall,
+    notes: "",
+    scored: outcome === "scored",
+    outcome,
+  });
+
+  test("a real verdict passes its score through", () => {
+    expect(guardQuality(score("scored", 3))).toBe(3);
+  });
+
+  test("an unusable answer is FLOORED, not skipped", () => {
+    // Candidate code is in the judge's prompt and can ask for prose. Returning
+    // undefined here skips the guard entirely — the bypass this exists to close.
+    expect(guardQuality(score("unusable"))).toBe(1);
+  });
+
+  test("an oversized solution is FLOORED, not skipped", () => {
+    expect(guardQuality(score("oversized"))).toBe(1);
+  });
+
+  test("an incomplete enumeration is FLOORED too", () => {
+    expect(guardQuality(score("incomplete"))).toBe(1);
+  });
+
+  test("an empty scope is FLOORED — it is the candidate's doing too", () => {
+    // Covered indirectly through scoreSolution, but not in the table itself: a
+    // "simplified" catch-all that mapped empty to undefined would skip the guard
+    // and leave the table green.
+    expect(guardQuality(score("empty"))).toBe(1);
+  });
+
+  test("an unreachable endpoint stays UNMEASURED", () => {
+    // The line that keeps flooring fair: a dead endpoint is nobody's doing, and
+    // the mechanical gate is the real oracle regardless.
+    expect(guardQuality(score("unreachable"))).toBeUndefined();
+  });
+});
+
+describe("solutionFitsJudge", () => {
+  /**
+   * The pre-read short-circuit: decide from file SIZES, so an artifact too big
+   * to review is never materialised twice just to conclude that. It must use the
+   * JUDGE's own arithmetic — a second threshold drifts, and then either refuses
+   * what the judge accepts or reads what it would refuse.
+   */
+  test("a normal solution fits", async () => {
+    const dir = await corpus();
+
+    try {
+      expect(solutionFitsJudge(dir, ["a.ts"], "goal", "criteria")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a solution FAR past the budget does not", async () => {
+    // The threshold is double the byte cap, not the cap. Disk bytes can
+    // overstate the decoded payload by up to 2x (UTF-16 ASCII is two bytes per
+    // character, one after decoding), so refusing at the cap itself would reject
+    // solutions the judge would have accepted. This check exists to avoid
+    // materialising the hopeless, not to give the verdict.
+    const dir = await corpus();
+
+    try {
+      await writeFile(
+        join(dir, "big.ts"),
+        "x".repeat(JUDGE_BUDGET.code * 2 + 8)
+      );
+
+      expect(solutionFitsJudge(dir, ["big.ts"], "goal", "criteria")).toBe(
+        false
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a solution just over the cap is READ, then refused by the judge", async () => {
+    // The deliberate consequence: one read of a file that turns out not to fit.
+    // Cheap, and the only way to keep this from ever refusing work the judge
+    // would have scored.
+    const dir = await corpus();
+    const code = "x".repeat(JUDGE_BUDGET.code + 1);
+
+    try {
+      await writeFile(join(dir, "over.ts"), code);
+
+      expect(solutionFitsJudge(dir, ["over.ts"], "", "")).toBe(true);
+      expect(withinBudget({ goal: "", criteria: "", code })).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("files that each fit but together do not are refused", async () => {
+    // Summed, not checked one by one — otherwise a solution split across files
+    // walks straight past the ceiling.
+    const dir = await corpus();
+    const chunk = JUDGE_BUDGET.code + 8;
+
+    try {
+      await writeFile(join(dir, "h1.ts"), "x".repeat(chunk));
+      await writeFile(join(dir, "h2.ts"), "x".repeat(chunk));
+
+      expect(solutionFitsJudge(dir, ["h1.ts"], "goal", "criteria")).toBe(true);
+      expect(
+        solutionFitsJudge(dir, ["h1.ts", "h2.ts"], "goal", "criteria")
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("it never refuses what the judge would accept", async () => {
+    // The invariant that matters, and the only one available: file sizes are raw
+    // bytes while the judge also counts JSON escaping, so this side always sees
+    // the smaller number. Being wrong in the other direction — skipping a read
+    // for a solution the judge would have scored — is what would silently floor
+    // real work.
+    const dir = await corpus();
+
+    try {
+      for (const code of [
+        '"'.repeat(2000),
+        "\u0001".repeat(2000),
+        "x".repeat(2000),
+      ]) {
+        await writeFile(join(dir, "probe.ts"), code);
+
+        const fits = solutionFitsJudge(dir, ["probe.ts"], "g", "c");
+        const judged = withinBudget({ goal: "g", criteria: "c", code });
+
+        // fits === false implies judged === false.
+        expect(fits || !judged).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a BOM does not make it refuse a file the judge accepts", async () => {
+    // Disk bytes are not the judge's bytes: text() strips the BOM, so a file of
+    // BOM + (cap - 1) ASCII is 2 bytes over on disk and comfortably under once
+    // decoded. Probed AT the boundary, where the earlier invariant test could
+    // not reach — it only used 2000-byte payloads.
+    const dir = await corpus();
+
+    try {
+      await writeFile(
+        join(dir, "bom.ts"),
+        `\ufeff${"x".repeat(JUDGE_BUDGET.code - 1)}`
+      );
+
+      expect(solutionFitsJudge(dir, ["bom.ts"], "", "")).toBe(true);
+      expect(
+        withinBudget({
+          goal: "",
+          criteria: "",
+          code: "x".repeat(JUDGE_BUDGET.code - 1),
+        })
+      ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a UTF-16 file of EXACTLY the cap is not refused", async () => {
+    // The boundary the earlier tests all missed by using cap-100 or 2000-byte
+    // payloads. n characters in UTF-16 with a BOM occupy 2*(n+1) bytes, so
+    // rounding the halved size UP gives n+1 — one over, refusing at precisely
+    // the point where the judge accepts.
+    const dir = await corpus();
+    const text = "x".repeat(JUDGE_BUDGET.code);
+
+    try {
+      await writeFile(
+        join(dir, "edge.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+
+      expect(withinBudget({ goal: "", criteria: "", code: text })).toBe(true);
+      expect(solutionFitsJudge(dir, ["edge.ts"], "", "")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("two UTF-16 files summing to the cap are not refused either", async () => {
+    // The same off-by-one reached through the join: two BOMs and the separator.
+    const dir = await corpus();
+    // Room for the separator AND its escape cost: the join adds two newlines,
+    // and a newline is two characters once serialised.
+    const half = Math.floor((JUDGE_BUDGET.code - 4) / 2);
+    const text = "x".repeat(half);
+
+    try {
+      await writeFile(
+        join(dir, "a16.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+      await writeFile(
+        join(dir, "b16.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+
+      expect(
+        withinBudget({
+          goal: "",
+          criteria: "",
+          code: `${text}\n\n${text}`,
+        })
+      ).toBe(true);
+      expect(solutionFitsJudge(dir, ["a16.ts", "b16.ts"], "", "")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a UTF-16 file is not refused at half its real budget", async () => {
+    // The larger version of the same mistake: UTF-16 ASCII is two disk bytes per
+    // character and one after decoding, so comparing raw size directly refuses a
+    // solution costing half what the number suggests.
+    const dir = await corpus();
+    const text = "x".repeat(JUDGE_BUDGET.code - 100);
+
+    try {
+      await writeFile(
+        join(dir, "wide.ts"),
+        Buffer.from(`\ufeff${text}`, "utf16le")
+      );
+
+      expect(solutionFitsJudge(dir, ["wide.ts"], "", "")).toBe(true);
+      expect(withinBudget({ goal: "", criteria: "", code: text })).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a quote-heavy file may pass the pre-read and still be refused", async () => {
+    // The permitted direction of disagreement, pinned so nobody "fixes" it into
+    // symmetry by making the pre-read guess at escape cost and over-refuse.
+    const dir = await corpus();
+    const code = '"'.repeat(JUDGE_BUDGET.code - 100);
+
+    try {
+      await writeFile(join(dir, "quotes.ts"), code);
+
+      expect(solutionFitsJudge(dir, ["quotes.ts"], "g", "c")).toBe(true);
+      expect(withinBudget({ goal: "g", criteria: "c", code })).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("it agrees with the judge on something hopeless", async () => {
+    // Where the two do coincide: far enough past the ceiling that no decoding
+    // difference could rescue it, both refuse.
+    const dir = await corpus();
+    const code = "x".repeat(JUDGE_BUDGET.code * 2 + 8);
+
+    try {
+      await writeFile(join(dir, "big.ts"), code);
+
+      expect(solutionFitsJudge(dir, ["big.ts"], "g", "c")).toBe(false);
+      expect(withinBudget({ goal: "g", criteria: "c", code })).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scoreSolution — the composed refusal path", () => {
+  /**
+   * The end-to-end assertions the isolated helpers cannot make. Each piece is
+   * covered separately — globbing can return [], oversized floors — while the
+   * branch that JOINS them was not, so swapping the empty-scope refusal for a
+   * skip would leave every other test green and hand back a free pass.
+   */
+  const neverCalled: IProvider = {
+    complete: () => {
+      throw new Error("the judge must not be called with an empty scope");
+    },
+  };
+
+  test("an empty scope is refused with a FLOOR the guard can read", async () => {
+    const dir = await corpus();
+
+    try {
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: [], complete: true },
+        "g",
+        "c"
+      );
+
+      // Not "unreachable" and not absent: either would make heldOutGuards treat
+      // avgQuality as unsignaled and skip the quality comparison entirely.
+      expect(score.outcome).toBe("empty");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty scope is a DIFFERENT refusal from oversized", async () => {
+    // Nothing is over budget here; there is no artifact at all. Reusing the
+    // oversized value works only because guardQuality floors every
+    // candidate-side outcome — a trap for the next edit.
+    const dir = await corpus();
+
+    try {
+      const empty = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: [], complete: true },
+        "g",
+        "c"
+      );
+
+      expect(empty.notes).toContain("no files in scope");
+      expect(empty.outcome).not.toBe("oversized");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an oversized solution never reaches the judge", async () => {
+    // FAR past the cap, not one byte over. The pre-read threshold is double the
+    // budget (disk bytes can overstate the decoded payload), so a cap+1 fixture
+    // sails through the short-circuit, gets read, and is refused by judge()
+    // before it calls the provider — leaving the stub quiet and the assertion
+    // green even with the short-circuit deleted. The same under-boundary fixture
+    // that let two earlier rounds ship a false claim.
+    const dir = await corpus();
+
+    try {
+      await writeFile(
+        join(dir, "big.ts"),
+        "x".repeat(JUDGE_BUDGET.code * 2 + 16)
+      );
+
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: ["big.ts"], complete: true },
+        "g",
+        "c"
+      );
+
+      expect(score.outcome).toBe("oversized");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("it is refused from SIZES — the file is never read", async () => {
+    // Proving the short-circuit, not just its outcome. Deleting it leaves the
+    // verdict identical, because judge() refuses the same file after reading it
+    // — so the only observable difference is whether the read happened. An
+    // unreadable file makes that observable: with the short-circuit, sizes are
+    // enough and nothing throws.
+    const dir = await corpus();
+    const path = join(dir, "locked.ts");
+
+    try {
+      await writeFile(path, "x".repeat(JUDGE_BUDGET.code * 2 + 16));
+      await chmod(path, 0o000);
+
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: ["locked.ts"], complete: true },
+        "g",
+        "c"
+      );
+
+      expect(score.outcome).toBe("oversized");
+    } finally {
+      await chmod(path, 0o600).catch(() => undefined);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a normal solution DOES reach the judge", async () => {
+    // The other half: refusing everything would also pass the assertions above.
+    const dir = await corpus();
+    let called = 0;
+    const provider: IProvider = {
+      complete: () => {
+        called += 1;
+
+        return Promise.resolve({
+          content: JSON.stringify({
+            overall: 4,
+            correctness: 4,
+            design: 4,
+            readability: 4,
+            notes: "ok",
+          }),
+          toolCalls: [],
+        });
+      },
+    };
+
+    try {
+      const score = await scoreSolution(
+        provider,
+        dir,
+        { files: ["a.ts"], complete: true },
+        "g",
+        "c"
+      );
+
+      expect(called).toBe(1);
+      expect(score.outcome).toBe("scored");
+      expect(guardQuality(score)).toBe(4);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("an incomplete scope is refused, not reviewed as if it were whole", () => {
+  /**
+   * The coupling that used to be implicit. Enumeration stopping and the caller
+   * refusing were two comparisons against the same constant, and they had to
+   * agree forever: flip one to `>=` while the other reads `>` and a 2000-file
+   * prefix of a larger tree gets reviewed as though it were the entire solution.
+   * `complete` is reported by the enumerator now, so there is nothing to infer.
+   */
+  const neverCalled: IProvider = {
+    complete: () => {
+      throw new Error("an incomplete scope must not reach the judge");
+    },
+  };
+
+  test("enumeration reports itself incomplete at the cap", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-manyfiles-"));
+
+    try {
+      await Promise.all(
+        Array.from({ length: MAX_SOLUTION_FILES + 50 }, (_unused, i) =>
+          writeFile(join(dir, `f${String(i)}.ts`), "export const x = 1;\n")
+        )
+      );
+
+      const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
+
+      expect(scope.complete).toBe(false);
+      // One PAST the cap: enumeration stops on the file that proves the scope is
+      // too big, which is also what keeps a scope of exactly MAX_SOLUTION_FILES
+      // from being called incomplete.
+      expect(scope.files.length).toBe(MAX_SOLUTION_FILES + 1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("a scope of EXACTLY the cap is complete, not floored", async () => {
+    // The off-by-one in the other direction: stopping at the cap rather than
+    // past it labels a finished enumeration incomplete and floors a solution
+    // that was perfectly reviewable.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-exactcap-"));
+
+    try {
+      await Promise.all(
+        Array.from({ length: MAX_SOLUTION_FILES }, (_unused, i) =>
+          writeFile(join(dir, `f${String(i)}.ts`), "export const x = 1;\n")
+        )
+      );
+
+      const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
+
+      expect(scope.files).toHaveLength(MAX_SOLUTION_FILES);
+      expect(scope.complete).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("and the caller refuses it at the floor, without reading", async () => {
+    const dir = await corpus();
+
+    try {
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: ["a.ts"], complete: false },
+        "g",
+        "c"
+      );
+
+      expect(score.outcome).toBe("incomplete");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("end to end: too many files means a floor, and no judge call", async () => {
+    // The composed path. One test proved enumeration reports complete:false at
+    // the cap and another proved a hand-built incomplete scope is refused, but
+    // nothing joined them — so a regression dropping `complete` through the real
+    // call path would slip between the two halves.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-manyfiles-e2e-"));
+
+    try {
+      await Promise.all(
+        Array.from({ length: MAX_SOLUTION_FILES + 25 }, (_unused, i) =>
+          writeFile(join(dir, `f${String(i)}.ts`), "export const x = 1;\n")
+        )
+      );
+
+      const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
+      const score = await scoreSolution(neverCalled, dir, scope, "g", "c");
+
+      expect(score.outcome).toBe("incomplete");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+});
