@@ -1,4 +1,7 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolvePanel } from "../src/reviewers/registry";
 import {
   parseModelsConfig,
@@ -470,6 +473,31 @@ describe("identity is by HOSTNAME, deliberately coarse", () => {
 });
 
 describe("saving cannot emit a poisoned key either", () => {
+  /**
+   * SANDBOXED. `saveModelsConfig` writes to `$TSFORGE_HOME/.tsforge` and falls
+   * back to the real home when that is unset — so an earlier version of this
+   * test overwrote the developer's own models.json during a mutation run, when
+   * the guard was removed and the write went through. A test that reaches the
+   * machine it runs on is a bug regardless of what it asserts.
+   */
+  let home: string;
+  const savedHome = process.env.TSFORGE_HOME;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "tsforge-save-guard-"));
+    process.env.TSFORGE_HOME = home;
+  });
+
+  afterEach(async () => {
+    if (savedHome === undefined) {
+      delete process.env.TSFORGE_HOME;
+    } else {
+      process.env.TSFORGE_HOME = savedHome;
+    }
+
+    await rm(home, { recursive: true, force: true });
+  });
+
   test("a hand-built config with a __proto__ model is refused at save", async () => {
     // The refusal exists so the name never reaches models.json, which other
     // tools parse — so it has to sit on the WRITE path too, not only the parse
