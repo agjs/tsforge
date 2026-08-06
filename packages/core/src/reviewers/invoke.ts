@@ -118,18 +118,22 @@ async function invokeBinary(
     // there would count a reviewer we killed mid-sentence as having reviewed.
     // Whatever it printed before the kill is a partial answer, and a partial
     // answer is not a review.
-    // Truncation is checked FIRST. Both flags can be true — a reviewer that
-    // floods and then keeps running is killed for the flood, and a budget timer
-    // may fire around the same moment — and reporting that as a timeout sends
-    // the operator to raise a budget that was never the problem. The stdout was.
-    if (res.truncated) {
+    // ORDER MATTERS, and only a FLOOD outranks a timeout.
+    //
+    // A flood is its own finding: we killed the reviewer for it, so a budget
+    // timer firing afterwards describes our own kill, and calling that a timeout
+    // sends the operator to raise a limit that was never the problem.
+    //
+    // A deadline stop is the opposite. The common shape is a reviewer killed at
+    // its budget whose background child still holds the pipe — both flags true,
+    // but the TIMEOUT is why it died and the open pipe is a consequence.
+    // Reporting truncation there would hide the real cause on the exact path
+    // runBinary's own comments describe as normal for an agentic reviewer.
+    if (res.truncated && res.stoppedBy === "size") {
       return {
         status: "errored",
         reviewerId: reviewer.id,
-        error:
-          res.stoppedBy === "size"
-            ? "reviewer flooded stdout past the ceiling"
-            : "reviewer output was still open when the read gave up",
+        error: "reviewer flooded stdout past the ceiling",
         cause: "truncated",
         ms: Date.now() - started,
       };
@@ -141,6 +145,16 @@ async function invokeBinary(
         reviewerId: reviewer.id,
         error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
         cause: "timeout",
+        ms: Date.now() - started,
+      };
+    }
+
+    if (res.truncated) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "reviewer output was still open when the read gave up",
+        cause: "truncated",
         ms: Date.now() - started,
       };
     }

@@ -323,13 +323,16 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("")),
       }),
+      // A real production combination: the ceiling was hit, so the read stopped
+      // on `size`. The previous fixture said truncated with stoppedBy "eof",
+      // which runBinary can never produce — so it exercised neither real case.
       runBinary: () =>
         Promise.resolve({
           ok: true,
           stdout: GOOD_DIAGNOSIS,
           timedOut: false,
           truncated: true,
-          stoppedBy: "eof" as const,
+          stoppedBy: "size" as const,
         }),
     };
 
@@ -338,7 +341,48 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     expect(outcome?.status).toBe("errored");
 
     if (outcome?.status === "errored") {
-      expect(outcome.error).toContain("truncated");
+      expect(outcome.error).toContain("flooded");
+    }
+  });
+
+  test("a timed-out diagnosis with an orphaned pipe reports the TIMEOUT", async () => {
+    // Both flags true with a deadline stop is a binary killed at its budget
+    // whose child still holds stdout. The timeout is why it died; reporting
+    // truncation hides that on the path that happens most.
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 8888,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      runBinary: () =>
+        Promise.resolve({
+          ok: false,
+          stdout: "partial",
+          timedOut: true,
+          truncated: true,
+          stoppedBy: "deadline" as const,
+        }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+
+    if (outcome?.status === "errored") {
+      expect(outcome.error).toContain("8888");
     }
   });
 

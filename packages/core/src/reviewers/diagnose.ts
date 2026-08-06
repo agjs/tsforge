@@ -80,14 +80,15 @@ async function invokeBinary(
     // report `ok: true, timedOut: true`, and parsing stdout there counts a
     // diagnosis we cut off mid-sentence as a real vote. A partial answer is not
     // a diagnosis any more than it is a review.
-    // Truncation first, same as the review path: both flags can be true when a
-    // reviewer floods and keeps running, and calling that a timeout points at
-    // the wrong cause.
-    if (res.truncated) {
+    // Same order and same reasoning as the review path: only a FLOOD outranks a
+    // timeout, because we killed the reviewer for it. A deadline stop alongside
+    // a timeout is a reviewer killed at its budget whose child still holds the
+    // pipe — the timeout is why it died.
+    if (res.truncated && res.stoppedBy === "size") {
       return {
         status: "errored",
         reviewerId: reviewer.id,
-        error: "diagnosis output was truncated before it finished",
+        error: "diagnosis flooded stdout past the ceiling",
       };
     }
 
@@ -96,6 +97,14 @@ async function invokeBinary(
         status: "errored",
         reviewerId: reviewer.id,
         error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
+      };
+    }
+
+    if (res.truncated) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "diagnosis output was still open when the read gave up",
       };
     }
 

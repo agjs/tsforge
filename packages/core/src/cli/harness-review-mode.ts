@@ -161,6 +161,9 @@ export interface IBinaryRun {
 /** Mutable read state, held in an object so a closure can flip it. */
 interface IReadState {
   expired: boolean;
+  /** Set once the read has finished and cleaned up, so a late deadline callback
+   *  does not arm a timer with nobody left to clear it. */
+  done: boolean;
   stoppedBy: IBoundedRead["stoppedBy"];
 }
 
@@ -206,7 +209,7 @@ async function readBounded(
 ): Promise<IBoundedRead> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  const state: IReadState = { expired: false, stoppedBy: "eof" };
+  const state: IReadState = { expired: false, done: false, stoppedBy: "eof" };
   let bytes = 0;
   let text = "";
 
@@ -217,6 +220,17 @@ async function readBounded(
   const deadline = gone.then(
     () =>
       new Promise<void>((resolve) => {
+        // The read can finish before the process does — EOF on a reviewer that
+        // is still shutting down — and this callback then runs AFTER cleanup,
+        // arming a timer nothing will ever clear and holding the event loop open
+        // past every healthy run. That is the uncancellable tail all over again,
+        // just reached from the other side.
+        if (state.done) {
+          resolve();
+
+          return;
+        }
+
         graceTimer = setTimeout(() => {
           state.expired = true;
           resolve();
@@ -263,6 +277,7 @@ async function readBounded(
       text += decoder.decode(next.value, { stream: true });
     }
   } finally {
+    state.done = true;
     clearTimeout(graceTimer);
     await reader.cancel().catch(() => undefined);
   }
@@ -272,6 +287,52 @@ async function readBounded(
     stoppedBy: state.stoppedBy,
     truncated: state.stoppedBy !== "eof",
   };
+}
+
+/** Direct children of a pid, via pgrep. Empty when pgrep is missing or the
+ *  process has none. */
+async function childrenOf(pid: number): Promise<number[]> {
+  try {
+    const proc = Bun.spawn(["pgrep", "-P", String(pid)], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const out = await new Response(proc.stdout).text();
+
+    await proc.exited;
+
+    return out
+      .split("\n")
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((n) => Number.isInteger(n) && n > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Kill a process and everything below it, children first.
+ *
+ * WHILE THE PARENT IS STILL ALIVE. Once it exits, its children are re-parented
+ * to init and `pgrep -P` finds nothing — so reaping after waiting on the parent
+ * looks like it works and silently leaves every orphan running. That is what a
+ * first attempt at this did.
+ *
+ * Bun.spawn cannot put a child in its own process group, and killing the group
+ * we SHARE would take the harness down with it, so walking the tree is what is
+ * left. Best effort by construction: pgrep may be absent, and a process may exit
+ * between listing and killing. Both are fine — this only ever adds cleanup.
+ */
+async function killTree(pid: number, signal: number): Promise<void> {
+  for (const child of await childrenOf(pid)) {
+    await killTree(child, signal);
+  }
+
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Already gone.
+  }
 }
 
 export async function runBinary(
@@ -310,7 +371,9 @@ export async function runBinary(
   const kill = { timedOut: false };
   const timer = setTimeout(() => {
     kill.timedOut = true;
-    proc.kill();
+    // The tree, not just the reviewer — and now, while it is still alive to be
+    // walked.
+    void killTree(proc.pid, 15);
     // SIGTERM is a request. A reviewer that ignores it — or installs a handler
     // and takes its time — would otherwise keep the whole panel blocked past a
     // budget that exists precisely to stop that. SIGKILL is not refusable.
@@ -322,7 +385,7 @@ export async function runBinary(
     // a worse failure than a stray `sleep`. The drain bound above is what stops
     // an orphan holding the panel.
     killHard = setTimeout(() => {
-      proc.kill(9);
+      void killTree(proc.pid, 9);
     }, KILL_GRACE_MS);
   }, r.timeoutMs);
   let killHard: ReturnType<typeof setTimeout> | undefined;
@@ -349,9 +412,9 @@ export async function runBinary(
     // hit there is nothing left to wait for.
     if (read.stoppedBy === "size") {
       clearTimeout(timer);
-      proc.kill();
+      await killTree(proc.pid, 15);
       killHard = setTimeout(() => {
-        proc.kill(9);
+        void killTree(proc.pid, 9);
       }, KILL_GRACE_MS);
     }
 
@@ -487,8 +550,20 @@ function oneLine(value: string): string {
   for (const ch of value) {
     const code = ch.codePointAt(0) ?? 0;
     // C0 (newline and ESC among them), DEL, and C1.
+    // C0 (newline and ESC among them), DEL, C1 — plus the Unicode line/paragraph
+    // separators, which a terminal breaks on exactly like a newline, and the
+    // bidi overrides, which can visually reorder a line into something it does
+    // not say.
     const control =
-      code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+      code < 0x20 ||
+      code === 0x7f ||
+      (code >= 0x80 && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      (code >= 0x202a && code <= 0x202e) ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x2066 && code <= 0x2069);
 
     out += control ? " " : ch;
   }
@@ -507,7 +582,9 @@ const MAX_FAILURE_TEXT = 300;
 export function formatVerdict(v: IVerdict): string {
   const head = v.blocked ? "BLOCK" : "PASS";
   const lines = [
-    `harness-review: ${head} — ${v.reason}`,
+    // The reason can be derived straight from a reviewer-controlled finding, so
+    // it is no more ours than the failure text below it.
+    `harness-review: ${head} — ${oneLine(v.reason)}`,
     `reviewers ok: ${String(v.reviewers.ok)}  errored: ${String(v.reviewers.errored)}  (builder: ${v.identity})`,
   ];
 
@@ -539,7 +616,7 @@ export function formatVerdict(v: IVerdict): string {
 
   for (const f of v.ranked) {
     lines.push(
-      `  [${f.severity}/${f.findingCode}] ${f.file ?? "?"} — ${f.issue} (agreement ${String(f.agreement)})`
+      `  [${f.severity}/${f.findingCode}] ${oneLine(f.file ?? "?")} — ${oneLine(f.issue)} (agreement ${String(f.agreement)})`
     );
   }
 
