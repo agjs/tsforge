@@ -149,6 +149,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     };
 
@@ -183,6 +184,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     };
 
@@ -209,6 +211,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     };
 
@@ -242,6 +245,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     };
 
@@ -281,6 +285,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: GOOD_DIAGNOSIS,
           timedOut: true,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     };
 
@@ -324,6 +329,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: GOOD_DIAGNOSIS,
           timedOut: false,
           truncated: true,
+          stoppedBy: "eof" as const,
         }),
     };
 
@@ -361,6 +367,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           stdout: GOOD_DIAGNOSIS,
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     };
 

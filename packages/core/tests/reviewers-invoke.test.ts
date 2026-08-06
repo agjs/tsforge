@@ -34,6 +34,7 @@ describe("reviewerInvoke", () => {
         stdout: "",
         timedOut: false,
         truncated: false,
+        stoppedBy: "eof" as const,
       }),
     };
     const out = await reviewerInvoke(
@@ -65,6 +66,7 @@ describe("reviewerInvoke", () => {
         stdout: "",
         timedOut: false,
         truncated: false,
+        stoppedBy: "eof" as const,
       }),
     };
     const out = await reviewerInvoke(
@@ -106,6 +108,7 @@ describe("reviewerInvoke", () => {
         stdout: "",
         timedOut: false,
         truncated: false,
+        stoppedBy: "eof" as const,
       }),
     };
     const out = await reviewerInvoke(
@@ -131,6 +134,7 @@ describe("reviewerInvoke", () => {
         stdout: fenced,
         timedOut: false,
         truncated: false,
+        stoppedBy: "eof" as const,
       }),
     };
     const out = await reviewerInvoke(
@@ -167,6 +171,7 @@ describe("reviewerInvoke", () => {
         stdout: "",
         timedOut: false,
         truncated: false,
+        stoppedBy: "eof" as const,
       }),
     };
     const out = await reviewerInvoke(
@@ -200,6 +205,7 @@ describe("reviewerInvoke", () => {
           stdout: '{"verdict":"approve","summary":"","findings":[]}',
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         };
       },
     };

@@ -433,6 +433,7 @@ describe("reviewRequest (success path: invoke the panel on a gathered request â†
         stdout: "",
         timedOut: false,
         truncated: false,
+        stoppedBy: "eof" as const,
       }),
       panel,
       identity: "local/flash",

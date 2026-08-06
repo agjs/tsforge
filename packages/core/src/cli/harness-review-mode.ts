@@ -145,6 +145,19 @@ const POST_EXIT_DRAIN_MS = 2_000;
  */
 export const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
+/** What running a reviewer binary produced. */
+export interface IBinaryRun {
+  ok: boolean;
+  stdout: string;
+  timedOut: boolean;
+  truncated: boolean;
+  /** WHY the read ended, forwarded rather than collapsed. `truncated` alone
+   *  cannot tell a flood from a pipe still open after the process went, and the
+   *  two point at different problems — so a caller reporting the failure needs
+   *  the distinction that readBounded already computed. */
+  stoppedBy: IBoundedRead["stoppedBy"];
+}
+
 /** Mutable read state, held in an object so a closure can flip it. */
 interface IReadState {
   expired: boolean;
@@ -197,11 +210,19 @@ async function readBounded(
   let bytes = 0;
   let text = "";
 
-  const deadline = gone
-    .then(() => Bun.sleep(POST_EXIT_DRAIN_MS))
-    .then(() => {
-      state.expired = true;
-    });
+  // A clearable timer, not Bun.sleep: an un-cancellable sleep starts on EVERY
+  // run the moment the process exits and keeps the event loop alive for its full
+  // grace, healthy reviewers included.
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = gone.then(
+    () =>
+      new Promise<void>((resolve) => {
+        graceTimer = setTimeout(() => {
+          state.expired = true;
+          resolve();
+        }, POST_EXIT_DRAIN_MS);
+      })
+  );
 
   try {
     for (;;) {
@@ -242,6 +263,7 @@ async function readBounded(
       text += decoder.decode(next.value, { stream: true });
     }
   } finally {
+    clearTimeout(graceTimer);
     await reader.cancel().catch(() => undefined);
   }
 
@@ -255,12 +277,7 @@ async function readBounded(
 export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
-): Promise<{
-  ok: boolean;
-  stdout: string;
-  timedOut: boolean;
-  truncated: boolean;
-}> {
+): Promise<IBinaryRun> {
   const tmpPath =
     r.input === "tempfile"
       ? join(tmpdir(), `tsforge-review-${randomUUID()}.txt`)
@@ -324,13 +341,30 @@ export async function runBinary(
       return code;
     });
     const read = await readBounded(proc.stdout, exited);
+
+    // A reviewer that floods and KEEPS RUNNING would otherwise hold the panel
+    // until its full budget — we stopped reading, but nothing stopped it — and
+    // the budget timer would then fire, so a runaway stdout got reported as a
+    // timeout and pointed the operator at the wrong knob. Once the ceiling is
+    // hit there is nothing left to wait for.
+    if (read.stoppedBy === "size") {
+      clearTimeout(timer);
+      proc.kill();
+      killHard = setTimeout(() => {
+        proc.kill(9);
+      }, KILL_GRACE_MS);
+    }
+
     const code = await exited;
 
     return {
       ok: code === 0 && !kill.timedOut && !read.truncated,
       stdout: read.text,
-      timedOut: kill.timedOut,
+      // A size stop kills the process itself, so a budget timer that fires
+      // afterwards is describing our own kill, not an over-budget reviewer.
+      timedOut: kill.timedOut && read.stoppedBy !== "size",
       truncated: read.truncated,
+      stoppedBy: read.stoppedBy,
     };
   } finally {
     clearTimeout(timer);
@@ -435,6 +469,41 @@ export async function persistVerdict(
   }
 }
 
+/**
+ * Flatten untrusted text to a single printable line.
+ *
+ * Reviewer ids and error strings reach the terminal verbatim, and neither is
+ * ours: an error message can carry a remote provider's response body, and a
+ * cached verdict is read back off disk. An embedded newline forges an extra
+ * verdict line — `! x did not review` followed by a fabricated `harness-review:
+ * PASS` — and an escape sequence can rewrite what a CI log appears to say.
+ * Neither belongs in a summary someone reads to decide whether to merge.
+ */
+function oneLine(value: string): string {
+  let out = "";
+
+  // A code-point walk: a control-character regex is disallowed here, and
+  // spread/split on a string mishandles astral characters.
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    // C0 (newline and ESC among them), DEL, and C1.
+    const control =
+      code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+
+    out += control ? " " : ch;
+  }
+
+  const flattened = out.trim();
+
+  return flattened.length > MAX_FAILURE_TEXT
+    ? `${flattened.slice(0, MAX_FAILURE_TEXT)}…`
+    : flattened;
+}
+
+/** Enough for a real message, short of letting a reviewer paste a novel into the
+ *  summary. */
+const MAX_FAILURE_TEXT = 300;
+
 export function formatVerdict(v: IVerdict): string {
   const head = v.blocked ? "BLOCK" : "PASS";
   const lines = [
@@ -452,7 +521,7 @@ export function formatVerdict(v: IVerdict): string {
       f.ms === undefined ? "" : ` after ${(f.ms / 1000).toFixed(1)}s`;
 
     lines.push(
-      `  ! ${f.reviewerId} did not review (${f.cause ?? "error"})${took}: ${f.error}`
+      `  ! ${oneLine(f.reviewerId)} did not review (${f.cause ?? "error"})${took}: ${oneLine(f.error)}`
     );
   }
 

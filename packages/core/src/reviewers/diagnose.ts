@@ -80,22 +80,22 @@ async function invokeBinary(
     // report `ok: true, timedOut: true`, and parsing stdout there counts a
     // diagnosis we cut off mid-sentence as a real vote. A partial answer is not
     // a diagnosis any more than it is a review.
-    if (res.timedOut) {
-      return {
-        status: "errored",
-        reviewerId: reviewer.id,
-        error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
-      };
-    }
-
-    // Truncation, checked before ok — same order and same reason as the review
-    // path. A prefix is not a finished answer, and reporting it as "exited
-    // non-zero" blames the binary for something the harness did.
+    // Truncation first, same as the review path: both flags can be true when a
+    // reviewer floods and keeps running, and calling that a timeout points at
+    // the wrong cause.
     if (res.truncated) {
       return {
         status: "errored",
         reviewerId: reviewer.id,
         error: "diagnosis output was truncated before it finished",
+      };
+    }
+
+    if (res.timedOut) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
       };
     }
 

@@ -29,6 +29,9 @@ export interface IInvokeDeps {
     /** True when the read stopped early, so `stdout` is a PREFIX. Distinct from
      *  a bad answer: the reviewer may have been perfectly fine. */
     truncated: boolean;
+    /** Why it stopped — a flood and a pipe left open point at different
+     *  problems, and a boolean cannot say which. */
+    stoppedBy: "eof" | "size" | "deadline";
   }>;
 }
 
@@ -115,6 +118,23 @@ async function invokeBinary(
     // there would count a reviewer we killed mid-sentence as having reviewed.
     // Whatever it printed before the kill is a partial answer, and a partial
     // answer is not a review.
+    // Truncation is checked FIRST. Both flags can be true — a reviewer that
+    // floods and then keeps running is killed for the flood, and a budget timer
+    // may fire around the same moment — and reporting that as a timeout sends
+    // the operator to raise a budget that was never the problem. The stdout was.
+    if (res.truncated) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error:
+          res.stoppedBy === "size"
+            ? "reviewer flooded stdout past the ceiling"
+            : "reviewer output was still open when the read gave up",
+        cause: "truncated",
+        ms: Date.now() - started,
+      };
+    }
+
     if (res.timedOut) {
       return {
         status: "errored",
@@ -130,19 +150,6 @@ async function invokeBinary(
     // it, or drop the reviewer. A non-zero exit means the binary is broken and
     // the budget is irrelevant. Told apart, the fix is obvious; conflated, the
     // only way to find out is to time the binary by hand.
-    // Truncation is OURS, not the reviewer's. Handing the prefix on as though it
-    // were the whole answer makes a cut-off review look malformed, which sends
-    // the next person to debug the reviewer instead of the read bound.
-    if (res.truncated) {
-      return {
-        status: "errored",
-        reviewerId: reviewer.id,
-        error: "reviewer output was truncated before it finished",
-        cause: "truncated",
-        ms: Date.now() - started,
-      };
-    }
-
     if (!res.ok) {
       return {
         status: "errored",

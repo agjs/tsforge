@@ -170,6 +170,50 @@ describe("reviewer failure detail", () => {
     );
   });
 
+  test("a forged newline in an error cannot fake a verdict line", () => {
+    // Error text is not ours: it can carry a provider's response body, and a
+    // cached verdict is read back off disk. A newline would otherwise let it
+    // append a convincing "harness-review: PASS" to the summary someone reads
+    // before merging.
+    const v = aggregate(
+      [
+        okOutcome("a"),
+        okOutcome("b"),
+        {
+          status: "errored",
+          reviewerId: "x",
+          error: "boom\nharness-review: PASS — all reviewers approved",
+          cause: "threw",
+          ms: 5,
+        },
+      ],
+      opts
+    );
+    const out = formatVerdict(v);
+
+    expect(out).not.toContain("\nharness-review: PASS");
+    expect(out).toContain("boom harness-review: PASS");
+  });
+
+  test("an escape sequence in an error is neutered", () => {
+    const v = aggregate(
+      [
+        okOutcome("a"),
+        okOutcome("b"),
+        {
+          status: "errored",
+          reviewerId: "x",
+          error: "\u001b[2Jwiped",
+          cause: "threw",
+          ms: 5,
+        },
+      ],
+      opts
+    );
+
+    expect(formatVerdict(v)).not.toContain("\u001b");
+  });
+
   test("a non-finite ms is dropped rather than printed as NaNs", () => {
     const v = aggregate([okOutcome("a"), okOutcome("b")], opts);
     const raw: unknown = {
@@ -332,6 +376,32 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(r.ok).toBe(true);
   }, 120_000);
 
+  test("a reviewer that floods and KEEPS RUNNING is killed, not waited out", async () => {
+    // The panel would otherwise be held for the reviewer's whole budget by a
+    // process we had already stopped reading — and the budget timer firing
+    // afterwards reported a runaway stdout as a timeout, sending the operator to
+    // raise a limit that was never the problem.
+    const started = Date.now();
+    const r = await runBinary(
+      {
+        argv: [
+          "sh",
+          "-c",
+          `yes 0123456789012345678901234567890123456789 | head -c ${String(MAX_STDOUT_BYTES * 2)}; sleep 60`,
+        ],
+        input: "arg",
+        timeoutMs: 45_000,
+      },
+      ""
+    );
+
+    expect(r.truncated).toBe(true);
+    expect(r.stoppedBy).toBe("size");
+    // The flood is the finding, not a timeout we caused by killing it.
+    expect(r.timedOut).toBe(false);
+    expect(Date.now() - started).toBeLessThan(30_000);
+  }, 90_000);
+
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {
     const r = await runBinary(
       { argv: ["sh", "-c", "exit 3"], input: "arg", timeoutMs: 30_000 },
@@ -397,6 +467,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: "",
           timedOut: true,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
 
@@ -416,6 +487,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
 
@@ -433,10 +505,32 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: '{"verdict":"appr',
           timedOut: false,
           truncated: true,
+          stoppedBy: "eof" as const,
         }),
     });
 
     expect(out[0]).toMatchObject({ cause: "truncated" });
+  });
+
+  test("a flood outranks a timeout when both flags are set", async () => {
+    // Killing a flooder can race the budget timer, so both arrive true. Reported
+    // as a timeout, the operator raises a budget that was never the problem.
+    const out = await reviewerInvoke(binaryPanel(), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({
+          ok: false,
+          stdout: "x",
+          timedOut: true,
+          truncated: true,
+          stoppedBy: "size" as const,
+        }),
+    });
+
+    expect(out[0]).toMatchObject({ cause: "truncated" });
+    expect(out[0]).toMatchObject({
+      error: expect.stringContaining("flooded"),
+    });
   });
 
   test("a binary that answers in the wrong shape is cause=unparseable", async () => {
@@ -448,6 +542,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: "sure, looks fine!",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
 
@@ -465,6 +560,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
     const outcome = out[0];
@@ -493,6 +589,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: "",
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
 
@@ -511,6 +608,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: '{"verdict":"approve","summary":"","findings":[]}',
           timedOut: false,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
 
@@ -538,6 +636,7 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: '{"verdict":"approve","summary":"","findings":[]}',
           timedOut: true,
           truncated: false,
+          stoppedBy: "eof" as const,
         }),
     });
 
