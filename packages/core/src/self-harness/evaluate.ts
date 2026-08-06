@@ -549,7 +549,7 @@ async function withOverlayEnv<T>(
 }
 
 /** Mean over per-task values that carry a real signal (>0), or 0 when none. */
-function meanOfSignaled(values: readonly number[]): number {
+export function meanOfSignaled(values: readonly number[]): number {
   const signaled = values.filter((v) => v > 0);
 
   return signaled.length === 0

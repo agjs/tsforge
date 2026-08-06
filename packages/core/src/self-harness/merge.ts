@@ -1,16 +1,11 @@
 import { meanProgress } from "./progress";
+// The SAME helper evaluateHarness uses, not a copy of it. A second
+// implementation of a convention is how the two drift apart, and this docblock
+// already admits nothing keeps them in step — duplicating it would rebuild the
+// exact hazard that let a field go missing for a week.
+import { meanOfSignaled } from "./evaluate";
 import type { IEvaluateOutcome } from "./evaluate";
 import type { ISplitScore } from "./self-harness.types";
-
-/** Mean over values that carry a signal (> 0); 0 when none do — the same
- *  convention evaluateHarness uses for quality and concision. */
-function meanOfSignaled(values: readonly number[]): number {
-  const signaled = values.filter((v) => v > 0);
-
-  return signaled.length === 0
-    ? 0
-    : signaled.reduce((a, b) => a + b, 0) / signaled.length;
-}
 
 /**
  * Merge single-task outcomes into one split outcome. Counts sum.

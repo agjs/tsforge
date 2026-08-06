@@ -144,16 +144,12 @@ describe("the merge cannot silently drop a field", () => {
     // its own assertion.
     const carried = new Map(Object.entries(merged.score));
 
-    // Named, not a silent `typeof !== "object"` skip. Today that only means
-    // perTask, but any future nested field would drop out of coverage with no
-    // signal while the docblock above still advertised the pair as structural.
-    const NESTED = new Set(["perTask"]);
-
+    // No skip list. The previous `typeof !== "object"` guard, and the named set
+    // that replaced it, were both inert: `perTask` is `{}`, which is defined, so
+    // removing either changed nothing about pass or fail. Ceremony that looks
+    // like coverage is worse than none — every key is asserted, and `perTask`
+    // gets a real test of its own below.
     for (const [key, value] of Object.entries(input.score)) {
-      if (NESTED.has(key)) {
-        continue;
-      }
-
       if (value !== undefined) {
         expect(carried.get(key)).toBeDefined();
       }
@@ -211,5 +207,65 @@ describe("meanOfSignaled — the quality and concision means", () => {
 
     expect(merged.score.avgQuality).toBe(0);
     expect(merged.score.avgLoc).toBe(0);
+  });
+});
+
+describe("the collections merge, not just the counts", () => {
+  /**
+   * Untouched by every other test here, because every fixture left `runs` and
+   * `perTask` empty and the structural check only compares keys of `score` —
+   * `records` and `runs` live one level up on IEvaluateOutcome. Replacing either
+   * flatMap with `[]` passed the whole suite.
+   */
+  const withRuns = (
+    task: string,
+    passed: boolean,
+    avgCycles: number
+  ): IEvaluateOutcome => ({
+    records: [run(task, passed, 0.5)],
+    runs: [{ taskId: task, passed, events: [] }],
+    score: {
+      passed: passed ? 1 : 0,
+      runs: 1,
+      errored: 0,
+      avgQuality: 0,
+      avgLoc: 0,
+      perTask: {
+        [task]: {
+          label: task,
+          runs: 1,
+          passed: passed ? 1 : 0,
+          passRate: passed ? 1 : 0,
+          avgCycles,
+          avgTurnsToGreen: null,
+          avgMs: 0,
+          avgQuality: 0,
+          avgLoc: 0,
+          failureClasses: {},
+        },
+      },
+    },
+  });
+
+  test("records and runs are concatenated, not dropped", () => {
+    const merged = mergeOutcomes([
+      withRuns("a", true, 3),
+      withRuns("b", false, 9),
+    ]);
+
+    expect(merged.records).toHaveLength(2);
+    expect(merged.runs.map((r) => r.taskId)).toEqual(["a", "b"]);
+  });
+
+  test("perTask carries every task's summary through", () => {
+    // The acceptance rule's cycle guard reads perTask; an entry lost here is a
+    // task the blowup check silently stops seeing.
+    const merged = mergeOutcomes([
+      withRuns("a", true, 3),
+      withRuns("b", false, 9),
+    ]);
+
+    expect(Object.keys(merged.score.perTask).sort()).toEqual(["a", "b"]);
+    expect(merged.score.perTask.b?.avgCycles).toBe(9);
   });
 });
