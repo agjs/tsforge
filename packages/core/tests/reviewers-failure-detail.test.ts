@@ -870,14 +870,10 @@ describe("readBounded gives up on a stream that never ends", () => {
    * case the hatch exists for.
    */
   test("it stops once the promise it was given settles", async () => {
-    let push: ((chunk: Uint8Array) => void) | undefined;
     const forever = new ReadableStream<Uint8Array>({
       start(controller) {
-        push = (chunk): void => {
-          controller.enqueue(chunk);
-        };
-
-        push(new TextEncoder().encode("partial"));
+        controller.enqueue(new TextEncoder().encode("partial"));
+        // Never closed: this is the stream a descendant holds open.
       },
     });
     let release: (() => void) | undefined;
