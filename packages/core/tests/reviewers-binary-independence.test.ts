@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { resolvePanel } from "../src/reviewers/registry";
+import { parseModelsConfig } from "../src/models-config";
 import type { IModelsConfig, IModelEntry } from "../src/models-config";
 
 /**
@@ -98,5 +99,90 @@ describe("binary reviewer independence", () => {
     });
 
     expect(panel.reviewers).toHaveLength(1);
+  });
+});
+
+describe("parsing the fronts declaration", () => {
+  /**
+   * The half a resolvePanel test cannot reach. `fronts` arrives from JSON, and
+   * how the parser treats a wrong one decides whether a typo becomes an
+   * unchecked reviewer.
+   */
+  const base = {
+    active: "builder",
+    models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+  };
+  const withFronts = (fronts: unknown): unknown => ({
+    ...base,
+    reviewPanel: {
+      minReviewers: 2,
+      reviewers: [
+        {
+          kind: "binary",
+          id: "cli",
+          argv: ["cli"],
+          input: "arg",
+          timeoutMs: 1000,
+          parse: "raw",
+          ...(fronts === undefined ? {} : { fronts }),
+        },
+      ],
+    },
+  });
+
+  test("a string declaration survives the parse", () => {
+    const cfg = parseModelsConfig(withFronts("builder"));
+    const first = cfg.reviewPanel?.reviewers[0];
+
+    expect(first?.kind === "binary" && first.fronts).toBe("builder");
+  });
+
+  test("no declaration parses to no field", () => {
+    const cfg = parseModelsConfig(withFronts(undefined));
+    const first = cfg.reviewPanel?.reviewers[0];
+
+    expect(first?.kind === "binary" && first.fronts).toBeUndefined();
+  });
+
+  test("a NON-STRING declaration is rejected, not silently dropped", () => {
+    // The failure this field exists to remove, reintroduced one level up:
+    // dropping a typo means the author believes they declared independence
+    // while the binary takes the undeclared path and votes anyway.
+    for (const bad of [123, true, null, ["builder"], {}, ""]) {
+      expect(() => parseModelsConfig(withFronts(bad))).toThrow(/fronts/);
+    }
+  });
+});
+
+describe("entry lookup is own-properties only", () => {
+  test("a binary fronting an inherited name is skipped, not resolved", () => {
+    // `models["constructor"]` on a plain object literal resolves to an inherited
+    // FUNCTION rather than undefined, so the "not in models" skip never fires
+    // and the independence check receives something that is not a model.
+    for (const name of [
+      "constructor",
+      "toString",
+      "valueOf",
+      "hasOwnProperty",
+    ]) {
+      const panel = resolvePanel(cfg([{ ...binary, fronts: name }]), {
+        name: "builder",
+        entry: local,
+      });
+
+      expect(panel.reviewers).toHaveLength(0);
+      expect(panel.skipped[0]?.reason).toContain("not in models");
+    }
+  });
+
+  test("a MODEL reviewer naming an inherited name is skipped too", () => {
+    // The same hole was on the model path and only the new one was reported.
+    const panel = resolvePanel(
+      cfg([{ kind: "model", id: "m", entry: "constructor" }]),
+      { name: "builder", entry: local }
+    );
+
+    expect(panel.reviewers).toHaveLength(0);
+    expect(panel.skipped[0]?.reason).toContain("not in models");
   });
 });

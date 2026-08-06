@@ -289,8 +289,31 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
     input: raw.input,
     timeoutMs: raw.timeoutMs,
     parse: raw.parse,
-    ...(typeof raw.fronts === "string" ? { fronts: raw.fronts } : {}),
+    ...frontsOf(raw),
   };
+}
+
+/**
+ * The optional `fronts` declaration, REJECTING a present-but-wrong value.
+ *
+ * Silently dropping a non-string turns a typo into an unchecked reviewer: the
+ * author believes they declared independence, the parser discards it, and the
+ * binary takes the undeclared path and counts as an independent vote anyway.
+ * That is the exact silent failure this field exists to remove, so a malformed
+ * one is a config error like any other.
+ */
+function frontsOf(raw: Record<string, unknown>): { fronts?: string } {
+  if (raw.fronts === undefined) {
+    return {};
+  }
+
+  if (typeof raw.fronts !== "string" || raw.fronts.length === 0) {
+    throw new Error(
+      'models.json: binary reviewer "fronts" must be a non-empty models entry name'
+    );
+  }
+
+  return { fronts: raw.fronts };
 }
 
 function parseReviewer(

@@ -67,6 +67,21 @@ function checkModelIndependence(
 }
 
 /**
+ * An entry by name, or undefined — OWN properties only.
+ *
+ * A plain object literal inherits from Object.prototype, so `models["constructor"]`
+ * (or `toString`, `valueOf`, `__proto__`) resolves to an inherited function rather
+ * than undefined. A reviewer naming one would sail past the "not in models" skip
+ * and reach the independence check holding something that is not a model at all.
+ */
+function modelEntry(
+  models: Record<string, IModelEntry>,
+  name: string
+): IModelEntry | undefined {
+  return Object.hasOwn(models, name) ? models[name] : undefined;
+}
+
+/**
  * Resolve a binary reviewer, applying the independence check when — and only
  * when — the config says which model it fronts.
  *
@@ -99,7 +114,7 @@ function resolveBinary(
     return { kept };
   }
 
-  const entry = cfg.models[reviewer.fronts];
+  const entry = modelEntry(cfg.models, reviewer.fronts);
 
   if (entry === undefined) {
     return {
@@ -126,7 +141,9 @@ function resolveOne(
     return resolveBinary(reviewer, cfg, active);
   }
 
-  const entry = cfg.models[reviewer.entry];
+  // Same own-property lookup as the binary path: this line had the identical
+  // prototype hole, and only the new one was flagged.
+  const entry = modelEntry(cfg.models, reviewer.entry);
 
   if (entry === undefined) {
     return {
