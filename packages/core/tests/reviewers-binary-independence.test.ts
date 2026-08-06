@@ -278,3 +278,90 @@ describe("__proto__ specifically", () => {
     expect(panel.skipped[0]?.reason).toContain("not in models");
   });
 });
+
+describe("the prototype hardening at its real call sites", () => {
+  /**
+   * Six plain index reads became own-property lookups, and none of the call
+   * sites was covered — the resolvePanel tests reach only one of them. These are
+   * the ones where a plain read is worse than a skip: validation PASSES and
+   * something that is not a model is handed on.
+   */
+  const registry = (over: Record<string, unknown>): unknown => ({
+    active: "builder",
+    models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+    ...over,
+  });
+
+  test("an inherited name as `active` is rejected, not resolved to a function", () => {
+    for (const name of ["constructor", "toString", "valueOf", "__proto__"]) {
+      expect(() => parseModelsConfig(registry({ active: name }))).toThrow(
+        /active/
+      );
+    }
+  });
+
+  test("an inherited name as a capability target is rejected", () => {
+    expect(() =>
+      parseModelsConfig(registry({ capabilities: { vision: "constructor" } }))
+    ).toThrow();
+  });
+
+  test("a model reviewer naming an inherited entry is rejected at parse", () => {
+    expect(() =>
+      parseModelsConfig(
+        registry({
+          reviewPanel: {
+            minReviewers: 2,
+            reviewers: [{ kind: "model", id: "r", entry: "constructor" }],
+          },
+        })
+      )
+    ).toThrow();
+  });
+
+  test("a model actually NAMED __proto__ is stored, not swallowed", () => {
+    // JSON.parse makes `__proto__` a genuine own property, but assigning it back
+    // with `models[name] = entry` SETS THE PROTOTYPE instead of adding a key —
+    // the model vanishes and every later lookup runs against a poisoned object.
+    // Built as TEXT: `{ __proto__: ... }` in a JS object literal sets the
+    // prototype before JSON.stringify ever sees it, so the key would be gone
+    // before the code under test ran. Only JSON.parse makes it a real property.
+    const cfg = parseModelsConfig(
+      JSON.parse(
+        '{"active":"builder","models":{"builder":{"baseUrl":"http://x/v1","model":"m"},' +
+          '"__proto__":{"baseUrl":"http://y/v1","model":"n"}}}'
+      )
+    );
+
+    expect(Object.hasOwn(cfg.models, "__proto__")).toBe(true);
+    expect(cfg.models.builder?.model).toBe("m");
+  });
+});
+
+describe("fronts is validated against the registry at parse time", () => {
+  test("a well-formed typo is rejected, not discovered mid-run", () => {
+    // The model path throws when `entry` names nothing; this one only checked
+    // the TYPE, so "buidler" parsed fine and surfaced later as a reviewer
+    // quietly skipped in the middle of a review.
+    expect(() =>
+      parseModelsConfig({
+        active: "builder",
+        models: { builder: { baseUrl: "http://x/v1", model: "m" } },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [
+            {
+              kind: "binary",
+              id: "cli",
+              argv: ["cli"],
+              input: "arg",
+              timeoutMs: 1000,
+              parse: "raw",
+              fronts: "buidler",
+            },
+          ],
+        },
+      })
+    ).toThrow(/not a configured model/);
+  });
+});

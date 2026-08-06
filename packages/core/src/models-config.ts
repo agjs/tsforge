@@ -275,7 +275,10 @@ function parseModelReviewer(
   return { kind: "model", id: raw.id, entry: raw.entry };
 }
 
-function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
+function parseBinaryReviewer(
+  raw: Record<string, unknown>,
+  models: Record<string, IModelEntry>
+): IReviewerBinary {
   const argv = raw.argv;
 
   if (typeof raw.id !== "string" || !Array.isArray(argv) || argv.length === 0) {
@@ -305,7 +308,7 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
     input: raw.input,
     timeoutMs: raw.timeoutMs,
     parse: raw.parse,
-    ...frontsOf(raw),
+    ...frontsOf(raw, models),
   };
 }
 
@@ -318,7 +321,10 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
  * That is the exact silent failure this field exists to remove, so a malformed
  * one is a config error like any other.
  */
-function frontsOf(raw: Record<string, unknown>): { fronts?: string } {
+function frontsOf(
+  raw: Record<string, unknown>,
+  models: Record<string, IModelEntry>
+): { fronts?: string } {
   if (raw.fronts === undefined) {
     return {};
   }
@@ -326,6 +332,15 @@ function frontsOf(raw: Record<string, unknown>): { fronts?: string } {
   if (typeof raw.fronts !== "string" || raw.fronts.length === 0) {
     throw new Error(
       'models.json: binary reviewer "fronts" must be a non-empty models entry name'
+    );
+  }
+
+  // Checked against the registry, exactly as the model path checks `entry`. A
+  // well-formed typo — "buidler" — would otherwise parse fine and be discovered
+  // only at resolve time, as a reviewer quietly skipped mid-run.
+  if (modelByName(models, raw.fronts) === undefined) {
+    throw new Error(
+      `models.json: binary reviewer "fronts" names "${raw.fronts}", which is not a configured model`
     );
   }
 
@@ -345,7 +360,7 @@ function parseReviewer(
   }
 
   if (raw.kind === "binary") {
-    return parseBinaryReviewer(raw);
+    return parseBinaryReviewer(raw, models);
   }
 
   throw new Error('models.json: reviewer kind must be "model" or "binary"');
@@ -397,7 +412,16 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     assertNumericFields(name, entry);
     assertImageApi(name, entry);
     assertReasoning(name, entry);
-    models[name] = entry;
+    // defineProperty, not assignment: `models["__proto__"] = entry` SETS THE
+    // PROTOTYPE rather than adding a key, and JSON.parse makes `__proto__` a
+    // genuine own property, so a registry with a model of that name silently
+    // loses it — and poisons the object every later lookup runs against.
+    Object.defineProperty(models, name, {
+      value: entry,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
 
   if (modelByName(models, raw.active) === undefined) {
