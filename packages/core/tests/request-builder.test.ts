@@ -140,9 +140,14 @@ describe("buildRequestBody: reasoning styles", () => {
     // body, so this fails if a later edit reintroduces the field under any
     // path. Comparing two bodies rather than grepping for 2048 keeps the test
     // independent of the default token cap and the model id.
-    expect(b).toEqual(body({ reasoning: "deepseek-local" }, {
-      enableThinking: true,
-    }));
+    expect(b).toEqual(
+      body(
+        { reasoning: "deepseek-local" },
+        {
+          enableThinking: true,
+        }
+      )
+    );
     // The controls the runner DOES accept still go out.
     expect(b.chat_template_kwargs).toEqual({ thinking: true });
   });
