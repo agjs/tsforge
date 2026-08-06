@@ -548,7 +548,53 @@ async function withOverlayEnv<T>(
   }
 }
 
-/** Mean over per-task values that carry a real signal (>0), or 0 when none. */
+/**
+ * Build a split score from the runs it is a score OF — the ONE place this type
+ * is assembled.
+ *
+ * It used to be built twice: here from records, and again in the merge from
+ * per-outcome scores. Two constructions of one type is how a field goes missing,
+ * and one did — `avgProgress` was added here and forgotten there, so the graded
+ * dimension never reached the acceptance rule for a week while every test passed.
+ * Deriving from records in both places closes that, rather than patching the
+ * field that happened to be dropped.
+ *
+ * It also makes duplicate task entries merge instead of overwrite: `summarize`
+ * groups by label, so two outcomes for one task combine into a single summary
+ * with the right run count, where the old merge kept whichever came last beside
+ * a total that counted both.
+ */
+export function splitScore(
+  records: readonly IRunRecord[],
+  errored: number
+): ISplitScore {
+  const summaries = summarize([...records]);
+  const perTask: Record<string, (typeof summaries)[number]> = {};
+
+  for (const summary of summaries) {
+    perTask[summary.label] = summary;
+  }
+
+  return {
+    passed: records.filter((r) => r.passed).length,
+    runs: records.length,
+    errored,
+    avgQuality: meanOfSignaled(summaries.map((s) => s.avgQuality)),
+    avgLoc: meanOfSignaled(summaries.map((s) => s.avgLoc)),
+    // Mean over RUNS, not over tasks: a task measured twice should weigh twice.
+    // A record with NO score is an errored one — it never reached scoring — and
+    // meanProgress skips it, so an outage cannot enter the graded figure as
+    // measured zero progress. Completed runs always carry a number (0 when they
+    // produced no gate readings), so nothing that did run can drop out of the
+    // denominator.
+    avgProgress: meanProgress(records.map((r) => r.progress)),
+    perTask,
+  };
+}
+
+/** Mean over per-task values that carry a real signal (>0), or 0 when none —
+ *  quality needs a judge call and loc needs a shipped solution, so a 0 means
+ *  "not measured on this task" rather than "measured as nothing". */
 function meanOfSignaled(values: readonly number[]): number {
   const signaled = values.filter((v) => v > 0);
 
@@ -634,28 +680,7 @@ export async function evaluateHarness(
 
     const { records, runs, erroredCount: errored } = sink;
 
-    const summaries = summarize(records);
-    const perTask: Record<string, (typeof summaries)[number]> = {};
-
-    for (const summary of summaries) {
-      perTask[summary.label] = summary;
-    }
-
-    const score: ISplitScore = {
-      passed: records.filter((r) => r.passed).length,
-      runs: records.length,
-      errored,
-      avgQuality: meanOfSignaled(summaries.map((s) => s.avgQuality)),
-      avgLoc: meanOfSignaled(summaries.map((s) => s.avgLoc)),
-      // Mean over RUNS, not over tasks: a task measured twice should weigh
-      // twice. A record with NO score is an errored one — it never reached
-      // scoring — and meanProgress skips it, so an outage cannot enter the
-      // graded figure as measured zero progress. Completed runs always carry a
-      // number (0 when they produced no gate readings), so nothing that did run
-      // can drop out of the denominator.
-      avgProgress: meanProgress(records.map((r) => r.progress)),
-      perTask,
-    };
+    const score = splitScore(records, errored);
 
     return { score, runs, records };
   });

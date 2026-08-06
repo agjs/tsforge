@@ -53,3 +53,4 @@ export {
   type IBuildEvidenceOptions,
 } from "./build-evidence";
 export { runProgress, meanProgress } from "./progress";
+export { mergeOutcomes } from "./merge";
