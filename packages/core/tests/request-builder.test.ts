@@ -135,11 +135,14 @@ describe("buildRequestBody: reasoning styles", () => {
       { enableThinking: true, thinkingTokenBudget: 2048 }
     );
 
-    // The budget is dropped, not relocated: nothing anywhere in the body
-    // carries 2048, so this fails if a later edit reintroduces the field under
-    // any path.
     expect(b.thinking_token_budget).toBeUndefined();
-    expect(JSON.stringify(b)).not.toContain("2048");
+    // Dropped, not relocated: asking for a budget changes NOTHING about the
+    // body, so this fails if a later edit reintroduces the field under any
+    // path. Comparing two bodies rather than grepping for 2048 keeps the test
+    // independent of the default token cap and the model id.
+    expect(b).toEqual(body({ reasoning: "deepseek-local" }, {
+      enableThinking: true,
+    }));
     // The controls the runner DOES accept still go out.
     expect(b.chat_template_kwargs).toEqual({ thinking: true });
   });
