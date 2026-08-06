@@ -172,38 +172,43 @@ describe("an empty merge", () => {
   });
 });
 
-describe("meanOfSignaled — the quality and concision means", () => {
+describe("quality and concision come from the RUNS now", () => {
   /**
-   * This helper came across from an untested script along with the merge, and
-   * nothing asserted what it computes: every fixture set both to 0 and the only
-   * assertion that touched them was `toBeDefined()`, which any number passes.
-   * The convention it encodes is not obvious and is easy to "simplify" away.
+   * These used to be averaged from the per-outcome scores. They are derived from
+   * records through `splitScore`, like everything else — so a test that sets
+   * `score.avgQuality` and no records asserts a substrate the merge no longer
+   * reads, which is exactly what this one did before.
+   *
+   * The convention itself is unchanged and worth pinning: a run with no judged
+   * quality carries none (the judge only scores green runs), and those runs are
+   * skipped rather than counted as zero.
    */
-  const scored = (avgQuality: number, avgLoc: number): IEvaluateOutcome => ({
-    records: [],
-    runs: [],
-    score: {
-      passed: 0,
-      runs: 0,
-      errored: 0,
-      avgQuality,
-      avgLoc,
-      perTask: {},
-    },
+  const judged = (task: string, quality: number, loc: number): IRunRecord => ({
+    label: task,
+    passed: true,
+    cycles: 1,
+    ms: 0,
+    quality,
+    loc,
+    progress: 1,
   });
 
-  test("averages only the outcomes that carry a signal", () => {
-    // 0 means "not measured here" — quality needs a judge call and loc needs a
-    // shipped solution, so most tasks have neither. Counting the zeros would
-    // drag the mean toward however many tasks failed.
-    const merged = mergeOutcomes([scored(4, 100), scored(0, 0), scored(2, 50)]);
+  test("only runs that carry a signal are averaged", () => {
+    const merged = mergeOutcomes([
+      outcome([judged("a", 4, 100)]),
+      outcome([run("b", true, 1)]),
+      outcome([judged("c", 2, 50)]),
+    ]);
 
     expect(merged.score.avgQuality).toBeCloseTo(3, 5);
     expect(merged.score.avgLoc).toBeCloseTo(75, 5);
   });
 
   test("no signal at all stays 0, not NaN", () => {
-    const merged = mergeOutcomes([scored(0, 0), scored(0, 0)]);
+    const merged = mergeOutcomes([
+      outcome([run("a", true, 1)]),
+      outcome([run("b", true, 1)]),
+    ]);
 
     expect(merged.score.avgQuality).toBe(0);
     expect(merged.score.avgLoc).toBe(0);
@@ -212,17 +217,17 @@ describe("meanOfSignaled — the quality and concision means", () => {
 
 describe("the collections merge, not just the counts", () => {
   /**
-   * Untouched by every other test here, because every fixture left `runs` and
-   * `perTask` empty and the structural check only compares keys of `score` —
-   * `records` and `runs` live one level up on IEvaluateOutcome. Replacing either
-   * flatMap with `[]` passed the whole suite.
+   * Untouched by every other test here, because every fixture left `runs` empty
+   * and the structural check only compares keys of `score` — `records` and
+   * `runs` live one level up on IEvaluateOutcome. Replacing either flatMap with
+   * `[]` passed the whole suite.
    */
   const withRuns = (
     task: string,
     passed: boolean,
-    avgCycles: number
+    cycles: number
   ): IEvaluateOutcome => ({
-    records: [run(task, passed, 0.5)],
+    records: [{ label: task, passed, cycles, ms: 0, progress: passed ? 1 : 0 }],
     runs: [{ taskId: task, passed, events: [] }],
     score: {
       passed: passed ? 1 : 0,
@@ -230,20 +235,7 @@ describe("the collections merge, not just the counts", () => {
       errored: 0,
       avgQuality: 0,
       avgLoc: 0,
-      perTask: {
-        [task]: {
-          label: task,
-          runs: 1,
-          passed: passed ? 1 : 0,
-          passRate: passed ? 1 : 0,
-          avgCycles,
-          avgTurnsToGreen: null,
-          avgMs: 0,
-          avgQuality: 0,
-          avgLoc: 0,
-          failureClasses: {},
-        },
-      },
+      perTask: {},
     },
   });
 
@@ -257,9 +249,9 @@ describe("the collections merge, not just the counts", () => {
     expect(merged.runs.map((r) => r.taskId)).toEqual(["a", "b"]);
   });
 
-  test("perTask carries every task's summary through", () => {
-    // The acceptance rule's cycle guard reads perTask; an entry lost here is a
-    // task the blowup check silently stops seeing.
+  test("perTask carries every task through, derived from its runs", () => {
+    // The acceptance rule's cycle guard reads perTask; a task missing here is
+    // one the blowup check silently stops seeing.
     const merged = mergeOutcomes([
       withRuns("a", true, 3),
       withRuns("b", false, 9),
@@ -267,5 +259,43 @@ describe("the collections merge, not just the counts", () => {
 
     expect(Object.keys(merged.score.perTask).sort()).toEqual(["a", "b"]);
     expect(merged.score.perTask.b?.avgCycles).toBe(9);
+  });
+
+  test("two outcomes for ONE task merge instead of overwriting", () => {
+    // The old merge kept whichever entry came last beside a total counting
+    // both, so perTask described a fraction of the runs it was compared
+    // against — and perTask.avgCycles is what the blowup guard reads. Deriving
+    // from records makes summarize group them.
+    const merged = mergeOutcomes([
+      withRuns("a", true, 2),
+      withRuns("a", true, 8),
+    ]);
+
+    expect(merged.score.runs).toBe(2);
+    expect(merged.score.perTask.a?.runs).toBe(2);
+    expect(merged.score.perTask.a?.avgCycles).toBe(5);
+  });
+});
+
+describe("errored is the one count that cannot come from records", () => {
+  test("it sums across outcomes", () => {
+    // An errored run produces no record to count — that is what errored means —
+    // so this is the only field the merge still adds up itself, and the only one
+    // a records-derived score cannot check. Every fixture hardcoded 0, so
+    // replacing the reduce with a literal 0 survived the whole suite.
+    const withErrors = (n: number): IEvaluateOutcome => ({
+      records: [run("t", false, 0.5)],
+      runs: [],
+      score: {
+        passed: 0,
+        runs: 1,
+        errored: n,
+        avgQuality: 0,
+        avgLoc: 0,
+        perTask: {},
+      },
+    });
+
+    expect(mergeOutcomes([withErrors(2), withErrors(3)]).score.errored).toBe(5);
   });
 });

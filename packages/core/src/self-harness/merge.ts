@@ -1,68 +1,32 @@
-import { meanProgress } from "./progress";
-// The SAME helper evaluateHarness uses, not a copy of it. A second
-// implementation of a convention is how the two drift apart, and this docblock
-// already admits nothing keeps them in step — duplicating it would rebuild the
-// exact hazard that let a field go missing for a week.
-import { meanOfSignaled } from "./evaluate";
+import { splitScore } from "./evaluate";
 import type { IEvaluateOutcome } from "./evaluate";
-import type { ISplitScore } from "./self-harness.types";
 
 /**
- * Merge single-task outcomes into one split outcome. Counts sum.
+ * Merge single-task outcomes into one split outcome.
  *
- * The three means are NOT weighted alike, and the difference is deliberate:
+ * Derived from the RECORDS, through the same `splitScore` the evaluator uses —
+ * not rebuilt from the per-outcome scores. That rebuild is the whole reason this
+ * PR exists: it listed the fields by hand, `avgProgress` was added to the
+ * evaluator and forgotten here, and the graded dimension never reached the
+ * acceptance rule for a week while every test passed. Two ways to construct one
+ * type is the defect; patching the field that happened to be dropped would have
+ * left the next one waiting.
  *
- *  - `avgProgress` is a mean over RUNS. Every completed run has one, so a task
- *    measured twice weighs twice — which is what the acceptance rule compares.
- *  - `avgQuality` and `avgLoc` are means over TASKS that carry a signal. Both
- *    are measured only on green runs (quality needs a judge call, loc needs a
- *    shipped solution), so most runs have nothing to contribute and a
- *    run-weighted mean would be dominated by which tasks happened to pass.
+ * Only `errored` still sums across outcomes, because an errored run produces no
+ * record to count — that is what "errored" means.
  *
- * evaluateHarness splits the same way for the same reason. That is intent, not a
- * verified invariant — nothing here checks the two stay in step, and the last
- * comment claiming they were identical went stale without anyone noticing,
- * which is how this function came to drop a field for a week.
- *
- * PRECONDITION: one outcome per task. `perTask` is last-write-wins on a key
- * collision while the counts sum, so passing two outcomes for the same task
- * gives a coherent count beside a per-task entry from only one of them. The
- * caller evaluates task by task, which is where that guarantee comes from.
+ * Duplicate task entries now MERGE rather than overwrite: `summarize` groups by
+ * label, so two outcomes for one task become a single summary with the right run
+ * count. The old merge kept whichever came last beside a total that counted
+ * both, which made `perTask.avgCycles` — read by the acceptance rule's blowup
+ * guard — describe a fraction of the runs it was compared against.
  */
 export function mergeOutcomes(
   outcomes: readonly IEvaluateOutcome[]
 ): IEvaluateOutcome {
   const records = outcomes.flatMap((o) => [...o.records]);
   const runs = outcomes.flatMap((o) => [...o.runs]);
-  const perTask: ISplitScore["perTask"] = {};
+  const errored = outcomes.reduce((a, o) => a + o.score.errored, 0);
 
-  for (const outcome of outcomes) {
-    for (const [task, summary] of Object.entries(outcome.score.perTask)) {
-      perTask[task] = summary;
-    }
-  }
-
-  return {
-    records,
-    runs,
-    score: {
-      passed: outcomes.reduce((a, o) => a + o.score.passed, 0),
-      runs: outcomes.reduce((a, o) => a + o.score.runs, 0),
-      errored: outcomes.reduce((a, o) => a + o.score.errored, 0),
-      avgQuality: meanOfSignaled(outcomes.map((o) => o.score.avgQuality)),
-      avgLoc: meanOfSignaled(outcomes.map((o) => o.score.avgLoc)),
-      // Recomputed over RUNS, not averaged over outcomes: each outcome here is
-      // one task, and a task measured twice must weigh twice — averaging the
-      // per-task means would give a 1-run task the same weight as a 4-run one.
-      //
-      // Omitting this field is what made the graded score inert. Every real
-      // session merges through here (the task-by-task path exists so one
-      // endpoint flap costs one task, not the whole split), so `avgProgress`
-      // was computed per task and then dropped before the acceptance rule saw
-      // it — arriving undefined, failing closed, and rejecting every
-      // equal-pass candidate with "progress was not measured".
-      avgProgress: meanProgress(records.map((r) => r.progress)),
-      perTask,
-    },
-  };
+  return { records, runs, score: splitScore(records, errored) };
 }
