@@ -95,3 +95,48 @@ describe("mergeOutcomes carries the graded score across the join", () => {
     expect(merged.score.runs).toBe(3);
   });
 });
+
+describe("the merge cannot silently drop a field", () => {
+  /**
+   * The structural version of this test, and the one that would have caught the
+   * original bug. Asserting `avgProgress` survives only covers the field I
+   * already know about — a hand-written fixture listing every key cannot notice
+   * the merge omitting a key, which is exactly how `avgProgress` was lost for a
+   * week. This compares the merged score's shape against the input's, so the
+   * NEXT field added to ISplitScore is covered without anyone remembering to
+   * add a case.
+   */
+  test("every key of the input score appears on the merged score", () => {
+    const input = outcome([run("a", true, 1)]);
+    const merged = mergeOutcomes([input]);
+
+    expect(Object.keys(merged.score).sort()).toEqual(
+      Object.keys(input.score).sort()
+    );
+  });
+
+  test("and none of them is undefined when the input had a value", () => {
+    // Shape alone is not enough: a merge could carry the key and drop the
+    // value, which is what `avgProgress: undefined` would have looked like.
+    const input: IEvaluateOutcome = {
+      records: [run("a", false, 0.5)],
+      runs: [],
+      score: {
+        passed: 0,
+        runs: 1,
+        errored: 0,
+        avgQuality: 4,
+        avgLoc: 12,
+        avgProgress: 0.5,
+        perTask: {},
+      },
+    };
+    const merged = mergeOutcomes([input]);
+
+    for (const [key, value] of Object.entries(input.score)) {
+      if (value !== undefined && typeof value !== "object") {
+        expect(merged.score[key as keyof typeof merged.score]).toBeDefined();
+      }
+    }
+  });
+});

@@ -12,9 +12,26 @@ function meanOfSignaled(values: readonly number[]): number {
     : signaled.reduce((a, b) => a + b, 0) / signaled.length;
 }
 
-/** Merge single-task outcomes into one split outcome. Counts sum; the
- *  quality/concision means recompute over tasks that carry a signal —
- *  identical semantics to evaluateHarness's own aggregation. */
+/**
+ * Merge single-task outcomes into one split outcome. Counts sum.
+ *
+ * The three means are NOT weighted alike, and the difference is deliberate:
+ *
+ *  - `avgProgress` is a mean over RUNS. Every completed run has one, so a task
+ *    measured twice weighs twice — which is what the acceptance rule compares.
+ *  - `avgQuality` and `avgLoc` are means over TASKS that carry a signal. Both
+ *    are measured only on green runs (quality needs a judge call, loc needs a
+ *    shipped solution), so most runs have nothing to contribute and a
+ *    run-weighted mean would be dominated by which tasks happened to pass.
+ *
+ * Matching evaluateHarness's own aggregation, which splits the same way for the
+ * same reason.
+ *
+ * PRECONDITION: one outcome per task. `perTask` is last-write-wins on a key
+ * collision while the counts sum, so passing two outcomes for the same task
+ * gives a coherent count beside a per-task entry from only one of them. The
+ * caller evaluates task by task, which is where that guarantee comes from.
+ */
 export function mergeOutcomes(
   outcomes: readonly IEvaluateOutcome[]
 ): IEvaluateOutcome {
