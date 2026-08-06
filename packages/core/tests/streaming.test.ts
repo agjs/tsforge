@@ -169,6 +169,10 @@ test("an error carried INSIDE a 200 stream is raised, not read as silence", asyn
 test("a rejected optional field is dropped and the call retried once", async () => {
   // Self-healing across runtime versions: the same harness has to work against
   // a vLLM that supports thinking_token_budget and one that does not.
+  //
+  // `qwen` is the fixture because it is the preset that still declares that
+  // budget. deepseek-local dropped it — its endpoint refuses the field, so the
+  // learner would have had nothing to drop and this would test nothing.
   const bodies: string[] = [];
   const fakeFetch = (async (_url: string, init: { body: string }) => {
     bodies.push(init.body);
@@ -188,7 +192,7 @@ test("a rejected optional field is dropped and the call retried once", async () 
     baseUrl: "http://x/v1",
     model: "m",
     fetch: fakeFetch,
-    reasoning: "deepseek-local",
+    reasoning: "qwen",
   });
 
   const r = await p.complete([{ role: "user", content: "hi" }], {
@@ -253,7 +257,7 @@ test("an endpoint's rejection is remembered — the next call does not ask again
     baseUrl: "http://x/v1",
     model: "m",
     fetch: fakeFetch,
-    reasoning: "deepseek-local",
+    reasoning: "qwen",
   });
   const call = async (): Promise<string> =>
     (
@@ -296,7 +300,7 @@ test("switching endpoints forgets what the old one refused", async () => {
     baseUrl: "http://x/v1",
     model: "m",
     fetch: fakeFetch,
-    reasoning: "deepseek-local" as const,
+    reasoning: "qwen" as const,
   };
   const p = new OpenAICompatibleProvider(cfg);
   const opts = { onToken: () => undefined, thinkingTokenBudget: 2048 };
