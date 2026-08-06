@@ -128,6 +128,8 @@ export function buildBinaryInvocation(
  *  normal shutdown, short enough that an unkillable reviewer cannot hold the
  *  panel. */
 const KILL_GRACE_MS = 2_000;
+/** Conventional exit code for a process terminated by SIGKILL (128 + 9). */
+const SIGKILL_EXIT = 137;
 /**
  * How long to keep draining stdout after the process itself has gone.
  *
@@ -289,64 +291,6 @@ async function readBounded(
   };
 }
 
-/** Direct children of a pid, via pgrep. Empty when pgrep is missing or the
- *  process has none. */
-async function childrenOf(pid: number): Promise<number[]> {
-  try {
-    const proc = Bun.spawn(["pgrep", "-P", String(pid)], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const out = await new Response(proc.stdout).text();
-
-    await proc.exited;
-
-    return out
-      .split("\n")
-      .map((line) => Number.parseInt(line.trim(), 10))
-      .filter((n) => Number.isInteger(n) && n > 0);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * The whole tree under (and including) a pid, deepest first.
- *
- * COLLECTED ONCE, before anything is signalled, and while the parent is alive to
- * be walked. Re-walking for the SIGKILL pass cannot work: SIGTERM makes a
- * well-behaved parent exit, its TERM-IGNORING child is re-parented to init, and
- * `pgrep -P <parent>` then returns nothing — so escalation finds an empty tree
- * and the child runs on. A first version did exactly that and looked correct,
- * because its test had a TERM-ignoring shell over a child that died on the
- * first signal.
- *
- * Bun.spawn cannot put a child in its own process group, and killing the group
- * we SHARE would take the harness down with it, so walking the tree is what is
- * left. Best effort by construction: pgrep may be absent, and a process may exit
- * between listing and killing. Both are fine — this only ever adds cleanup.
- */
-async function collectTree(pid: number): Promise<number[]> {
-  const below: number[] = [];
-
-  for (const child of await childrenOf(pid)) {
-    below.push(...(await collectTree(child)));
-  }
-
-  return [...below, pid];
-}
-
-/** Signal a captured list, ignoring anything that has already gone. */
-function signalAll(pids: readonly number[], signal: number): void {
-  for (const pid of pids) {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // Already gone.
-    }
-  }
-}
-
 export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
@@ -369,11 +313,22 @@ export async function runBinary(
   // reviewer in a throwaway temp dir confines every side effect there; the real repo is untouchable.
   const sandbox = await mkdtemp(join(tmpdir(), "tsforge-review-sandbox-"));
   const invocation = buildBinaryInvocation(r, stdin, tmpPath);
+  // `detached: true` makes the reviewer its OWN process-group leader, so the
+  // kill below takes down the whole group — the `sh -c` wrapper AND anything it
+  // backgrounded. This is how lib/fs/process.ts already does it, and it is the
+  // portable way to get a new group (setsid is not on macOS).
+  //
+  // An earlier version of this walked the tree with `pgrep` instead, on the
+  // stated premise that Bun.spawn could not create a group. That was simply
+  // false — the pattern was already in this repo — and the walk could not work
+  // anyway: SIGTERM makes a well-behaved parent exit, its TERM-ignoring child is
+  // re-parented to init, and there is nothing left to walk from.
   const proc = Bun.spawn(invocation.cmd, {
     cwd: sandbox,
     stdin: invocation.stdinBytes,
     stdout: "pipe",
     stderr: "ignore",
+    detached: true,
   });
   // Recorded rather than inferred: a killed process exits non-zero, so the exit
   // code alone cannot distinguish "we killed it at the budget" from "it failed
@@ -383,31 +338,40 @@ export async function runBinary(
   const kill = { timedOut: false };
   const timer = setTimeout(() => {
     kill.timedOut = true;
-    ending = endTree(proc.pid);
+    killGroup();
   }, r.timeoutMs);
-  /** In flight while a kill is being carried out, so the caller waits for it
-   *  instead of returning with the escalation still pending. */
-  let ending: Promise<void> | undefined;
+  // Resolves only once a kill has been signalled AND the process still has not
+  // been reaped a grace later — i.e. it escaped its group and survived SIGKILL.
+  // Raced against `proc.exited` so the wait below always settles; without it an
+  // un-reapable reviewer wedges the panel forever. Same shape as process.ts.
+  let resolveEscaped: (() => void) | null = null;
+  const escaped = new Promise<void>((resolve) => {
+    resolveEscaped = resolve;
+  });
+  const escape: { timer: ReturnType<typeof setTimeout> | null } = {
+    timer: null,
+  };
 
   /**
-   * Ask the tree to stop, then insist.
+   * Kill the whole group, falling back to the lone child when the group is gone
+   * (ESRCH) or not permitted (EPERM). Never throws.
    *
-   * SIGTERM is a request — a reviewer that ignores it, or takes its time, would
-   * otherwise hold the panel past the budget that exists to stop that — and
-   * SIGKILL is not refusable.
-   *
-   * AWAITED, not left on a timer. An escalation on a timer is cancelled by
-   * cleanup the moment the parent exits, which is exactly when a TERM-ignoring
-   * child still needs killing: the reviewer's own well-behaved exit disarms the
-   * thing that would have reaped its orphan.
+   * SIGKILL directly rather than SIGTERM-then-escalate: the budget has already
+   * expired by the time this runs, and a reviewer that asked for more time by
+   * ignoring SIGTERM is the case the budget exists for.
    */
-  const endTree = async (pid: number): Promise<void> => {
-    // Captured BEFORE anything is signalled — see collectTree.
-    const tree = await collectTree(pid);
+  const killGroup = (): void => {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      try {
+        proc.kill(9);
+      } catch {
+        // Already exited.
+      }
+    }
 
-    signalAll(tree, 15);
-    await Bun.sleep(KILL_GRACE_MS);
-    signalAll(tree, 9);
+    escape.timer ??= setTimeout(() => resolveEscaped?.(), KILL_GRACE_MS);
   };
 
   try {
@@ -431,10 +395,11 @@ export async function runBinary(
     // hit there is nothing left to wait for.
     if (read.stoppedBy === "size") {
       clearTimeout(timer);
-      ending = endTree(proc.pid);
+      killGroup();
     }
 
-    const code = await exited;
+    // Raced, so a process that outlived SIGKILL cannot hold the panel.
+    const code = await Promise.race([exited, escaped.then(() => SIGKILL_EXIT)]);
 
     return {
       ok: code === 0 && !kill.timedOut && !read.truncated,
@@ -447,10 +412,11 @@ export async function runBinary(
     };
   } finally {
     clearTimeout(timer);
-    // Wait for a kill in progress. Returning while the escalation is pending
-    // leaves the caller believing the reviewer is gone when its TERM-ignoring
-    // child is not.
-    await ending;
+    // Every reviewer, not only the ones that misbehaved: a reviewer that exits
+    // cleanly can still leave a backgrounded child holding resources, and
+    // killing an already-empty group costs nothing.
+    killGroup();
+    clearTimeout(escape.timer ?? undefined);
 
     if (tmpPath !== undefined) {
       await rm(tmpPath, { force: true });
@@ -568,7 +534,6 @@ function oneLine(value: string): string {
   // spread/split on a string mishandles astral characters.
   for (const ch of value) {
     const code = ch.codePointAt(0) ?? 0;
-    // C0 (newline and ESC among them), DEL, and C1.
     // C0 (newline and ESC among them), DEL, C1 — plus the Unicode line/paragraph
     // separators, which a terminal breaks on exactly like a newline, and the
     // bidi overrides, which can visually reorder a line into something it does
