@@ -24,6 +24,7 @@ import {
   judge,
   overBudgetScore,
   emptyScopeScore,
+  incompleteScopeScore,
   sizeWithinBudget,
   summarize,
 } from "../eval";
@@ -297,7 +298,7 @@ export async function scoreSolution(
   // Enumeration gave up, so this is a PREFIX of the real scope. Reviewing it
   // would score a fraction of the solution as though it were all of it.
   if (!scope.complete) {
-    return overBudgetScore();
+    return incompleteScopeScore();
   }
 
   return solutionFitsJudge(runDir, files, goal, criteria)

@@ -3,6 +3,7 @@ export {
   judge,
   overBudgetScore,
   emptyScopeScore,
+  incompleteScopeScore,
   withinBudget,
   sizeWithinBudget,
   JUDGE_INPUT_SHAPE,

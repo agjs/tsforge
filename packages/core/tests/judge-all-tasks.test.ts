@@ -129,6 +129,10 @@ describe("guardQuality", () => {
     expect(guardQuality(score("oversized"))).toBe(1);
   });
 
+  test("an incomplete enumeration is FLOORED too", () => {
+    expect(guardQuality(score("incomplete"))).toBe(1);
+  });
+
   test("an empty scope is FLOORED — it is the candidate's doing too", () => {
     // Covered indirectly through scoreSolution, but not in the table itself: a
     // "simplified" catch-all that mapped empty to undefined would skip the guard
@@ -373,10 +377,34 @@ describe("an incomplete scope is refused, not reviewed as if it were whole", () 
         "c"
       );
 
-      expect(score.outcome).toBe("oversized");
+      expect(score.outcome).toBe("incomplete");
       expect(guardQuality(score)).toBe(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("end to end: too many files means a floor, and no judge call", async () => {
+    // The composed path. One test proved enumeration reports complete:false at
+    // the cap and another proved a hand-built incomplete scope is refused, but
+    // nothing joined them — so a regression dropping `complete` through the real
+    // call path would slip between the two halves.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-manyfiles-e2e-"));
+
+    try {
+      await Promise.all(
+        Array.from({ length: MAX_SOLUTION_FILES + 25 }, (_unused, i) =>
+          writeFile(join(dir, `f${String(i)}.ts`), "export const x = 1;\n")
+        )
+      );
+
+      const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
+      const score = await scoreSolution(neverCalled, dir, scope, "g", "c");
+
+      expect(score.outcome).toBe("incomplete");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

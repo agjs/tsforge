@@ -30,12 +30,18 @@ export interface IJudgeScore {
    * or an out-of-range number and switch the guard off from inside the artifact
    * being guarded.
    *
-   * So: `unusable`, `oversized` and `empty` are all the candidate's doing and
-   * the guard FLOORS every one of them, while the improvement loop ignores them.
+   * So: `unusable`, `oversized`, `incomplete` and `empty` are all the
+   * candidate's doing and the guard FLOORS every one of them, while the improvement loop ignores them.
    * `unreachable` is infrastructure, attributable to nobody, and both ignore it
    * — it is the only outcome that leaves quality unmeasured.
    */
-  outcome: "scored" | "unusable" | "oversized" | "empty" | "unreachable";
+  outcome:
+    | "scored"
+    | "unusable"
+    | "oversized"
+    | "incomplete"
+    | "empty"
+    | "unreachable";
 }
 
 export interface IRunRecord {

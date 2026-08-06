@@ -61,7 +61,13 @@ export async function qualityRepair(
       message: `quality not scored (${initial.notes}) — skipping quality pass`,
     });
 
-    return { quality: initial.quality, notes: initial.notes, attempts: 0 };
+    // ZERO, not the judge's number. The acceptance guard reads a floor of 1 for
+    // anything the candidate caused (see IJudgeScore.outcome), but IQualityResult
+    // has no `scored` field and 0 is this consumer's long-standing "no signal" —
+    // so forwarding the floor here would record 1/5 in the sweep as though a
+    // reviewer had judged the code and found it poor. Two conventions, because
+    // the two callers ask different questions.
+    return { quality: 0, notes: initial.notes, attempts: 0 };
   }
 
   let best = initial;

@@ -143,6 +143,24 @@ export function overBudgetScore(): IJudgeScore {
   return { ...OVER_BUDGET };
 }
 
+/** The scope was too large to finish ENUMERATING, so what was found is a prefix.
+ *
+ *  Distinct from `oversized`, which is a byte-budget verdict on a scope we did
+ *  measure. Collapsing the two rebuilds exactly the trap that made `empty` its
+ *  own outcome: later size-only handling, diagnostics or metrics would
+ *  mis-attribute a count-capped scope as a large one. */
+export function incompleteScopeScore(): IJudgeScore {
+  return {
+    overall: 1,
+    correctness: 1,
+    design: 1,
+    readability: 1,
+    notes: "solution scope was too large to enumerate",
+    scored: false,
+    outcome: "incomplete",
+  };
+}
+
 /** Nothing to review — the declared scope matched no files.
  *
  *  A distinct outcome from `oversized`, because they are opposite problems and
