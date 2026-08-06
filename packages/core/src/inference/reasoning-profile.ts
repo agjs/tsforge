@@ -97,10 +97,11 @@ export const REASONING_PRESETS: Readonly<
    *  its `budget`; that path is served by runtimes that accept the field.
    *
    *  This is the default for the common case, not a claim that no DeepSeek
-   *  server accepts the field. A deployment running V1 (`VLLM_USE_V2_MODEL_
-   *  RUNNER=0`) can have it back by setting `reasoning` to a full profile
-   *  rather than this preset name — the learner can only remove a field, never
-   *  restore one, so the preset is the only place to put it back. */
+   *  server accepts the field. A deployment running the V1 runner
+   *  (`VLLM_USE_V2_MODEL_RUNNER=0`) can have it back by setting `reasoning` to
+   *  a full profile rather than this preset name — the learner can only remove
+   *  a field, never restore one, so the preset is the only place to put it
+   *  back. */
   "deepseek-local": {
     thinking: { path: "chat_template_kwargs.thinking" },
     effort: "chat_template_kwargs.reasoning_effort",
