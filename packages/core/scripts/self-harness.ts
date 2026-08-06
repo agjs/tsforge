@@ -24,11 +24,11 @@ import {
   resolveSplits,
   runSelfHarness,
   emptyOverlay,
+  mergeOutcomes,
   parseOverlay,
   type HarnessEvaluator,
   type IEvaluateOutcome,
   type IHarnessOverlay,
-  type ISplitScore,
   type ISplits,
 } from "../src/self-harness";
 import type { IProvider } from "../src/inference";
@@ -172,44 +172,6 @@ let evaluations = 0;
 /** Per-task attempts before an errored task is given up (its errored count
  *  then propagates so upstream logic reacts honestly). */
 const TASK_ATTEMPTS = 3;
-
-function meanOfSignaled(values: readonly number[]): number {
-  const signaled = values.filter((v) => v > 0);
-
-  return signaled.length === 0
-    ? 0
-    : signaled.reduce((a, b) => a + b, 0) / signaled.length;
-}
-
-/** Merge single-task outcomes into one split outcome. Counts sum; the
- *  quality/concision means recompute over tasks that carry a signal —
- *  identical semantics to evaluateHarness's own aggregation. */
-function mergeOutcomes(
-  outcomes: readonly IEvaluateOutcome[]
-): IEvaluateOutcome {
-  const records = outcomes.flatMap((o) => [...o.records]);
-  const runs = outcomes.flatMap((o) => [...o.runs]);
-  const perTask: ISplitScore["perTask"] = {};
-
-  for (const outcome of outcomes) {
-    for (const [task, summary] of Object.entries(outcome.score.perTask)) {
-      perTask[task] = summary;
-    }
-  }
-
-  return {
-    records,
-    runs,
-    score: {
-      passed: outcomes.reduce((a, o) => a + o.score.passed, 0),
-      runs: outcomes.reduce((a, o) => a + o.score.runs, 0),
-      errored: outcomes.reduce((a, o) => a + o.score.errored, 0),
-      avgQuality: meanOfSignaled(outcomes.map((o) => o.score.avgQuality)),
-      avgLoc: meanOfSignaled(outcomes.map((o) => o.score.avgLoc)),
-      perTask,
-    },
-  };
-}
 
 /** Evaluate one split TASK BY TASK: an errored task (endpoint outage) waits
  *  out the weather and retries, so one flap costs one task's re-run — not the
