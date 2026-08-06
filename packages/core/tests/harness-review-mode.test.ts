@@ -23,6 +23,7 @@ const effective: IPanel = {
   ],
   minReviewers: 1,
   skipped: [],
+  unverified: [],
 };
 
 const request: IReviewRequest = {
@@ -151,6 +152,7 @@ describe("buildReviewFlowDeps (CLI wiring)", () => {
       ],
       minReviewers: 1,
       skipped: [],
+      unverified: [],
     };
     const full = buildReviewFlowDeps({
       ...makeInput({}).input,

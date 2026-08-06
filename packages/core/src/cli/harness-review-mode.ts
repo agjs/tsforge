@@ -693,6 +693,19 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   }
 
   const cfg = await loadModelsConfig();
+
+  // A panel that failed to parse is dropped by the loader so the rest of the
+  // registry still works — but a REVIEW cannot proceed without one, and silently
+  // running with zero reviewers would report "insufficient reviewers" and point
+  // at the endpoint instead of the typo.
+  if (cfg.reviewPanelError !== undefined) {
+    process.stdout.write(
+      `harness-review: review panel is unusable — ${oneLine(cfg.reviewPanelError)}\n`
+    );
+
+    return 1;
+  }
+
   const active = await resolveActiveModel();
   const panel = resolvePanel(cfg, active);
 

@@ -135,6 +135,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         { kind: "model", id: "m1", entry: { baseUrl: "http://x", model: "z" } },
       ],
@@ -167,6 +168,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         { kind: "model", id: "m1", entry: { baseUrl: "http://x", model: "z" } },
       ],
@@ -197,6 +199,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         { kind: "model", id: "m1", entry: { baseUrl: "http://x", model: "z" } },
       ],
@@ -224,6 +227,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         {
           kind: "binary",
@@ -262,6 +266,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         {
           kind: "binary",
@@ -308,6 +313,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         {
           kind: "binary",
@@ -352,6 +358,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         {
           kind: "binary",
@@ -390,6 +397,7 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         {
           kind: "binary",

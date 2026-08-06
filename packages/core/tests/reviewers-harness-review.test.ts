@@ -413,6 +413,7 @@ describe("reviewRequest (success path: invoke the panel on a gathered request â†
       ],
       minReviewers: 1,
       skipped: [],
+      unverified: [],
     };
     let invoked = 0;
     const v = await reviewRequest(request, {

@@ -567,6 +567,7 @@ describe("cause classification through reviewerInvoke", () => {
   const binaryPanel = (timeoutMs = 1000): IPanel => ({
     minReviewers: 1,
     skipped: [],
+    unverified: [],
     reviewers: [
       {
         kind: "binary",
@@ -741,6 +742,7 @@ describe("cause classification through reviewerInvoke", () => {
     const panel: IPanel = {
       minReviewers: 1,
       skipped: [],
+      unverified: [],
       reviewers: [
         { kind: "model", id: "m", entry: { model: "x", baseUrl: "u" } },
       ],
