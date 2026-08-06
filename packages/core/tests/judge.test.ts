@@ -69,6 +69,9 @@ test("an unparseable response from a SUCCESSFUL call scores at the floor", async
   // reads `outcome`, and floors anything the candidate could have provoked.
   expect(s.scored).toBe(false);
   expect(s.outcome).toBe("unusable");
+  // The floor value itself, since qualityRepair copies `overall` before its
+  // zeroing branch and guardQuality would mask a wrong number here.
+  expect(s.overall).toBe(1);
 });
 
 test("parseable JSON lacking a valid overall also scores at the floor", async () => {

@@ -359,7 +359,32 @@ describe("an incomplete scope is refused, not reviewed as if it were whole", () 
       const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
 
       expect(scope.complete).toBe(false);
-      expect(scope.files.length).toBeLessThanOrEqual(MAX_SOLUTION_FILES);
+      // One PAST the cap: enumeration stops on the file that proves the scope is
+      // too big, which is also what keeps a scope of exactly MAX_SOLUTION_FILES
+      // from being called incomplete.
+      expect(scope.files.length).toBe(MAX_SOLUTION_FILES + 1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("a scope of EXACTLY the cap is complete, not floored", async () => {
+    // The off-by-one in the other direction: stopping at the cap rather than
+    // past it labels a finished enumeration incomplete and floors a solution
+    // that was perfectly reviewable.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-exactcap-"));
+
+    try {
+      await Promise.all(
+        Array.from({ length: MAX_SOLUTION_FILES }, (_unused, i) =>
+          writeFile(join(dir, `f${String(i)}.ts`), "export const x = 1;\n")
+        )
+      );
+
+      const scope = await solutionFiles(dir, { tasks: [{ files: ["*.ts"] }] });
+
+      expect(scope.files).toHaveLength(MAX_SOLUTION_FILES);
+      expect(scope.complete).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

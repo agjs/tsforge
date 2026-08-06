@@ -244,7 +244,9 @@ function byteLength(value: string, cap: number): number {
   let bytes = 0;
 
   for (const char of value) {
-    bytes += utf8Width(char.codePointAt(0) ?? 0);
+    const code = char.codePointAt(0) ?? 0;
+
+    bytes += utf8Width(code) + jsonEscapeOverhead(code);
 
     if (bytes > cap) {
       return cap + 1;
@@ -252,6 +254,35 @@ function byteLength(value: string, cap: number): number {
   }
 
   return bytes;
+}
+
+/**
+ * Extra bytes JSON serialization adds for this code point.
+ *
+ * The payload is not the request: it goes out inside a JSON body, where a quote
+ * or backslash becomes two characters and a control character becomes six. Sized
+ * on the raw text alone, a solution made of nothing but quotes fits a 64KB
+ * budget and produces a 128KB request — so the "hard ceiling" was a ceiling on
+ * something other than what is sent.
+ */
+function jsonEscapeOverhead(code: number): number {
+  // `"` and `\` become two characters.
+  if (code === 0x22 || code === 0x5c) {
+    return 1;
+  }
+
+  if (code >= 0x20) {
+    return 0;
+  }
+
+  // \n \r \t \b \f are two characters; every other control is \uXXXX, six.
+  return code === 0x0a ||
+    code === 0x0d ||
+    code === 0x09 ||
+    code === 0x08 ||
+    code === 0x0c
+    ? 1
+    : 5;
 }
 
 /**
@@ -308,11 +339,28 @@ const UNSCOREABLE: IJudgeScore = {
  * code, while 408/429/5xx are the server asking for the same request later or
  * failing on its own.
  */
+/** 4xx statuses that say something about the SETUP rather than the request body:
+ *  credentials, a missing model or route, a method the endpoint does not serve.
+ *  None of these change with the candidate's code. */
+const CONFIG_STATUSES = new Set([401, 402, 403, 404, 405, 410]);
+
 function isInfrastructureFailure(err: unknown): boolean {
   if (!(err instanceof ModelRequestError)) {
+    // No status at all: a socket error, DNS, an abort. Not attributable.
     return true;
   }
 
+  // A wrong key or a missing model is a broken setup, and flooring every
+  // candidate for it would turn one bad config line into a corpus-wide quality
+  // regression that looks like the model got worse.
+  if (CONFIG_STATUSES.has(err.status)) {
+    return true;
+  }
+
+  // What is left of 4xx is about the request BODY — 400, 413, 422 — and the body
+  // is mostly candidate code, so a token-dense solution can pass the byte budget
+  // and still be rejected. 408/429/5xx are the server asking for the same
+  // request later or failing on its own.
   return !err.isPermanent;
 }
 

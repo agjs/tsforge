@@ -343,6 +343,20 @@ describe("a failed CALL is classified by whose fault it was", () => {
     complete: () => Promise.reject(err),
   });
 
+  test("a 401 is a broken SETUP, not the candidate's code", async () => {
+    // A wrong key or a missing model does not change with the solution, and
+    // flooring every candidate for it turns one bad config line into a
+    // corpus-wide quality regression that looks like the model got worse.
+    for (const status of [401, 403, 404]) {
+      const score = await judge(
+        throwing(new ModelRequestError(status, "nope")),
+        { goal: "g", criteria: "c", code: "a" }
+      );
+
+      expect(score.outcome).toBe("unreachable");
+    }
+  });
+
   test("a 400 is the candidate's doing, so it scores", async () => {
     const score = await judge(
       throwing(new ModelRequestError(400, "context length exceeded")),
@@ -431,5 +445,37 @@ describe("every dimension must be a real score", () => {
 
     expect(score.outcome).toBe("scored");
     expect(score.correctness).toBe(2);
+  });
+});
+
+describe("the budget bounds the WIRE, not just the payload", () => {
+  test("JSON escaping counts toward the ceiling", () => {
+    // The payload goes out inside a JSON body, where every quote becomes two
+    // characters. Sized on raw text alone, a solution of nothing but quotes fits
+    // 64KB and produces a request twice that — a ceiling on something other than
+    // what is sent.
+    const quotes = '"'.repeat(JUDGE_BUDGET.code - 10);
+
+    expect(quotes.length).toBeLessThan(JUDGE_BUDGET.code);
+    expect(withinBudget({ goal: "", criteria: "", code: quotes })).toBe(false);
+  });
+
+  test("a control character costs its full escape", () => {
+    // \u0001 serializes as six characters, not one.
+    const controls = "\u0001".repeat(Math.floor(JUDGE_BUDGET.code / 3));
+
+    expect(withinBudget({ goal: "", criteria: "", code: controls })).toBe(
+      false
+    );
+  });
+
+  test("plain ASCII is unaffected", () => {
+    expect(
+      withinBudget({
+        goal: "",
+        criteria: "",
+        code: "x".repeat(JUDGE_BUDGET.code),
+      })
+    ).toBe(true);
   });
 });

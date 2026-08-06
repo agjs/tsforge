@@ -253,6 +253,12 @@ test("an unparseable judge response is no-signal — no improvement attempt", as
     expect(implementCalls).toBe(0); // never fed the model a nonsense "0/5" critique
     expect(result.attempts).toBe(0);
     expect(result.notes).toContain("unusable");
+    // ZERO, not the judge's floor. The acceptance guard reads 1 for anything the
+    // candidate caused, but IQualityResult has no `scored` field and 0 is this
+    // consumer's "no signal" — forwarding the floor records 1/5 in the sweep as
+    // though a reviewer had judged the code and found it poor. Reverting this to
+    // `initial.quality` left every other assertion green.
+    expect(result.quality).toBe(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

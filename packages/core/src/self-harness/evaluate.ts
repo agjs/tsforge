@@ -241,7 +241,10 @@ export async function solutionFiles(
       // discovery ran ahead of it: a scope matching a hundred thousand empty
       // files costs a hundred thousand directory entries and stats before
       // anything concludes it was too big.
-      if (seen.size >= MAX_SOLUTION_FILES) {
+      // STRICTLY greater: stopping AT the cap labels a scope of exactly
+      // MAX_SOLUTION_FILES incomplete even though enumeration had finished, and
+      // floors a solution that was perfectly reviewable.
+      if (seen.size > MAX_SOLUTION_FILES) {
         return { files: [...seen], complete: false };
       }
     }
