@@ -172,16 +172,19 @@ describe("an empty merge", () => {
   });
 });
 
-describe("quality and concision come from the RUNS now", () => {
+describe("quality and concision are averaged over TASKS, not runs", () => {
   /**
-   * These used to be averaged from the per-outcome scores. They are derived from
-   * records through `splitScore`, like everything else — so a test that sets
-   * `score.avgQuality` and no records asserts a substrate the merge no longer
-   * reads, which is exactly what this one did before.
+   * The SUBSTRATE changed with this PR — they are derived from records through
+   * `splitScore` now rather than averaged from per-outcome scores — but the
+   * weighting did not, and an earlier name for this block ("come from the RUNS
+   * now") got that wrong. `splitScore` computes both as a mean over TASK
+   * summaries, deliberately unlike `avgProgress`, which is a mean over runs.
    *
-   * The convention itself is unchanged and worth pinning: a run with no judged
-   * quality carries none (the judge only scores green runs), and those runs are
-   * skipped rather than counted as zero.
+   * The reason is three lines from each other in that function: every completed
+   * run has a progress score, so a task measured twice should weigh twice; but
+   * quality needs a judge call and loc needs a shipped solution, so most runs
+   * have neither and a run-weighted mean would be decided by which tasks
+   * happened to pass.
    */
   const judged = (task: string, quality: number, loc: number): IRunRecord => ({
     label: task,
@@ -279,23 +282,37 @@ describe("the collections merge, not just the counts", () => {
 
 describe("errored is the one count that cannot come from records", () => {
   test("it sums across outcomes", () => {
-    // An errored run produces no record to count — that is what errored means —
-    // so this is the only field the merge still adds up itself, and the only one
-    // a records-derived score cannot check. Every fixture hardcoded 0, so
-    // replacing the reduce with a literal 0 survived the whole suite.
+    // Not because an errored run leaves no record — it leaves one, a
+    // placeholder pushed on the catch path, counted in `runs` like any other.
+    // What that record lacks is a field marking it errored: it is
+    // indistinguishable from a run that failed honestly. So the count travels
+    // beside the records rather than being derived from them.
+    //
+    // The fixture is shaped like a real outcome for that reason: errored: 2
+    // means two placeholder records, not one.
     const withErrors = (n: number): IEvaluateOutcome => ({
-      records: [run("t", false, 0.5)],
+      records: Array.from({ length: n }, () => ({
+        label: "t",
+        passed: false,
+        cycles: 0,
+        ms: 0,
+      })),
       runs: [],
       score: {
         passed: 0,
-        runs: 1,
+        runs: n,
         errored: n,
         avgQuality: 0,
         avgLoc: 0,
         perTask: {},
       },
     });
+    const merged = mergeOutcomes([withErrors(2), withErrors(3)]);
 
-    expect(mergeOutcomes([withErrors(2), withErrors(3)]).score.errored).toBe(5);
+    expect(merged.score.errored).toBe(5);
+    // And they still count as runs, which is what makes the field necessary.
+    expect(merged.score.runs).toBe(5);
+    // No progress on any of them, so the split stays unmeasured rather than 0.
+    expect(merged.score.avgProgress).toBeUndefined();
   });
 });

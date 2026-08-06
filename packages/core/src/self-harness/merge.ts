@@ -12,8 +12,12 @@ import type { IEvaluateOutcome } from "./evaluate";
  * type is the defect; patching the field that happened to be dropped would have
  * left the next one waiting.
  *
- * Only `errored` still sums across outcomes, because an errored run produces no
- * record to count — that is what "errored" means.
+ * Only `errored` still sums across outcomes, and NOT for the reason I first
+ * wrote here. An errored run does produce a record — `runOneSpec` pushes a
+ * placeholder on its catch path, so it is counted in `runs` like any other. What
+ * that record lacks is any field saying it errored: it looks exactly like a run
+ * that failed honestly. So the count cannot be recovered from the records and
+ * has to be carried alongside them.
  *
  * Duplicate task entries now MERGE rather than overwrite: `summarize` groups by
  * label, so two outcomes for one task become a single summary with the right run

@@ -548,7 +548,6 @@ async function withOverlayEnv<T>(
   }
 }
 
-/** Mean over per-task values that carry a real signal (>0), or 0 when none. */
 /**
  * Build a split score from the runs it is a score OF — the ONE place this type
  * is assembled.
@@ -593,6 +592,9 @@ export function splitScore(
   };
 }
 
+/** Mean over per-task values that carry a real signal (>0), or 0 when none —
+ *  quality needs a judge call and loc needs a shipped solution, so a 0 means
+ *  "not measured on this task" rather than "measured as nothing". */
 export function meanOfSignaled(values: readonly number[]): number {
   const signaled = values.filter((v) => v > 0);
 
