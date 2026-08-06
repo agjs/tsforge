@@ -5,11 +5,6 @@ import { isRecord } from "../lib/guards";
 import { extractJson } from "../lib/json";
 
 /**
- * Score a green solution on quality dimensions the deterministic gate can't
- * judge. Provider-agnostic: point it at a flagship model to measure the local
- * model's gap to flagship quality.
- */
-/**
  * Every field the quality judge is allowed to see — built from the BUILT ARTIFACT
  * only (goal, acceptance criteria, code), never the generator's tool trace,
  * reasoning, or message history. This is design-rule #2 from the long-running-agent
@@ -365,6 +360,16 @@ function isInfrastructureFailure(err: unknown): boolean {
   return !err.isPermanent;
 }
 
+/**
+ * Score a green solution on quality dimensions the deterministic gate cannot
+ * judge. Provider-agnostic: point it at a flagship model to measure the local
+ * model's gap to flagship quality.
+ *
+ * Every route out of a SUCCESSFUL call carries a number (see IJudgeScore.outcome
+ * for why), because the acceptance guard is skipped when a side has none — and
+ * this function's own prompt contains candidate code, which could otherwise ask
+ * the model for a reply that switches the guard off.
+ */
 export async function judge(
   provider: IProvider,
   input: IJudgeInput

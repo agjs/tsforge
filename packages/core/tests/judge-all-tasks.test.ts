@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -437,10 +437,19 @@ describe("scoreSolution — the composed refusal path", () => {
   });
 
   test("an oversized solution never reaches the judge", async () => {
+    // FAR past the cap, not one byte over. The pre-read threshold is double the
+    // budget (disk bytes can overstate the decoded payload), so a cap+1 fixture
+    // sails through the short-circuit, gets read, and is refused by judge()
+    // before it calls the provider — leaving the stub quiet and the assertion
+    // green even with the short-circuit deleted. The same under-boundary fixture
+    // that let two earlier rounds ship a false claim.
     const dir = await corpus();
 
     try {
-      await writeFile(join(dir, "big.ts"), "x".repeat(JUDGE_BUDGET.code + 1));
+      await writeFile(
+        join(dir, "big.ts"),
+        "x".repeat(JUDGE_BUDGET.code * 2 + 16)
+      );
 
       const score = await scoreSolution(
         neverCalled,
@@ -453,6 +462,34 @@ describe("scoreSolution — the composed refusal path", () => {
       expect(score.outcome).toBe("oversized");
       expect(guardQuality(score)).toBe(1);
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("it is refused from SIZES — the file is never read", async () => {
+    // Proving the short-circuit, not just its outcome. Deleting it leaves the
+    // verdict identical, because judge() refuses the same file after reading it
+    // — so the only observable difference is whether the read happened. An
+    // unreadable file makes that observable: with the short-circuit, sizes are
+    // enough and nothing throws.
+    const dir = await corpus();
+    const path = join(dir, "locked.ts");
+
+    try {
+      await writeFile(path, "x".repeat(JUDGE_BUDGET.code * 2 + 16));
+      await chmod(path, 0o000);
+
+      const score = await scoreSolution(
+        neverCalled,
+        dir,
+        { files: ["locked.ts"], complete: true },
+        "g",
+        "c"
+      );
+
+      expect(score.outcome).toBe("oversized");
+    } finally {
+      await chmod(path, 0o600).catch(() => undefined);
       await rm(dir, { recursive: true, force: true });
     }
   });
