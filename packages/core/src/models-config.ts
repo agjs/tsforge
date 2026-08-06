@@ -113,6 +113,21 @@ export interface IReviewerBinary {
   input: BinaryInputMode;
   timeoutMs: number;
   parse: BinaryParseMode;
+  /**
+   * Which `models` entry this binary is a front for, when it is one.
+   *
+   * A binary reviewer is an opaque command — nothing in `argv` says which model
+   * answers, so the independence check that skips a MODEL reviewer sharing the
+   * builder's host and id cannot see a binary at all. A CLI pointed at the same
+   * model as the builder therefore counted as an independent vote, and a panel
+   * of one model reviewing its own work is a panel that agrees with itself.
+   *
+   * Declaring it makes that checkable. Left unset the binary is kept, because
+   * there is nothing to compare and refusing every undeclared CLI would disable
+   * working panels — but then its independence is asserted by whoever wrote the
+   * config rather than verified here.
+   */
+  fronts?: string;
 }
 
 export type IReviewer = IReviewerModel | IReviewerBinary;
@@ -227,6 +242,24 @@ function isParseMode(v: unknown): v is BinaryParseMode {
   return v === "json-fence" || v === "raw";
 }
 
+/**
+ * A model entry by name — OWN properties only.
+ *
+ * The registry is a PLAIN object (see parseModelsConfig for why Object.create(null)
+ * was tried and dropped), so it inherits from Object.prototype and this is load
+ * bearing everywhere, not belt-and-braces. A caller-supplied `IModelsConfig` —
+ * `resolvePanel` and friends are exported and take one — has the same shape:
+ * `models["constructor"]` resolves to a function rather than undefined, so a
+ * plain index read reports "yes, that model exists" and hands on something that
+ * is not a model.
+ */
+export function modelByName(
+  models: Record<string, IModelEntry>,
+  name: string
+): IModelEntry | undefined {
+  return Object.hasOwn(models, name) ? models[name] : undefined;
+}
+
 function parseModelReviewer(
   raw: Record<string, unknown>,
   models: Record<string, IModelEntry>
@@ -235,16 +268,28 @@ function parseModelReviewer(
     throw new Error("models.json: model reviewer needs { id, entry }");
   }
 
-  if (models[raw.entry] === undefined) {
+  if (modelByName(models, raw.entry) === undefined) {
     throw new Error(
       `models.json: reviewer entry "${raw.entry}" is not a configured model`
+    );
+  }
+
+  // A `fronts` here is a declaration that will never be read: only the binary
+  // path consults it, so a model reviewer carrying one looks annotated and is
+  // not. That is the same silent-declaration failure `fronts` exists to remove.
+  if (raw.fronts !== undefined) {
+    throw new Error(
+      'models.json: "fronts" belongs on a binary reviewer — a model reviewer declares its model with "entry"'
     );
   }
 
   return { kind: "model", id: raw.id, entry: raw.entry };
 }
 
-function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
+function parseBinaryReviewer(
+  raw: Record<string, unknown>,
+  models: Record<string, IModelEntry>
+): IReviewerBinary {
   const argv = raw.argv;
 
   if (typeof raw.id !== "string" || !Array.isArray(argv) || argv.length === 0) {
@@ -267,6 +312,14 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
     );
   }
 
+  // The mirror of the `fronts`-on-a-model check: only the model path reads
+  // `entry`, so a binary carrying one looks like it named its model and did not.
+  if (raw.entry !== undefined) {
+    throw new Error(
+      'models.json: "entry" belongs on a model reviewer — a binary declares its model with "fronts"'
+    );
+  }
+
   return {
     kind: "binary",
     id: raw.id,
@@ -274,7 +327,43 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
     input: raw.input,
     timeoutMs: raw.timeoutMs,
     parse: raw.parse,
+    ...frontsOf(raw, models),
   };
+}
+
+/**
+ * The optional `fronts` declaration, REJECTING a present-but-wrong value.
+ *
+ * Silently dropping a non-string turns a typo into an unchecked reviewer: the
+ * author believes they declared independence, the parser discards it, and the
+ * binary takes the undeclared path and counts as an independent vote anyway.
+ * That is the exact silent failure this field exists to remove, so a malformed
+ * one is a config error like any other.
+ */
+function frontsOf(
+  raw: Record<string, unknown>,
+  models: Record<string, IModelEntry>
+): { fronts?: string } {
+  if (raw.fronts === undefined) {
+    return {};
+  }
+
+  if (typeof raw.fronts !== "string" || raw.fronts.length === 0) {
+    throw new Error(
+      'models.json: binary reviewer "fronts" must be a non-empty models entry name'
+    );
+  }
+
+  // Checked against the registry, exactly as the model path checks `entry`. A
+  // well-formed typo — "buidler" — would otherwise parse fine and be discovered
+  // only at resolve time, as a reviewer quietly skipped mid-run.
+  if (modelByName(models, raw.fronts) === undefined) {
+    throw new Error(
+      `models.json: binary reviewer "fronts" names "${raw.fronts}", which is not a configured model`
+    );
+  }
+
+  return { fronts: raw.fronts };
 }
 
 function parseReviewer(
@@ -290,7 +379,7 @@ function parseReviewer(
   }
 
   if (raw.kind === "binary") {
-    return parseBinaryReviewer(raw);
+    return parseBinaryReviewer(raw, models);
   }
 
   throw new Error('models.json: reviewer kind must be "model" or "binary"');
@@ -330,6 +419,13 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     );
   }
 
+  // A plain object, deliberately. `Object.create(null)` would remove the
+  // inherited names structurally and was the better shape, but it returns `any`
+  // — so adopting it means either a forbidden `as` cast or an eslint-disable at
+  // the heart of config parsing, and neither is worth it here. The two holes it
+  // would have closed are closed anyway: `__proto__` is refused as a name just
+  // below, which is the only key whose ASSIGNMENT does something other than add
+  // a property, and every read goes through `modelByName`.
   const models: Record<string, IModelEntry> = {};
 
   for (const [name, entry] of Object.entries(raw.models)) {
@@ -339,13 +435,23 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
       );
     }
 
+    // Rejected rather than stored. A null-prototype registry could hold it
+    // safely, but `saveModelsConfig` serialises with JSON.stringify and would
+    // write a literal `"__proto__"` key back into models.json — a file other
+    // tools parse, where a plain `JSON.parse` + spread poisons whatever reads
+    // it. Refusing the name costs a user nothing and stops us emitting a
+    // hazard.
+    if (name === "__proto__") {
+      throw new Error('models.json: "__proto__" is not a usable model name');
+    }
+
     assertNumericFields(name, entry);
     assertImageApi(name, entry);
     assertReasoning(name, entry);
     models[name] = entry;
   }
 
-  if (models[raw.active] === undefined) {
+  if (modelByName(models, raw.active) === undefined) {
     throw new Error(
       `models.json: active "${raw.active}" is not one of: ${Object.keys(models).join(", ")}`
     );
@@ -390,7 +496,10 @@ function parseCapabilities(
       );
     }
 
-    if (typeof target !== "string" || models[target] === undefined) {
+    if (
+      typeof target !== "string" ||
+      modelByName(models, target) === undefined
+    ) {
       throw new Error(
         `models.json: capability "${cap}" must name a model: ${Object.keys(models).join(", ")}`
       );
@@ -424,8 +533,21 @@ export async function loadModelsConfig(): Promise<IModelsConfig> {
   return parseModelsConfig(raw);
 }
 
+/** Names that must never reach the file, whatever built the config. */
+function assertSafeNames(cfg: IModelsConfig): void {
+  if (Object.hasOwn(cfg.models, "__proto__")) {
+    throw new Error('models.json: "__proto__" is not a usable model name');
+  }
+}
+
 /** Write the registry: dir 0700, file 0600 (it may hold an inline key). */
 export async function saveModelsConfig(cfg: IModelsConfig): Promise<void> {
+  // Checked HERE as well as at parse. The reason for refusing the name is that
+  // it must not reach the file — models.json is read by other tools, where a
+  // plain parse-and-spread poisons whatever consumes it — and this function is
+  // exported and takes a config the caller built, which the parser never saw.
+  assertSafeNames(cfg);
+
   const dir = join(process.env.TSFORGE_HOME ?? homedir(), ".tsforge");
 
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -440,7 +562,7 @@ export async function saveModelsConfig(cfg: IModelsConfig): Promise<void> {
 export async function setActiveModel(name: string): Promise<IModelsConfig> {
   const cfg = await loadModelsConfig();
 
-  if (cfg.models[name] === undefined) {
+  if (modelByName(cfg.models, name) === undefined) {
     throw new Error(
       `unknown model "${name}" — configured: ${Object.keys(cfg.models).join(", ")}`
     );
@@ -501,7 +623,10 @@ export async function resolveActiveModel(): Promise<{
 
   const cfg = await loadModelsConfig();
 
-  return { name: cfg.active, entry: cfg.models[cfg.active] ?? LOCAL_DEFAULT };
+  return {
+    name: cfg.active,
+    entry: modelByName(cfg.models, cfg.active) ?? LOCAL_DEFAULT,
+  };
 }
 
 /** Resolve a model by its registry name, falling back to the active model when
@@ -523,10 +648,13 @@ export async function resolveModelByName(
   }
 
   const cfg = await loadModelsConfig();
-  const entry = cfg.models[name];
+  const entry = modelByName(cfg.models, name);
 
   return entry === undefined
-    ? { name: cfg.active, entry: cfg.models[cfg.active] ?? LOCAL_DEFAULT }
+    ? {
+        name: cfg.active,
+        entry: modelByName(cfg.models, cfg.active) ?? LOCAL_DEFAULT,
+      }
     : { name, entry };
 }
 
@@ -580,7 +708,7 @@ export async function resolveCapabilityModel(
   const cfg = await loadModelsConfig();
 
   if (envModel !== undefined && envModel.length > 0) {
-    const entry = cfg.models[envModel];
+    const entry = modelByName(cfg.models, envModel);
 
     if (entry === undefined) {
       throw new Error(
@@ -592,9 +720,11 @@ export async function resolveCapabilityModel(
   }
 
   const target = cfg.capabilities?.[cap];
+  const mapped =
+    target === undefined ? undefined : modelByName(cfg.models, target);
 
-  if (target !== undefined && cfg.models[target] !== undefined) {
-    return { name: target, entry: cfg.models[target] };
+  if (target !== undefined && mapped !== undefined) {
+    return { name: target, entry: mapped };
   }
 
   return null;
