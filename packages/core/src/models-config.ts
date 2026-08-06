@@ -113,6 +113,21 @@ export interface IReviewerBinary {
   input: BinaryInputMode;
   timeoutMs: number;
   parse: BinaryParseMode;
+  /**
+   * Which `models` entry this binary is a front for, when it is one.
+   *
+   * A binary reviewer is an opaque command — nothing in `argv` says which model
+   * answers, so the independence check that skips a MODEL reviewer sharing the
+   * builder's host and id cannot see a binary at all. A CLI pointed at the same
+   * model as the builder therefore counted as an independent vote, and a panel
+   * of one model reviewing its own work is a panel that agrees with itself.
+   *
+   * Declaring it makes that checkable. Left unset the binary is kept, because
+   * there is nothing to compare and refusing every undeclared CLI would disable
+   * working panels — but then its independence is asserted by whoever wrote the
+   * config rather than verified here.
+   */
+  fronts?: string;
 }
 
 export type IReviewer = IReviewerModel | IReviewerBinary;
@@ -274,6 +289,7 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
     input: raw.input,
     timeoutMs: raw.timeoutMs,
     parse: raw.parse,
+    ...(typeof raw.fronts === "string" ? { fronts: raw.fronts } : {}),
   };
 }
 

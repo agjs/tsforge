@@ -66,22 +66,64 @@ function checkModelIndependence(
   return { ok: true, reason: "" };
 }
 
+/**
+ * Resolve a binary reviewer, applying the independence check when — and only
+ * when — the config says which model it fronts.
+ *
+ * A binary is an opaque command: nothing in `argv` reveals the model behind it,
+ * so this check was skipped entirely and a CLI pointed at the builder's own
+ * model counted as an independent vote. That is the one thing a review panel
+ * cannot tolerate, because a model agreeing with itself looks exactly like two
+ * reviewers agreeing.
+ *
+ * An undeclared binary is still kept. There is nothing to compare it against,
+ * and refusing every CLI that has not been annotated would disable working
+ * panels for a risk that may not exist — but the guarantee is then only as good
+ * as the config, which is why declaring it is worth doing.
+ */
+function resolveBinary(
+  reviewer: Extract<IReviewer, { kind: "binary" }>,
+  cfg: IModelsConfig,
+  active: { name: string; entry: IModelEntry }
+): { kept?: ResolvedReviewer; skipped?: { id: string; reason: string } } {
+  const kept: ResolvedReviewer = {
+    kind: "binary",
+    id: reviewer.id,
+    argv: reviewer.argv,
+    input: reviewer.input,
+    timeoutMs: reviewer.timeoutMs,
+    parse: reviewer.parse,
+  };
+
+  if (reviewer.fronts === undefined) {
+    return { kept };
+  }
+
+  const entry = cfg.models[reviewer.fronts];
+
+  if (entry === undefined) {
+    return {
+      skipped: {
+        id: reviewer.id,
+        reason: `fronts "${reviewer.fronts}" not in models`,
+      },
+    };
+  }
+
+  const independence = checkModelIndependence(reviewer.fronts, entry, active);
+
+  return independence.ok
+    ? { kept }
+    : { skipped: { id: reviewer.id, reason: independence.reason } };
+}
+
 function resolveOne(
   reviewer: IReviewer,
   cfg: IModelsConfig,
   active: { name: string; entry: IModelEntry }
 ): { kept?: ResolvedReviewer; skipped?: { id: string; reason: string } } {
   if (reviewer.kind === "binary") {
-    return {
-      kept: {
-        kind: "binary",
-        id: reviewer.id,
-        argv: reviewer.argv,
-        input: reviewer.input,
-        timeoutMs: reviewer.timeoutMs,
-        parse: reviewer.parse,
-      },
-    };
+    return resolveBinary(reviewer, cfg, active);
   }
 
   const entry = cfg.models[reviewer.entry];
