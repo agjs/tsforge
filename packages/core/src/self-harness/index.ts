@@ -18,6 +18,7 @@ export {
 export { mineWeaknesses, dominantSignal, type IMinedRun } from "./mine";
 export {
   evaluateHarness,
+  splitScore,
   allMustRun,
   solutionFiles,
   guardQuality,

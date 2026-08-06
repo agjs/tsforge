@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { mergeOutcomes } from "../src/self-harness";
+import { mergeOutcomes, acceptanceDecision } from "../src/self-harness";
 import type { IEvaluateOutcome } from "../src/self-harness";
 import type { IRunRecord } from "../src/eval";
 
@@ -314,5 +314,65 @@ describe("errored is the one count that cannot come from records", () => {
     expect(merged.score.runs).toBe(5);
     // No progress on any of them, so the split stays unmeasured rather than 0.
     expect(merged.score.avgProgress).toBeUndefined();
+  });
+});
+
+describe("the seam this PR exists to defend", () => {
+  /**
+   * The composition, end to end: records → splitScore → merge → the acceptance
+   * rule's graded dimension.
+   *
+   * Every test that existed when the bug shipped drove `evaluateHarness` or
+   * `acceptanceDecision` DIRECTLY. Nothing ran a score through the join, so a
+   * merge that dropped `avgProgress` left both sides passing while the graded
+   * dimension silently never fired. This is the test that would have caught it,
+   * and it fails if any link in that chain stops carrying the field.
+   *
+   * It deliberately does NOT reach through `evaluateSplitResilient` — that owns
+   * the retry loop and endpoint probing, and faking an endpoint to reach this
+   * assertion would test the mock. What it pins is the data path, which is what
+   * broke.
+   */
+  const evaluation = (
+    heldIn: IEvaluateOutcome,
+    heldOut: IEvaluateOutcome
+  ): {
+    heldIn: IEvaluateOutcome["score"];
+    heldOut: IEvaluateOutcome["score"];
+  } => ({
+    heldIn: mergeOutcomes([heldIn]).score,
+    heldOut: mergeOutcomes([heldOut]).score,
+  });
+
+  test("a merged split drives the graded decision, equal pass counts", () => {
+    // Same passes on both sides, so the pass-count rule is silent and only the
+    // graded dimension can decide. Before the fix this returned "progress was
+    // not measured on both splits" — which is precisely what a live session
+    // reported.
+    const base = evaluation(
+      outcome([run("a", false, 0.3)]),
+      outcome([run("b", false, 0.5)])
+    );
+    const cand = evaluation(
+      outcome([run("a", false, 0.8)]),
+      outcome([run("b", false, 0.5)])
+    );
+    const decision = acceptanceDecision(base, cand);
+
+    expect(decision.accepted).toBe(true);
+    expect(decision.reason).toContain("progress gain");
+  });
+
+  test("and it still refuses a candidate that got LESS far", () => {
+    const base = evaluation(
+      outcome([run("a", false, 0.8)]),
+      outcome([run("b", false, 0.5)])
+    );
+    const cand = evaluation(
+      outcome([run("a", false, 0.2)]),
+      outcome([run("b", false, 0.5)])
+    );
+
+    expect(acceptanceDecision(base, cand).accepted).toBe(false);
   });
 });
