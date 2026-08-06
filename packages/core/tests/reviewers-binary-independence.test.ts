@@ -390,15 +390,17 @@ describe("fronts is validated against the registry at parse time", () => {
 
 describe("caller-supplied config, which the parser never saw", () => {
   /**
-   * Where `modelByName` still earns its place. Every runtime resolver loads
-   * through `parseModelsConfig`, whose registry now has a null prototype — so
-   * those sites cannot hit an inherited name at all, and testing them would be
-   * asserting against a shape the parser can no longer produce.
+   * Where `modelByName` earns its place — which is everywhere, not only here.
    *
-   * `resolvePanel` is different: it is exported and takes an `IModelsConfig` the
-   * caller built, which is an ordinary object literal with Object.prototype
-   * behind it. That is the case below, and the one the harness itself hits from
-   * tests and tools.
+   * An earlier draft of this comment said the parser produces a null-prototype
+   * registry so the runtime sites were safe by construction. That was true of a
+   * design I backed out of: `parseModelsConfig` builds a plain `{}` (see its
+   * comment for why), so every lookup inherits Object.prototype and every one of
+   * them needs the guard.
+   *
+   * `resolvePanel` is the case exercised below because it is exported and takes
+   * a config the caller built — the shape the harness itself passes from tests
+   * and tools, which the parser never sees.
    */
   test("an inherited name in a hand-built registry resolves to nothing", () => {
     const panel = resolvePanel(
@@ -468,7 +470,7 @@ describe("identity is by HOSTNAME, deliberately coarse", () => {
 });
 
 describe("saving cannot emit a poisoned key either", () => {
-  test("a hand-built config with a __proto__ model is refused at save", () => {
+  test("a hand-built config with a __proto__ model is refused at save", async () => {
     // The refusal exists so the name never reaches models.json, which other
     // tools parse — so it has to sit on the WRITE path too, not only the parse
     // path, because saveModelsConfig is exported and takes a config the parser
@@ -481,8 +483,12 @@ describe("saving cannot emit a poisoned key either", () => {
       configurable: true,
     });
 
-    expect(saveModelsConfig({ active: "builder", models })).rejects.toThrow(
-      /__proto__/
-    );
+    // AWAITED. `expect(promise).rejects` in a non-async callback returns a
+    // promise nobody waits on, so the assertion can never run and the test
+    // passes having checked nothing — a guarantee asserted and not verified,
+    // which is the failure this whole PR is about.
+    await expect(
+      saveModelsConfig({ active: "builder", models })
+    ).rejects.toThrow(/__proto__/);
   });
 });

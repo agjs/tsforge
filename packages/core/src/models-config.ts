@@ -312,6 +312,14 @@ function parseBinaryReviewer(
     );
   }
 
+  // The mirror of the `fronts`-on-a-model check: only the model path reads
+  // `entry`, so a binary carrying one looks like it named its model and did not.
+  if (raw.entry !== undefined) {
+    throw new Error(
+      'models.json: "entry" belongs on a model reviewer — a binary declares its model with "fronts"'
+    );
+  }
+
   return {
     kind: "binary",
     id: raw.id,
@@ -525,7 +533,6 @@ export async function loadModelsConfig(): Promise<IModelsConfig> {
   return parseModelsConfig(raw);
 }
 
-/** Write the registry: dir 0700, file 0600 (it may hold an inline key). */
 /** Names that must never reach the file, whatever built the config. */
 function assertSafeNames(cfg: IModelsConfig): void {
   if (Object.hasOwn(cfg.models, "__proto__")) {
@@ -533,6 +540,7 @@ function assertSafeNames(cfg: IModelsConfig): void {
   }
 }
 
+/** Write the registry: dir 0700, file 0600 (it may hold an inline key). */
 export async function saveModelsConfig(cfg: IModelsConfig): Promise<void> {
   // Checked HERE as well as at parse. The reason for refusing the name is that
   // it must not reach the file — models.json is read by other tools, where a
