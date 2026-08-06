@@ -311,27 +311,39 @@ async function childrenOf(pid: number): Promise<number[]> {
 }
 
 /**
- * Kill a process and everything below it, children first.
+ * The whole tree under (and including) a pid, deepest first.
  *
- * WHILE THE PARENT IS STILL ALIVE. Once it exits, its children are re-parented
- * to init and `pgrep -P` finds nothing — so reaping after waiting on the parent
- * looks like it works and silently leaves every orphan running. That is what a
- * first attempt at this did.
+ * COLLECTED ONCE, before anything is signalled, and while the parent is alive to
+ * be walked. Re-walking for the SIGKILL pass cannot work: SIGTERM makes a
+ * well-behaved parent exit, its TERM-IGNORING child is re-parented to init, and
+ * `pgrep -P <parent>` then returns nothing — so escalation finds an empty tree
+ * and the child runs on. A first version did exactly that and looked correct,
+ * because its test had a TERM-ignoring shell over a child that died on the
+ * first signal.
  *
  * Bun.spawn cannot put a child in its own process group, and killing the group
  * we SHARE would take the harness down with it, so walking the tree is what is
  * left. Best effort by construction: pgrep may be absent, and a process may exit
  * between listing and killing. Both are fine — this only ever adds cleanup.
  */
-async function killTree(pid: number, signal: number): Promise<void> {
+async function collectTree(pid: number): Promise<number[]> {
+  const below: number[] = [];
+
   for (const child of await childrenOf(pid)) {
-    await killTree(child, signal);
+    below.push(...(await collectTree(child)));
   }
 
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // Already gone.
+  return [...below, pid];
+}
+
+/** Signal a captured list, ignoring anything that has already gone. */
+function signalAll(pids: readonly number[], signal: number): void {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Already gone.
+    }
   }
 }
 
@@ -371,24 +383,32 @@ export async function runBinary(
   const kill = { timedOut: false };
   const timer = setTimeout(() => {
     kill.timedOut = true;
-    // The tree, not just the reviewer — and now, while it is still alive to be
-    // walked.
-    void killTree(proc.pid, 15);
-    // SIGTERM is a request. A reviewer that ignores it — or installs a handler
-    // and takes its time — would otherwise keep the whole panel blocked past a
-    // budget that exists precisely to stop that. SIGKILL is not refusable.
-    // KNOWN LIMITATION: this kills the reviewer, not its process group. A
-    // reviewer that backgrounds work leaves those children orphaned and running
-    // — they die on their own, but they are not reaped here. Killing the group
-    // would need the child spawned into one of its own; done naively (kill
-    // -pid on a shared group) it would take the harness down with it, which is
-    // a worse failure than a stray `sleep`. The drain bound above is what stops
-    // an orphan holding the panel.
-    killHard = setTimeout(() => {
-      void killTree(proc.pid, 9);
-    }, KILL_GRACE_MS);
+    ending = endTree(proc.pid);
   }, r.timeoutMs);
-  let killHard: ReturnType<typeof setTimeout> | undefined;
+  /** In flight while a kill is being carried out, so the caller waits for it
+   *  instead of returning with the escalation still pending. */
+  let ending: Promise<void> | undefined;
+
+  /**
+   * Ask the tree to stop, then insist.
+   *
+   * SIGTERM is a request — a reviewer that ignores it, or takes its time, would
+   * otherwise hold the panel past the budget that exists to stop that — and
+   * SIGKILL is not refusable.
+   *
+   * AWAITED, not left on a timer. An escalation on a timer is cancelled by
+   * cleanup the moment the parent exits, which is exactly when a TERM-ignoring
+   * child still needs killing: the reviewer's own well-behaved exit disarms the
+   * thing that would have reaped its orphan.
+   */
+  const endTree = async (pid: number): Promise<void> => {
+    // Captured BEFORE anything is signalled — see collectTree.
+    const tree = await collectTree(pid);
+
+    signalAll(tree, 15);
+    await Bun.sleep(KILL_GRACE_MS);
+    signalAll(tree, 9);
+  };
 
   try {
     // Cleared the MOMENT the process exits, not after stdout finishes draining.
@@ -399,7 +419,6 @@ export async function runBinary(
     // near the budget edge under concurrent panel load.
     const exited = proc.exited.then((code) => {
       clearTimeout(timer);
-      clearTimeout(killHard);
 
       return code;
     });
@@ -412,10 +431,7 @@ export async function runBinary(
     // hit there is nothing left to wait for.
     if (read.stoppedBy === "size") {
       clearTimeout(timer);
-      await killTree(proc.pid, 15);
-      killHard = setTimeout(() => {
-        void killTree(proc.pid, 9);
-      }, KILL_GRACE_MS);
+      ending = endTree(proc.pid);
     }
 
     const code = await exited;
@@ -431,7 +447,10 @@ export async function runBinary(
     };
   } finally {
     clearTimeout(timer);
-    clearTimeout(killHard);
+    // Wait for a kill in progress. Returning while the escalation is pending
+    // leaves the caller believing the reviewer is gone when its TERM-ignoring
+    // child is not.
+    await ending;
 
     if (tmpPath !== undefined) {
       await rm(tmpPath, { force: true });
@@ -585,7 +604,7 @@ export function formatVerdict(v: IVerdict): string {
     // The reason can be derived straight from a reviewer-controlled finding, so
     // it is no more ours than the failure text below it.
     `harness-review: ${head} — ${oneLine(v.reason)}`,
-    `reviewers ok: ${String(v.reviewers.ok)}  errored: ${String(v.reviewers.errored)}  (builder: ${v.identity})`,
+    `reviewers ok: ${String(v.reviewers.ok)}  errored: ${String(v.reviewers.errored)}  (builder: ${oneLine(v.identity)})`,
   ];
 
   // Name every reviewer that dropped out, with why and how long it took. A bare
@@ -699,7 +718,10 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const panel = resolvePanel(cfg, active);
 
   for (const s of panel.skipped) {
-    process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
+    // Config-derived, so no more ours than a reviewer's own output.
+    process.stdout.write(
+      `skipped reviewer ${oneLine(s.id)}: ${oneLine(s.reason)}\n`
+    );
   }
 
   const treeHashRes = await gitRunner(["write-tree"]);

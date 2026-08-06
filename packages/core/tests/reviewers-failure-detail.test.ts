@@ -340,6 +340,33 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(r.ok).toBe(false);
   }, 30_000);
 
+  test("a TERM-ignoring DESCENDANT is reaped, not orphaned", async () => {
+    // The hard shape, and the one a first fix silently failed: the parent
+    // HONOURS SIGTERM and exits, so its TERM-ignoring child is re-parented to
+    // init and can no longer be found by walking from the parent. Escalating
+    // against pids captured before the first signal is what reaches it.
+    const marker = `tsforge-orphan-${String(Date.now())}`;
+
+    await runBinary(
+      {
+        argv: ["sh", "-c", `sh -c "trap '' TERM; sleep 45 # ${marker}" & wait`],
+        input: "arg",
+        timeoutMs: 700,
+      },
+      ""
+    );
+
+    const probe = Bun.spawn(["pgrep", "-f", marker], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const survivors = (await new Response(probe.stdout).text()).trim();
+
+    await probe.exited;
+
+    expect(survivors).toBe("");
+  }, 60_000);
+
   test("a binary that IGNORES SIGTERM is still killed, not waited on", async () => {
     // SIGTERM is a request. Without escalation an unkillable reviewer holds the
     // whole panel past a budget that exists to stop exactly that, and the
@@ -568,7 +595,10 @@ describe("cause classification through reviewerInvoke", () => {
           stdout: '{"verdict":"appr',
           timedOut: false,
           truncated: true,
-          stoppedBy: "eof" as const,
+          // A REAL combination: readBounded sets truncated = stoppedBy !== "eof",
+          // so truncated with "eof" is a state runBinary cannot produce and the
+          // fixture proved nothing about either real branch.
+          stoppedBy: "deadline" as const,
         }),
     });
 
@@ -741,5 +771,42 @@ describe("cause classification through reviewerInvoke", () => {
 
     expect(out[0]?.status).toBe("errored");
     expect(out[0]).toMatchObject({ cause: "timeout" });
+  });
+});
+
+describe("oneLine truncation", () => {
+  const withError = (error: string): string =>
+    formatVerdict(
+      aggregate(
+        [
+          okOutcome("a"),
+          okOutcome("b"),
+          { status: "errored", reviewerId: "x", error, cause: "threw", ms: 1 },
+        ],
+        opts
+      )
+    );
+
+  test("a message at the cap is kept whole", () => {
+    const exact = "y".repeat(300);
+
+    expect(withError(exact)).toContain(exact);
+  });
+
+  test("one past the cap is cut and marked", () => {
+    const over = "y".repeat(301);
+    const out = withError(over);
+
+    expect(out).not.toContain(over);
+    expect(out).toContain("…");
+  });
+
+  test("a reviewer cannot bury the summary under its own output", () => {
+    // The point of the cap: the failure line sits in a summary someone reads to
+    // decide whether to merge, and a reviewer that dumps a megabyte should not
+    // push everything else off the screen.
+    const flood = "z".repeat(100_000);
+
+    expect(withError(flood).length).toBeLessThan(1_000);
   });
 });
