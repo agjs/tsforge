@@ -332,9 +332,15 @@ const QUALITY_FLOOR = 1;
  * locally, just short of the model call. `Bun.file().size` is a stat.
  *
  * The arithmetic is the judge's own (`sizeWithinBudget`), not a second copy of
- * it: a short-circuit with its own threshold is a short-circuit that drifts, and
- * then either refuses inputs the judge would accept or materialises ones it
- * would not. Separators are counted because the join adds them.
+ * it. Separators are counted because the join adds them.
+ *
+ * ONE-SIDED, though, and deliberately. File sizes are raw bytes, while the judge
+ * also counts what JSON escaping adds — so this sees a number that is never
+ * larger than the real one. That makes it safe in the direction that matters: it
+ * can never refuse something the judge would have accepted. It CAN pass through
+ * a solution the judge then refuses (a file of nothing but quotes doubles when
+ * serialised), which costs one read of a file already known to be under the raw
+ * cap. A conservative skip is an optimisation; a wrong verdict would not be.
  */
 export function solutionFitsJudge(
   runDir: string,

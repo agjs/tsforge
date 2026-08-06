@@ -104,10 +104,14 @@ const USER_FRAMING = userMessage({ goal: "", criteria: "", code: "" });
  * prompt grew — it sat at 256 while the real figure was ~670 — so the "hard
  * ceiling" quietly admitted requests over it. Deriving it from the strings means
  * editing the prompt cannot silently loosen the budget.
+ *
+ * Through the same counter the payload uses, so the quotes and newlines in the
+ * prompt carry their JSON escape cost too — otherwise the non-payload side would
+ * undercount exactly the way the payload side used to.
  */
 const FRAMING_BYTES =
-  new TextEncoder().encode(SYSTEM).length +
-  new TextEncoder().encode(USER_FRAMING).length;
+  byteLength(SYSTEM, Number.MAX_SAFE_INTEGER) +
+  byteLength(USER_FRAMING, Number.MAX_SAFE_INTEGER);
 
 /** Response cap. The reply is one small JSON object; the model-wide default is
  *  sized for whole-file tool output and is thousands of times larger than this

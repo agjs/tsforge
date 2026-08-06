@@ -197,9 +197,52 @@ describe("solutionFitsJudge", () => {
     }
   });
 
+  test("it never refuses what the judge would accept", async () => {
+    // The invariant that matters, and the only one available: file sizes are raw
+    // bytes while the judge also counts JSON escaping, so this side always sees
+    // the smaller number. Being wrong in the other direction — skipping a read
+    // for a solution the judge would have scored — is what would silently floor
+    // real work.
+    const dir = await corpus();
+
+    try {
+      for (const code of [
+        '"'.repeat(2000),
+        "\u0001".repeat(2000),
+        "x".repeat(2000),
+      ]) {
+        await writeFile(join(dir, "probe.ts"), code);
+
+        const fits = solutionFitsJudge(dir, ["probe.ts"], "g", "c");
+        const judged = withinBudget({ goal: "g", criteria: "c", code });
+
+        // fits === false implies judged === false.
+        expect(fits || !judged).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a quote-heavy file may pass the pre-read and still be refused", async () => {
+    // The permitted direction of disagreement, pinned so nobody "fixes" it into
+    // symmetry by making the pre-read guess at escape cost and over-refuse.
+    const dir = await corpus();
+    const code = '"'.repeat(JUDGE_BUDGET.code - 100);
+
+    try {
+      await writeFile(join(dir, "quotes.ts"), code);
+
+      expect(solutionFitsJudge(dir, ["quotes.ts"], "g", "c")).toBe(true);
+      expect(withinBudget({ goal: "g", criteria: "c", code })).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("it agrees with the judge's own check on the same bytes", async () => {
-    // The anti-drift assertion: same content, same verdict, from sizes as from
-    // strings.
+    // Same verdict from sizes as from strings for ASCII, where escaping costs
+    // nothing and the two counts coincide.
     const dir = await corpus();
     const code = "x".repeat(JUDGE_BUDGET.code + 1);
 
