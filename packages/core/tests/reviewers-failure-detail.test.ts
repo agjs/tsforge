@@ -4,6 +4,7 @@ import type { ReviewOutcome } from "../src/reviewers/aggregate";
 import {
   formatVerdict,
   runBinary,
+  readBounded,
   MAX_STDOUT_BYTES,
 } from "../src/cli/harness-review-mode";
 import { reviewerInvoke } from "../src/reviewers/invoke";
@@ -345,11 +346,7 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(r.timedOut).toBe(true);
   }, 30_000);
 
-  test("a process that escapes the kill cannot wedge the panel", async () => {
-    // The escape hatch. A child that leaves its group — `setsid`, a re-exec —
-    // survives the group kill, so `proc.exited` may never settle. Both the exit
-    // wait AND the stdout drain are raced against a grace, because hanging the
-    // drain off the exit alone deadlocks exactly the case the hatch exists for.
+  test("a timed-out reviewer returns on its budget, not on its own schedule", async () => {
     const started = Date.now();
     const r = await runBinary(
       { argv: ["sh", "-c", "sleep 30"], input: "arg", timeoutMs: 800 },
@@ -358,7 +355,6 @@ describe("runBinary reports WHICH failure it was", () => {
 
     expect(r.timedOut).toBe(true);
     expect(r.ok).toBe(false);
-    // Budget plus grace, not the sleep.
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
@@ -860,4 +856,43 @@ describe("identity is untrusted too", () => {
 
     expect(formatVerdict(v)).not.toContain("\nharness-review: PASS");
   });
+});
+
+describe("readBounded gives up on a stream that never ends", () => {
+  /**
+   * The mechanism the escape hatch rests on, tested directly because its real
+   * trigger cannot be: a process surviving SIGKILL is one that left its group,
+   * and there is no portable shell-level way to arrange that.
+   *
+   * What matters is that the drain is bounded by the promise it is HANDED, not
+   * by the stream running out — because the promise runBinary passes is
+   * `exited OR escaped`, and hanging it on `exited` alone deadlocked exactly the
+   * case the hatch exists for.
+   */
+  test("it stops once the promise it was given settles", async () => {
+    let push: ((chunk: Uint8Array) => void) | undefined;
+    const forever = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk): void => {
+          controller.enqueue(chunk);
+        };
+
+        push(new TextEncoder().encode("partial"));
+      },
+    });
+    let release: (() => void) | undefined;
+    const gone = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reading = readBounded(forever, gone);
+
+    // The stream is still open and will never close on its own.
+    release?.();
+
+    const read = await reading;
+
+    expect(read.text).toContain("partial");
+    expect(read.stoppedBy).toBe("deadline");
+    expect(read.truncated).toBe(true);
+  }, 30_000);
 });

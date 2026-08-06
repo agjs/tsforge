@@ -207,7 +207,7 @@ interface IBoundedRead {
  * exited, leaving a background child holding the pipe, would lose a complete
  * answer for the sake of the child.
  */
-async function readBounded(
+export async function readBounded(
   stream: ReadableStream<Uint8Array>,
   gone: Promise<unknown>
 ): Promise<IBoundedRead> {
@@ -342,6 +342,12 @@ export async function runBinary(
     kill.timedOut = true;
     killGroup();
   }, r.timeoutMs);
+  // NOTE: the trigger for this cannot be reproduced portably from a test — a
+  // process that survives SIGKILL means one that left its group (setsid, a
+  // re-exec), and there is no shell-level way to arrange that on both macOS and
+  // Linux. What IS tested is the mechanism it depends on: readBounded abandons a
+  // stream that never ends once the promise it was given settles.
+  //
   // Resolves only once a kill has been signalled AND the process still has not
   // been reaped a grace later — i.e. it escaped its group and survived SIGKILL.
   // Raced against `proc.exited` so the wait below always settles; without it an
