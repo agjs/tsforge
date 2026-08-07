@@ -11,10 +11,16 @@
  * a path alias does. Installed dependencies under `node_modules` are excluded —
  * not the surface this pins, and walking them would drag in the whole tree.
  *
- * KNOWN LIMIT: only source files are hashed. A plugin that reads its severities
- * from a JSON or YAML file next door can still change behavior with no digest
- * change. Closing that means knowing which data files a plugin reads, which the
- * import graph does not say.
+ * Imported data files count too — `import severities from "./severities.json"`
+ * decides what a pack enforces as much as any rule module does.
+ *
+ * KNOWN LIMITS, both needing more than an import graph to close:
+ * - A file the plugin READS at runtime (`readFile("./severities.json")`) is
+ *   invisible here; nothing in the source says which paths a plugin will open.
+ * - Content swapped between the load hash and the post-import re-hash is
+ *   executed, and restoring the original bytes before that re-hash leaves a
+ *   matching digest. Catching that needs the import to read the same bytes the
+ *   hash did, which the module loader gives no way to arrange.
  */
 
 import { createHash } from "node:crypto";
@@ -100,12 +106,17 @@ async function workspaceSourceFor(
   }
 }
 
-/** Candidate paths for a bare relative specifier (with and without extensions). */
+/** Candidate paths for a relative specifier (with and without extensions). */
 function candidatePaths(fromFile: string, spec: string): string[] {
   const base = resolve(dirname(fromFile), spec);
   const out: string[] = [];
 
-  if (CODE_EXT.has(extname(base))) {
+  // A specifier that already names a file — `./rules.ts` or `./severities.json`
+  // — resolves to exactly that file. Only an EXTENSIONLESS specifier needs the
+  // spellings guessed. Speculating code extensions for `./severities.json`
+  // produces `severities.json.ts` and friends, none of which exist, dropping a
+  // plugin's own config out of the graph.
+  if (extname(base).length > 0) {
     out.push(base);
   } else {
     for (const ext of CODE_EXT) {
@@ -141,7 +152,8 @@ async function enqueueImports(
   file: string,
   source: string,
   seen: ReadonlySet<string>,
-  queue: string[]
+  queue: string[],
+  entry: string
 ): Promise<void> {
   for (const spec of collectSpecs(source)) {
     const candidates = spec.startsWith(".")
@@ -153,6 +165,12 @@ async function enqueueImports(
         queue.push(candidate);
       }
     }
+
+    // Checked per specifier, not once per file: ONE file holds as many imports
+    // as someone cares to write, each queuing up to 16 spellings and costing a
+    // resolve, so a bound applied after the whole file has been walked is a
+    // bound that has already been exceeded.
+    limit(queue.length <= FREEZE_LIMITS.maxQueue, entry);
   }
 }
 
@@ -229,9 +247,7 @@ export async function fingerprintPluginEntry(
     hash.update(source);
     hash.update("\0");
 
-    await enqueueImports(file, source, seen, queue);
-
-    limit(queue.length <= FREEZE_LIMITS.maxQueue, entry);
+    await enqueueImports(file, source, seen, queue, entry);
   }
 
   hash.update(`files:${String(files)}`);

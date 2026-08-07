@@ -112,6 +112,59 @@ describe("external-plugins: loading", () => {
     expect(Object.keys(rules)).toContain("tsforge/no-foo-identifier");
   });
 
+  test("a rulesConfig whose severities change between reads is refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-getter-"));
+    const entry = join(dir, "plugin.ts");
+    const messages: string[] = [];
+
+    // Validation reads `rulesConfig` once and the freeze copies it again. A
+    // getter that answers "error" to the validator and something else to the
+    // copy registers a pack weaker than the one that was checked — and the
+    // content fingerprint sees nothing, because the file never changes.
+    await writeFile(
+      entry,
+      `let reads = 0;
+export const pack = {
+  id: "getter-pack",
+  description: "d",
+  rules: {},
+  rulesConfig: {
+    get "no-foo"() {
+      reads += 1;
+      return reads === 1 ? "error" : "off";
+    },
+  },
+};
+`
+    );
+
+    const loaded = await loadExternalPacks(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      (m) => messages.push(m)
+    );
+
+    expect(loaded).toHaveLength(0);
+  });
+
+  test("a plugin that fails leaves no partially registered packs behind", async () => {
+    // The registry is global. Registering the good pack and only then throwing
+    // leaves the run's rule set half-applied under an error that says the load
+    // failed — a caller that catches it proceeds with packs nobody verified.
+    await expect(
+      loadAndRegisterPlugins(
+        [
+          { path: FIXTURE, packs: ["examplePack"] },
+          { path: "./does-not-exist.ts" },
+        ],
+        import.meta.dir,
+        () => undefined
+      )
+    ).rejects.toThrow(/does-not-exist/);
+
+    expect(() => buildPackEslintConfig(["example-external"])).toThrow();
+  });
+
   test("a configured plugin that yields no pack fails the run", async () => {
     // Skipping it leaves the run with FEWER rules than the config asks for, and
     // the only trace is one report line: a silently weaker gate is the failure
@@ -335,9 +388,10 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-atcap-"));
     const deps: string[] = [];
 
-    // 63 deps + the entry = the 64-file limit exactly. Each extensionless
-    // specifier also queues 15 spellings that do not exist, so a cap check that
-    // asks "is the queue empty" throws on a graph that fits.
+    // `maxFiles - 1` deps plus the entry fill the file limit exactly. Each
+    // extensionless specifier also queues 16 spellings, 15 of which do not
+    // exist, so a cap check that asks "is the queue empty" throws on a graph
+    // that fits.
     for (let i = 0; i < FREEZE_LIMITS.maxFiles - 1; i += 1) {
       const name = `dep${String(i)}`;
 
@@ -433,6 +487,28 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     expect(await fingerprintPluginEntry(entry)).toBe(before);
   });
 
+  test("an imported data file is part of the frozen graph", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-json-"));
+    const data = join(dir, "severities.json");
+    const entry = join(dir, "plugin.ts");
+
+    await writeFile(data, `{ "no-foo": "error" }\n`);
+    await writeFile(
+      entry,
+      `import severities from "./severities.json";\nexport const v = severities;\n`
+    );
+
+    const before = await fingerprintPluginEntry(entry);
+
+    // A rule pack that reads its severities from an imported JSON file changes
+    // what it enforces when that file changes. `.json` is not a code extension,
+    // so a walk that only speculates code spellings drops it from the graph
+    // entirely — the plugin's own config, editable and unpinned.
+    await writeFile(data, `{ "no-foo": "warn" }\n`);
+
+    expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
   test("a side-effect import is part of the frozen graph", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-sidefx-"));
     const dep = join(dir, "dep.ts");
@@ -472,7 +548,7 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     expect(await fingerprintPluginEntry(entry)).not.toBe(before);
   });
 
-  test("a second load in the same process registers the CURRENT content", async () => {
+  test("a second load of changed content in one process is refused", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-recache-"));
     const entry = join(dir, "plugin.ts");
     const pack = (description: string): string =>

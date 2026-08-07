@@ -42,7 +42,23 @@ function deepFreeze(value: unknown, seen: Set<object>): void {
 export function freezeRulePack(pack: IRulePack): IRulePack {
   const rulesConfig: Record<string, "error" | "warn"> = {};
 
-  for (const [name, severity] of Object.entries(pack.rulesConfig)) {
+  // Re-validate as we copy. `isRulePack` checked an EARLIER read of the same
+  // plugin-controlled object, and a property defined as a getter can answer the
+  // validator and the copy differently — registering a pack weaker than the one
+  // that passed, with no on-disk change for the fingerprint to catch. This read
+  // is the one that becomes the frozen pack, so it is the one that must hold.
+  // Read through a widened view: the declared `"error" | "warn"` describes what
+  // the validator SAW, and a getter is under no obligation to say it twice, so
+  // the type here is a claim about untrusted state rather than a guarantee.
+  const declared: Record<string, unknown> = pack.rulesConfig;
+
+  for (const [name, severity] of Object.entries(declared)) {
+    if (severity !== "error" && severity !== "warn") {
+      throw new Error(
+        `tsforge: rule pack '${pack.id}' reported severity '${String(severity)}' for '${name}' after validation — refusing a pack whose configuration changes between reads.`
+      );
+    }
+
     rulesConfig[name] = severity;
   }
 
@@ -228,7 +244,15 @@ export async function loadExternalPacks(
 
     for (const candidate of candidateExports(mod, plugin.packs)) {
       if (isRulePack(candidate)) {
-        const pack = freezeRulePack(candidate);
+        let pack: IRulePack;
+
+        try {
+          pack = freezeRulePack(candidate);
+        } catch (err) {
+          report(`plugin '${plugin.path}': ${errMessage(err)}`);
+
+          continue;
+        }
 
         out.push({ pack, entryPath, fingerprint, source: plugin.path });
         report(`plugin '${plugin.path}': loaded pack '${pack.id}'`);
@@ -261,21 +285,25 @@ export async function loadAndRegisterPlugins(
   report: (message: string) => void
 ): Promise<string[]> {
   const loaded = await loadExternalPacks(plugins, cwd, report);
+  const empty = plugins
+    .map((p) => p.path)
+    .filter((path) => !loaded.some((l) => l.source === path));
+
+  // Decided BEFORE anything is registered. The registry is global, so throwing
+  // after a partial registration leaves the rule set half-applied behind an
+  // error saying the load failed — and a caller that catches it then runs with
+  // packs the failure was supposed to have prevented.
+  if (empty.length > 0) {
+    throw new Error(
+      `tsforge: configured plugin(s) registered no rule pack: ${empty.join(", ")}. See the plugin load messages above for why. Refusing to run with a weaker rule set than tsforge.config.json declares.`
+    );
+  }
+
   const ids: string[] = [];
 
   for (const { pack, entryPath, fingerprint } of loaded) {
     registerExternalPack(pack, { entryPath, fingerprint });
     ids.push(pack.id);
-  }
-
-  const empty = plugins
-    .map((p) => p.path)
-    .filter((path) => !loaded.some((l) => l.source === path));
-
-  if (empty.length > 0) {
-    throw new Error(
-      `tsforge: configured plugin(s) registered no rule pack: ${empty.join(", ")}. Refusing to run with a weaker rule set than tsforge.config.json declares.`
-    );
   }
 
   return ids;
