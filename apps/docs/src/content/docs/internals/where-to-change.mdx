@@ -1,6 +1,6 @@
 ---
 title: Where do I change X?
-description: A task-to-file index for the tsforge harness — the fastest route from "I want to change this" to the files that implement it.
+description: A task-to-file index for the tsforge harness, taking you from wanting a change to the files that implement it.
 ---
 
 The harness is ~97k lines across 30 subsystems. Most changes touch two or three files
@@ -18,13 +18,13 @@ The one people get wrong, because registration is spread over four files.
 
 | Step | Where |
 | --- | --- |
-| 1. Name it | `TOOL_NAME` in `agent/agent.constants.ts` — also where the JSON schema the model sees lives |
+| 1. Name it | `TOOL_NAME` in `agent/agent.constants.ts`, also where the JSON schema the model sees lives |
 | 2. Write the handler | `loop/tools/<your-tool>.ts` |
 | 3. Register it | `HANDLERS` in `loop/tools/execute-tool.ts` |
 | 4. Advertise it | `toolsFor()` in `loop/turn.ts` |
 
 Step 3 is typed `Record<ToolName, ToolHandler>`, so **the compiler will not let you skip
-it** — add the name in step 1 and typecheck tells you exactly what is missing.
+it.** Add the name in step 1 and typecheck tells you exactly what is missing.
 
 If the tool mutates the workspace it must surface `mutated` (and `edit`/`create` for file
 writes) on its event, or the gate will not re-run and a stale green can be reported as done.
@@ -32,20 +32,20 @@ writes) on its event, or the gate will not re-run and a stale green can be repor
 ### A new CLI command
 
 Write an `async function yourMode(args: ICliArgs): Promise<number>` in `cli.ts`, then add
-the dispatch branch in `main()`. The `Promise<number>` is the contract — it is the process
+the dispatch branch in `main()`. The `Promise<number>` is the contract. It is the process
 exit code, and it is how the generated [entry-point list](/internals/subsystems/#entry-points)
 finds your command. Document it in `reference/commands.mdx`.
 
 ### A new stack adapter
 
 Create `loop/<your-stack>/` and implement the five seams described in
-[Adapters and seams](/internals/seams/). Register it at a composition root — `cli.ts` or
-`cli/**` — never from inside the core loop, which an ESLint rule forbids from importing an
+[Adapters and seams](/internals/seams/). Register it at a composition root, `cli.ts` or
+`cli/**`, never from inside the core loop, which an ESLint rule forbids from importing an
 adapter at all. `loop/boringstack/` is the worked example.
 
 ### An MCP server capability
 
-`mcp/registry.ts` holds the client; servers are declared in the user's
+`mcp/registry.ts` holds the client. Servers are declared in the user's
 `tsforge.config.json`, parsed by `config/tsforge-config.ts`.
 
 ## Changing what "done" means
@@ -60,7 +60,7 @@ adapter at all. `loop/boringstack/` is the worked example.
 | Change how tool output becomes errors | `validate/parse.ts` and the parsers beside it |
 | Change what the write-time linter enforces | `gate/linter.ts` |
 
-Never relax a rule to get past a failure — the gate is the only signal that the work is
+Never relax a rule to get past a failure. The gate is the only signal that the work is
 real. Fix the thing that makes the model satisfy it.
 
 ### Rules the gate enforces
@@ -71,7 +71,7 @@ real. Fix the thing that makes the model satisfy it.
 | Create a whole pack | `rule-packs/<pack>/index.ts` | add to `RULE_PACKS` in `rule-packs/index.ts`, then a descriptor in `PACK_REGISTRY` (`stack-detection/packs.ts`) |
 | Add a non-AST rule | `meta-rules/rules/<category>/` | register in `META_RULES` (`meta-rules/registry.ts`); add to `PER_WRITE_META_RULES` only if it must run on every write |
 
-After any of these run `bun run rules:docs && bun run rules:build` — CI fails if the
+After any of these run `bun run rules:docs && bun run rules:build`. CI fails if the
 generated catalog drifts from the source.
 
 ## Changing how the model is driven
@@ -90,7 +90,7 @@ generated catalog drifts from the source.
 
 | I want to | Go to |
 | --- | --- |
-| Add a CLI flag | `ICliArgs` in `cli/args.ts` — parsing and recipe overlay are in the same file, pure and unit-tested in `tests/cli.test.ts` |
+| Add a CLI flag | `ICliArgs` in `cli/args.ts`, where parsing and recipe overlay also live, pure and unit-tested in `tests/cli.test.ts` |
 | Add an environment flag | `config/flags.ts` |
 | Change `tsforge.config.json` | `config/tsforge-config.ts` |
 | Change a strictness profile | `config/profiles.ts` |
