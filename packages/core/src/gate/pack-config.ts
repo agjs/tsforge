@@ -23,12 +23,13 @@ export function envPackIds(): string[] {
  *
  * External plugin packs do NOT resolve here — they are registered in the
  * orchestrator process and this one starts with an empty registry, so they hit
- * the same hard failure. That is deliberate, not an oversight to fix: resolving
- * them means importing a module from a workspace-controlled path into the gate
- * on every cycle, and a replaced plugin calling `process.exit(0)` would make the
- * lint stage report success without linting. Supporting them safely requires
- * freezing plugin content (a hash over the module's transitive imports, captured
- * at policy time and verified here).
+ * the same hard failure. That is deliberate: resolving them means importing a
+ * workspace-controlled module into the gate subprocess every cycle, and a
+ * replaced plugin calling `process.exit(0)` would make lint report success
+ * without linting. Plugin content is frozen at load in the orchestrator
+ * (`assertExternalPacksFrozen` / F19); write-time lint and the command gate
+ * re-check the fingerprint before running. Shipping rule *implementations*
+ * into this subprocess still needs a separate isolated channel.
  */
 export function buildEnvPackConfig(
   files: readonly string[],

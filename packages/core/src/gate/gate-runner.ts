@@ -61,7 +61,15 @@ export function composeGate(stages: IStage[]): IGate {
  *  today's loop behavior — the brownfield regression anchor. */
 export function commandGate(task: ITask, parse?: ErrorParser): IGate {
   return {
-    run: (cwd, opts) => validate(task, cwd, parse, opts ?? {}),
+    async run(cwd, opts) {
+      // F19: external plugin content is frozen at load; drift must fail closed
+      // before any gate stage runs (covers headless commandGate + brownfield).
+      const { assertExternalPacksFrozen } = await import("../rule-packs");
+
+      await assertExternalPacksFrozen();
+
+      return validate(task, cwd, parse, opts ?? {});
+    },
   };
 }
 

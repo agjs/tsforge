@@ -1,6 +1,7 @@
 import type { TSESLint } from "@typescript-eslint/utils";
 
 import type { IRulePack } from "./rule-packs.types";
+import { ExternalPackDriftError } from "./drift-error";
 import { aiSdkPack } from "./ai-sdk";
 import { authorizationPack } from "./authorization";
 import { bullmqPack } from "./bullmq";
@@ -59,20 +60,82 @@ function isRulePackId(id: unknown): id is IRulePackId {
   return typeof id === "string" && Object.hasOwn(RULE_PACKS, id);
 }
 
+/** Metadata required to freeze an external pack against mid-session edits. */
+export interface IExternalPackFreeze {
+  /** Absolute path of the plugin entry module that was loaded. */
+  readonly entryPath: string;
+  /** SHA-256 hex of the entry + relative import graph at load time. */
+  readonly fingerprint: string;
+}
+
 /** Externally-registered rule packs (from tsforge.config.json `plugins`). Kept
  *  separate from the built-in RULE_PACKS so a user pack can never shadow a
  *  built-in by id; rule-name collisions still fail the build in
- *  buildPackEslintConfig. */
-const EXTERNAL_PACKS = new Map<string, IRulePack>();
+ *  buildPackEslintConfig.
+ *
+ *  The pack and the fingerprint that pins it live in ONE entry on purpose: as
+ *  two maps with an optional freeze, a caller could register a resolvable pack
+ *  with nothing guarding it, and the drift check would skip it while its rules
+ *  were still applied. Here an unpinned external pack cannot be expressed. */
+const EXTERNAL_PACKS = new Map<
+  string,
+  { readonly pack: IRulePack; readonly freeze: IExternalPackFreeze }
+>();
 
-/** Register an external rule pack so its id resolves in buildPackEslintConfig. */
-export function registerExternalPack(pack: IRulePack): void {
-  EXTERNAL_PACKS.set(pack.id, pack);
+/** Register an external rule pack so its id resolves in buildPackEslintConfig.
+ *  `freeze` pins the on-disk content that produced this pack — it is required,
+ *  because a pack that resolves but cannot be re-verified is the hole the freeze
+ *  exists to close. */
+export function registerExternalPack(
+  pack: IRulePack,
+  freeze: IExternalPackFreeze
+): void {
+  EXTERNAL_PACKS.set(pack.id, { pack, freeze });
 }
 
 /** Drop all registered external packs (used by tests for isolation). */
 export function clearExternalPacks(): void {
   EXTERNAL_PACKS.clear();
+}
+
+/**
+ * Re-hash every registered external plugin entry and throw if any on-disk
+ * content no longer matches the fingerprint captured at load. A workspace
+ * plugin edited mid-session must hard-fail rather than silently weaken rules
+ * under the same pack id.
+ */
+export async function assertExternalPacksFrozen(): Promise<void> {
+  if (EXTERNAL_PACKS.size === 0) {
+    return;
+  }
+
+  const { fingerprintPluginEntry } =
+    await import("../config/plugin-fingerprint");
+
+  for (const [id, { freeze: meta }] of EXTERNAL_PACKS) {
+    // A re-hash that CANNOT be computed (entry deleted, unreadable, grown past
+    // the freeze limit) is drift: the one thing it is not is proof of no change.
+    // It also has to surface as the drift type, or the write path's best-effort
+    // catch would swallow it.
+    const now = await fingerprintPluginEntry(meta.entryPath).catch(
+      (err: unknown) => {
+        throw new ExternalPackDriftError(
+          `tsforge: external plugin pack '${id}' can no longer be verified (${meta.entryPath}): ${err instanceof Error ? err.message : String(err)}`,
+          // Keep the original: the message says verification failed, the cause
+          // says whether the entry vanished, grew past the limit, or something
+          // else — and only one of those is the user's to fix.
+          { cause: err }
+        );
+      }
+    );
+
+    if (now !== meta.fingerprint) {
+      throw new ExternalPackDriftError(
+        `tsforge: external plugin pack '${id}' changed on disk since load (${meta.entryPath}). ` +
+          `Refusing to run with drifted plugin content — restart the session after intentional plugin edits.`
+      );
+    }
+  }
 }
 
 /** Resolve a pack id to its definition, built-ins first, then external packs. */
@@ -81,7 +144,7 @@ function lookupPack(packId: string): IRulePack | undefined {
     return RULE_PACKS[packId];
   }
 
-  return EXTERNAL_PACKS.get(packId);
+  return EXTERNAL_PACKS.get(packId)?.pack;
 }
 
 /** Apply rule overrides: "off" drops a rule, error/warn replaces its severity. */

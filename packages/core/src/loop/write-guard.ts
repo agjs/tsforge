@@ -4,6 +4,7 @@ import type { TsService, ITsDiagnostic } from "../lsp";
 import type { FileLinter, IFileLintProblem } from "../gate";
 import { formatFile } from "../gate";
 import { stripLiteralCasts } from "./astgrep-fix";
+import { ExternalPackDriftError } from "../rule-packs/drift-error";
 import {
   missingExportHint,
   unresolvedNameHint,
@@ -455,7 +456,15 @@ export async function runWriteGuard(
         ctx.report,
         ctx.task.id
       );
-    } catch {
+    } catch (err) {
+      // The guard is best-effort — a linter or language-service fault must not
+      // break the build. A frozen-plugin drift is NOT a fault: swallowing it here
+      // would let every subsequent write proceed under rules that no longer match
+      // what was loaded, which is the failure F19 exists to prevent.
+      if (err instanceof ExternalPackDriftError) {
+        throw err;
+      }
+
       guard = "";
     }
   }
