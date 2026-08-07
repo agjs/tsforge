@@ -1,6 +1,6 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   parsePlugins,
@@ -9,7 +9,10 @@ import {
   loadAndRegisterPlugins,
   freezeRulePack,
 } from "../src/config/external-plugins";
-import { fingerprintPluginEntry } from "../src/config/plugin-fingerprint";
+import {
+  FREEZE_LIMITS,
+  fingerprintPluginEntry,
+} from "../src/config/plugin-fingerprint";
 import { createRule } from "../src/rule-packs/create-rule";
 import {
   assertExternalPacksFrozen,
@@ -107,6 +110,19 @@ describe("external-plugins: loading", () => {
     const { rules } = buildPackEslintConfig(["example-external"]);
 
     expect(Object.keys(rules)).toContain("tsforge/no-foo-identifier");
+  });
+
+  test("a configured plugin that yields no pack fails the run", async () => {
+    // Skipping it leaves the run with FEWER rules than the config asks for, and
+    // the only trace is one report line: a silently weaker gate is the failure
+    // mode the freeze exists to prevent, arrived at from the other direction.
+    await expect(
+      loadAndRegisterPlugins(
+        [{ path: "./does-not-exist.ts" }],
+        import.meta.dir,
+        () => undefined
+      )
+    ).rejects.toThrow(/does-not-exist/);
   });
 
   test("an external rule name colliding with a built-in fails the build", async () => {
@@ -252,6 +268,32 @@ describe("external-plugins: content freeze (F19)", () => {
       rule.create = () => ({});
     }).toThrow(TypeError);
   });
+
+  test("freezeRulePack freezes a rule's meta, not just its top level", () => {
+    const rule = createRule<[], "noFoo">({
+      name: "no-foo",
+      meta: {
+        type: "problem",
+        docs: { description: "d" },
+        schema: [],
+        messages: { noFoo: "no foo" },
+      },
+      defaultOptions: [],
+      create: () => ({}),
+    });
+    const frozen = freezeRulePack({
+      id: "x",
+      description: "d",
+      rules: { r: rule },
+      rulesConfig: { r: "error" },
+    });
+
+    // `meta` carries the reportable messages and the option schema — rewriting a
+    // message or widening the schema changes what the rule enforces just as much
+    // as swapping `create`, and a one-level freeze leaves all of it writable.
+    expect(Object.isFrozen(frozen.rules.r?.meta)).toBe(true);
+    expect(Object.isFrozen(frozen.rules.r?.meta.messages)).toBe(true);
+  });
 });
 
 describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
@@ -270,7 +312,7 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-huge-"));
     const deps: string[] = [];
 
-    for (let i = 0; i < 80; i += 1) {
+    for (let i = 0; i < FREEZE_LIMITS.maxFiles + 8; i += 1) {
       const name = `dep${String(i)}`;
 
       deps.push(name);
@@ -287,6 +329,108 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     await expect(fingerprintPluginEntry(join(dir, "index.ts"))).rejects.toThrow(
       /exceeds the freeze limit/
     );
+  });
+
+  test("a graph that exactly fills the cap still fingerprints", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-atcap-"));
+    const deps: string[] = [];
+
+    // 63 deps + the entry = the 64-file limit exactly. Each extensionless
+    // specifier also queues 15 spellings that do not exist, so a cap check that
+    // asks "is the queue empty" throws on a graph that fits.
+    for (let i = 0; i < FREEZE_LIMITS.maxFiles - 1; i += 1) {
+      const name = `dep${String(i)}`;
+
+      deps.push(name);
+      await writeFile(join(dir, `${name}.ts`), `export const n = 1;\n`);
+    }
+
+    await writeFile(
+      join(dir, "index.ts"),
+      `${deps.map((d) => `export { n as n_${d} } from "./${d}";`).join("\n")}\n`
+    );
+
+    expect(await fingerprintPluginEntry(join(dir, "index.ts"))).toHaveLength(
+      64
+    );
+  });
+
+  test("a relative import above the entry's directory is part of the graph", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-parent-"));
+    const shared = join(dir, "shared.ts");
+    const entry = join(dir, "plugins", "pack.ts");
+
+    await mkdir(join(dir, "plugins"));
+    await writeFile(shared, "export const severity = 'error';\n");
+    await writeFile(
+      entry,
+      `import { severity } from "../shared";\nexport const v = severity;\n`
+    );
+
+    const before = await fingerprintPluginEntry(entry);
+
+    // `../shared.ts` is executed by the plugin and is as editable as the entry;
+    // skipping it because it sits above the entry's directory leaves the part of
+    // the plugin most likely to hold shared rule config outside the freeze.
+    await writeFile(shared, "export const severity = 'warn';\n");
+
+    expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
+  test("a bare import that resolves to workspace source is part of the graph", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-linked-"));
+    const pkg = join(dir, "pkg");
+    const entry = join(dir, "plugin.ts");
+
+    await mkdir(join(dir, "node_modules"), { recursive: true });
+    await mkdir(pkg);
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "linkedpkg", version: "1.0.0", main: "index.ts" })
+    );
+    await writeFile(
+      join(pkg, "index.ts"),
+      "export const severity = 'error';\n"
+    );
+    await symlink(pkg, join(dir, "node_modules", "linkedpkg"));
+    await writeFile(
+      entry,
+      `import { severity } from "linkedpkg";\nexport const v = severity;\n`
+    );
+
+    const before = await fingerprintPluginEntry(entry);
+
+    // A linked workspace package (or a tsconfig path alias) is imported by name
+    // but lives in the repo and is as editable as the plugin itself. Walking
+    // only relative specifiers leaves that code executing outside the freeze.
+    await writeFile(join(pkg, "index.ts"), "export const severity = 'warn';\n");
+
+    expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
+  test("a real dependency under node_modules is not walked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-dep-"));
+    const dep = join(dir, "node_modules", "realdep");
+    const entry = join(dir, "plugin.ts");
+
+    await mkdir(dep, { recursive: true });
+    await writeFile(
+      join(dep, "package.json"),
+      JSON.stringify({ name: "realdep", version: "1.0.0", main: "index.ts" })
+    );
+    await writeFile(join(dep, "index.ts"), "export const n = 1;\n");
+    await writeFile(
+      entry,
+      `import { n } from "realdep";\nexport const v = n;\n`
+    );
+
+    const before = await fingerprintPluginEntry(entry);
+
+    // Installed packages are not the workspace-editable surface this freezes,
+    // and hashing a dependency tree would put the walk in node_modules.
+    await writeFile(join(dep, "index.ts"), "export const n = 2;\n");
+
+    expect(await fingerprintPluginEntry(entry)).toBe(before);
   });
 
   test("a side-effect import is part of the frozen graph", async () => {
@@ -326,6 +470,65 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     await writeFile(dep, "export const n = 2;\n");
 
     expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
+  test("a second load in the same process registers the CURRENT content", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-recache-"));
+    const entry = join(dir, "plugin.ts");
+    const pack = (description: string): string =>
+      `export const pack = { id: "recache", description: "${description}", rules: {}, rulesConfig: {} };\n`;
+
+    await writeFile(entry, pack("strong"));
+    await loadAndRegisterPlugins(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      () => undefined
+    );
+    clearExternalPacks();
+
+    await writeFile(entry, pack("weak"));
+
+    // ESM caches by resolved URL and Bun ignores query strings, so a reload
+    // returns the OLD module while the fingerprint pins the NEW bytes. Silently
+    // registering that pair gives a pack whose rules and whose freeze describe
+    // different content — undetectable afterwards, so refuse it here.
+    const messages: string[] = [];
+    const loaded = await loadExternalPacks(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      (m) => messages.push(m)
+    );
+
+    expect(loaded).toHaveLength(0);
+    expect(messages.some((m) => m.includes("restart the session"))).toBe(true);
+  });
+
+  test("a bare-specifier plugin is loaded from the file that was pinned", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-bare-"));
+    const pkg = join(dir, "node_modules", "barepack");
+
+    await mkdir(pkg, { recursive: true });
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "barepack", version: "1.0.0", main: "index.ts" })
+    );
+    await writeFile(
+      join(pkg, "index.ts"),
+      `export const pack = { id: "bare", description: "d", rules: {}, rulesConfig: {} };\n`
+    );
+
+    // The fingerprint pins the file `Bun.resolveSync` picks; importing the raw
+    // specifier instead re-resolves from this module's own directory and under
+    // the runtime's export conditions, which can select a different file than
+    // the one that was pinned.
+    const [loaded] = await loadExternalPacks(
+      [{ path: "barepack", packs: ["pack"] }],
+      dir,
+      () => undefined
+    );
+
+    expect(loaded?.pack.id).toBe("bare");
+    expect(loaded?.entryPath).toBe(join(pkg, "index.ts"));
   });
 
   test("a plugin that rewrites itself during import is refused", async () => {

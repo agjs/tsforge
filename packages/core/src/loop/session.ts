@@ -970,7 +970,9 @@ export class Session {
     );
     const activePacks = resolveActivePacks(detected.packs, projectConfig);
     // Opt-in: load rule packs from external plugins and fold their ids into the
-    // active packs so the gate runs them. loadAndRegisterPlugins never throws.
+    // active packs so the gate runs them. A configured plugin that registers no
+    // pack throws here: starting the session anyway would run a rule set weaker
+    // than the project declared, with only a report line to say so.
     const externalPackIds =
       projectConfig.plugins === undefined
         ? []

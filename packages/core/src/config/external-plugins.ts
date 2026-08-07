@@ -17,6 +17,26 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Fingerprint each plugin entry was IMPORTED at in this process, so a reload of
+ *  changed content can be refused rather than served from the ESM cache. */
+const IMPORTED_AT = new Map<string, string>();
+
+/** Freeze an object and everything reachable from it. Cycles are handled via
+ *  `seen`; functions are left alone (a rule's `create` cannot be reassigned once
+ *  its owner is frozen, and freezing the function object itself buys nothing). */
+function deepFreeze(value: unknown, seen: Set<object>): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) {
+    return;
+  }
+
+  seen.add(value);
+  Object.freeze(value);
+
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested, seen);
+  }
+}
+
 /** Deep-freeze a pack's rulesConfig (and the pack shell) so a live export
  *  cannot be mutated after registration to weaken severities under the same id. */
 export function freezeRulePack(pack: IRulePack): IRulePack {
@@ -28,12 +48,14 @@ export function freezeRulePack(pack: IRulePack): IRulePack {
 
   const rules: Record<string, IRulePack["rules"][string]> = {};
 
-  // Freeze each rule MODULE, not just the key set: a plugin that keeps a
-  // reference to its own exported rule could otherwise replace `create` with a
-  // no-op after registration. The disk never changes, so the content fingerprint
-  // cannot see that one — only the freeze can.
+  // Freeze each rule MODULE and everything under it, not just the key set: a
+  // plugin that keeps a reference to its own exported rule could otherwise
+  // replace `create` with a no-op, rewrite a `meta.messages` entry, or widen
+  // `meta.schema` after registration. The disk never changes in any of those
+  // cases, so the content fingerprint cannot see them — only the freeze can.
   for (const [name, rule] of Object.entries(pack.rules)) {
-    rules[name] = Object.freeze(rule);
+    deepFreeze(rule, new Set());
+    rules[name] = rule;
   }
 
   return Object.freeze({
@@ -132,6 +154,9 @@ export interface ILoadedExternalPack {
   readonly pack: IRulePack;
   readonly entryPath: string;
   readonly fingerprint: string;
+  /** The `plugins[].path` this pack came from, so a caller can tell which
+   *  configured entries produced nothing. */
+  readonly source: string;
 }
 
 /**
@@ -151,16 +176,34 @@ export async function loadExternalPacks(
 
   for (const plugin of plugins) {
     const entryPath = resolvePluginEntryPath(plugin.path, cwd);
-    const specifier = plugin.path.startsWith(".")
-      ? pathToFileURL(entryPath).href
-      : plugin.path;
 
     let mod: unknown;
     let fingerprint: string;
 
     try {
       fingerprint = await fingerprintPluginEntry(entryPath);
-      mod = await import(specifier);
+
+      // A second load of an entry whose content changed cannot be honored: the
+      // ESM cache is keyed by resolved path and Bun ignores query strings, so
+      // `import` returns the module from the FIRST load. Registering it would
+      // pair a stale module with a fresh digest — a pack whose rules and whose
+      // freeze describe different content, which no later check can detect.
+      const importedAt = IMPORTED_AT.get(entryPath);
+
+      if (importedAt !== undefined && importedAt !== fingerprint) {
+        report(
+          `plugin '${plugin.path}' changed since it was first loaded in this process — restart the session to pick it up`
+        );
+
+        continue;
+      }
+
+      // Import the file that was HASHED, not the specifier: a bare specifier
+      // re-resolved at import time can select a different file than the one the
+      // fingerprint pinned.
+      mod = await import(pathToFileURL(entryPath).href);
+
+      IMPORTED_AT.set(entryPath, fingerprint);
 
       // Re-hash AFTER the module body ran. Content swapped in that window is
       // EXECUTED while the stored digest describes bytes that were never loaded —
@@ -187,7 +230,7 @@ export async function loadExternalPacks(
       if (isRulePack(candidate)) {
         const pack = freezeRulePack(candidate);
 
-        out.push({ pack, entryPath, fingerprint });
+        out.push({ pack, entryPath, fingerprint, source: plugin.path });
         report(`plugin '${plugin.path}': loaded pack '${pack.id}'`);
       } else {
         report(
@@ -203,7 +246,14 @@ export async function loadExternalPacks(
 /**
  * Load every configured plugin, register its packs in the rule-pack registry
  * with a content freeze, and return the registered pack ids (to fold into the
- * active pack list). Never throws on a bad plugin; load failures are reported.
+ * active pack list).
+ *
+ * THROWS when a configured plugin produced no pack. The details of why are
+ * reported by `loadExternalPacks`; what matters here is that the run does not
+ * continue. Starting anyway means running with fewer rules than the config asks
+ * for, announced only by a line of report output — a gate quietly weaker than
+ * the one the project declared, which is the same failure the content freeze
+ * exists to prevent, reached from the other side.
  */
 export async function loadAndRegisterPlugins(
   plugins: readonly IExternalPlugin[],
@@ -216,6 +266,16 @@ export async function loadAndRegisterPlugins(
   for (const { pack, entryPath, fingerprint } of loaded) {
     registerExternalPack(pack, { entryPath, fingerprint });
     ids.push(pack.id);
+  }
+
+  const empty = plugins
+    .map((p) => p.path)
+    .filter((path) => !loaded.some((l) => l.source === path));
+
+  if (empty.length > 0) {
+    throw new Error(
+      `tsforge: configured plugin(s) registered no rule pack: ${empty.join(", ")}. Refusing to run with a weaker rule set than tsforge.config.json declares.`
+    );
   }
 
   return ids;
