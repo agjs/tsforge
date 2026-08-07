@@ -79,6 +79,12 @@ jobs:
           bun run rules:build
           git diff --exit-code packages/core/RULES.md
 
+      - name: Architecture map drift check
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          bun run arch:build
+          git diff --exit-code packages/core/ARCHITECTURE.md
+
       - name: Validate
         if: steps.filter.outputs.code == 'true'
         run: bun run validate

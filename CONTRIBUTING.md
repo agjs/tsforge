@@ -2,6 +2,8 @@
 
 Most code here is written by AI agents under a deterministic gate. The conventions exist so `bun run validate` is a reliable signal.
 
+**New to the codebase?** This file covers process — setup, the merge bar, how to add a rule. For *where things live*, start with [Where do I change X?](https://tsforge.dev/internals/where-to-change/) and the generated subsystem map in [`packages/core/ARCHITECTURE.md`](packages/core/ARCHITECTURE.md).
+
 ## Dev setup
 
 - **Bun** ≥ 1.3.14 (`packageManager` in root `package.json`)
@@ -15,14 +17,16 @@ bun run validate   # must pass before merge
 
 ## Merge bar
 
-`bun run validate` runs four steps in order:
+`bun run validate` runs six steps in order:
 
-1. `bun run typecheck` — strict TypeScript
-2. `bun run lint` — ESLint on `packages/`
-3. `bun run format:check` — Prettier
-4. `bun test packages` — 680+ tests
+1. `bun run check:bun` — minimum Bun version
+2. `bun run typecheck` — strict TypeScript
+3. `bun run lint` — ESLint on `packages/`
+4. `bun run format:check` — Prettier
+5. `bun test packages` — 680+ tests
+6. `bun run e2e:pty` — PTY end-to-end scripts
 
-All four must pass. Do not disable ESLint rules inline, do not use `any`, and do not use `as` or `!` to bypass failures.
+All six must pass. Do not disable ESLint rules inline, do not use `any`, and do not use `as` or `!` to bypass failures.
 
 ## House rules agents get wrong
 
@@ -93,7 +97,7 @@ GitHub Actions runs on every PR and on pushes to `main`. Workflows live under [`
 
 | Workflow | Job name | What it runs |
 | -------- | -------- | ------------ |
-| `core-ci.yml` | typecheck + lint + test | `bun run validate`, rules catalog drift, install.sh sync |
+| `core-ci.yml` | typecheck + lint + test | `bun run validate`, rules catalog drift, architecture map drift, install.sh sync |
 | `docs-linkcheck.yml` | linkcheck | `apps/docs` `build:ci` + lychee internal links |
 | `security-deps.yml` | dep vuln scan (osv + audit) | osv-scanner + `bun audit --audit-level=high` |
 | `security-secrets.yml` | gitleaks secret scan | Full-history secret scan |
