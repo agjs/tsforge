@@ -36,6 +36,16 @@ export interface ITokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** How many of `promptTokens` the server served from its prefix cache, when it
+   *  reports that at all. A local vLLM re-processes the whole prompt on a miss,
+   *  so this is the difference between a cheap cycle and an expensive one — and
+   *  a run whose ratio collapses mid-build is the harness having broken its own
+   *  prompt prefix, not the model being slow.
+   *
+   *  UNDEFINED means the server said nothing; 0 means it said "no hits". Keep
+   *  them distinct — a reader that folds the two cannot tell an endpoint without
+   *  prefix caching apart from one whose cache we keep invalidating. */
+  cachedPromptTokens?: number;
 }
 
 export interface IModelResponse {

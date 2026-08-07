@@ -129,8 +129,35 @@ export function parseUsage(raw: unknown): ITokenUsage | undefined {
     typeof raw.total_tokens === "number"
       ? raw.total_tokens
       : promptTokens + completionTokens;
+  const cachedPromptTokens = parseCachedPromptTokens(raw);
 
-  return { promptTokens, completionTokens, totalTokens };
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    // Spread, so an endpoint that reports nothing leaves the field ABSENT rather
+    // than present-and-undefined — see ITokenUsage on why 0 and "unsaid" differ.
+    ...(cachedPromptTokens === undefined ? {} : { cachedPromptTokens }),
+  };
+}
+
+/** Prefix-cache hits, under either spelling the endpoints we target use: OpenAI
+ *  and vLLM nest it as `prompt_tokens_details.cached_tokens`, while DeepSeek's
+ *  cloud API reports a top-level `prompt_cache_hit_tokens`. Checked in that
+ *  order because a gateway fronting DeepSeek may emit both, and the nested form
+ *  is the standard one. */
+function parseCachedPromptTokens(
+  raw: Record<string, unknown>
+): number | undefined {
+  const details = raw.prompt_tokens_details;
+
+  if (isRecord(details) && typeof details.cached_tokens === "number") {
+    return details.cached_tokens;
+  }
+
+  return typeof raw.prompt_cache_hit_tokens === "number"
+    ? raw.prompt_cache_hit_tokens
+    : undefined;
 }
 
 // Tool names the harness offers — the salvage parser only recognizes these, so

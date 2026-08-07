@@ -4,6 +4,8 @@
  * filter and the adaptive thinking mode — have direct unit tests.
  */
 import { READ_ONLY_TOOL_NAMES, TOOL_NAME } from "../agent";
+import type { ITokenUsage } from "../inference";
+import type { ILoopEvent } from "./loop.types";
 
 /** The minimal shape shared by advertised tools and MCP tool schemas. */
 interface INamedTool {
@@ -113,4 +115,63 @@ function applyToolWiring<T extends INamedTool>(
   }
 
   return result;
+}
+
+/**
+ * The `usage` event for one model call. Built in ONE place because two loops
+ * emit it — the interactive Session and the headless build driver — and a field
+ * added to one but not the other silently halves what the log analyzer sees.
+ *
+ * `tokensPerSecond`/`ms` ride only when a generation time is supplied. The build
+ * driver times a whole turn, tool execution included, and publishing that as a
+ * generation rate would understate tok/s by an order of magnitude — so it emits
+ * counts alone rather than a wrong number.
+ */
+export function usageEvent(args: {
+  task: string;
+  usage: ITokenUsage;
+  genMs?: number;
+  thinking?: boolean;
+}): ILoopEvent {
+  const { task, usage, genMs, thinking } = args;
+  const tps =
+    genMs !== undefined && genMs > 0
+      ? Math.round((usage.completionTokens / genMs) * 1000)
+      : undefined;
+  const rate = tps === undefined ? "" : ` · ${String(tps)} tok/s`;
+
+  return {
+    kind: "usage",
+    task,
+    message: `tokens ${String(usage.promptTokens)} in / ${String(usage.completionTokens)} out${cacheSuffix(usage)}${rate}`,
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    totalTokens: usage.totalTokens,
+    ...(usage.cachedPromptTokens === undefined
+      ? {}
+      : { cachedPromptTokens: usage.cachedPromptTokens }),
+    ...(tps === undefined ? {} : { tokensPerSecond: tps }),
+    ...(genMs === undefined ? {} : { ms: Math.round(genMs) }),
+    ...(thinking === undefined ? {} : { thinking }),
+  };
+}
+
+/** ` · 4096 cached (80%)` when the server reported prefix-cache hits, and NOTHING
+ *  when it reported none. An endpoint that doesn't publish the field must not
+ *  render as a 0% hit rate: 0% is the harness having broken its own prompt
+ *  prefix, which is a bug worth chasing, and the two must stay distinguishable
+ *  at a glance in the run log. */
+function cacheSuffix(usage: ITokenUsage): string {
+  const cached = usage.cachedPromptTokens;
+
+  if (cached === undefined) {
+    return "";
+  }
+
+  const pct =
+    usage.promptTokens > 0
+      ? Math.round((cached / usage.promptTokens) * 100)
+      : 0;
+
+  return ` · ${String(cached)} cached (${String(pct)}%)`;
 }

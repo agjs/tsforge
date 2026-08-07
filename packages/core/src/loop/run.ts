@@ -6,6 +6,7 @@ import type {
   IToolCall,
 } from "../inference";
 import { assistantMessage } from "./assistant-message";
+import { usageEvent } from "./model-call";
 import {
   validate,
   type ErrorParser,
@@ -702,6 +703,14 @@ async function runMainLoop(args: {
         taskId: args.taskId,
       })
     );
+
+    // The build loop's per-call accounting. The interactive Session has always
+    // logged this; the headless driver — the path that actually runs the long
+    // builds — did not, so a build log carried no token record at all and a
+    // collapsing prefix-cache ratio had nowhere to show up.
+    if (res.usage !== undefined) {
+      args.report(usageEvent({ task: args.taskId, usage: res.usage }));
+    }
 
     // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)
     // tool_calls so the history has no dangling `tool_calls` (strict APIs 400 otherwise).

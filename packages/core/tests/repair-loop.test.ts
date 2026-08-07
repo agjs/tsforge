@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask, LOOP_LIMITS } from "../src/loop";
+import type { ILoopEvent } from "../src/loop/loop.types";
 import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import { scripted, runStep, STOP } from "./stub-provider";
 
@@ -124,6 +125,43 @@ test("stuck immediately when the streamed model response degenerates", async () 
     expect(r.reason).toBe("handoff");
     expect(r.handoff?.block).toBe("degeneration");
     expect(r.cycles).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the build loop logs per-call token usage, including prefix-cache hits", async () => {
+  const dir = await tmp();
+
+  try {
+    // The headless driver never emitted usage at all, so a long build's log had
+    // no token record — and a prefix cache going cold mid-run looked exactly
+    // like a slow model. Assert the accounting reaches the log.
+    const withUsage = {
+      ...runStep("echo x > fixed.txt"),
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 20,
+        totalTokens: 1020,
+        cachedPromptTokens: 900,
+      },
+    };
+    const events: ILoopEvent[] = [];
+    const r = await runTask(
+      { id: "1", accept: "test -f fixed.txt", files: [] },
+      dir,
+      scripted([withUsage, STOP]),
+      { onEvent: (e) => events.push(e) }
+    );
+
+    expect(r.status).toBe("done");
+
+    const usage = events.filter((e) => e.kind === "usage");
+
+    expect(usage.length).toBeGreaterThan(0);
+    expect(usage[0]?.promptTokens).toBe(1000);
+    expect(usage[0]?.cachedPromptTokens).toBe(900);
+    expect(usage[0]?.message).toContain("900 cached (90%)");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

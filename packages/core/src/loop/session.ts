@@ -59,7 +59,7 @@ import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { assistantMessage } from "./assistant-message";
-import { selectThinking, offeredToolsFor } from "./model-call";
+import { selectThinking, offeredToolsFor, usageEvent } from "./model-call";
 import { activeOverlay } from "../self-harness/overlay";
 import {
   mineLessons,
@@ -1694,23 +1694,19 @@ export class Session {
     if (res.usage !== undefined) {
       const ended = performance.now();
       const genMs = firstTokenAt > 0 ? ended - firstTokenAt : ended - callStart;
-      const tps = genMs > 0 ? (res.usage.completionTokens / genMs) * 1000 : 0;
 
       this.recordUsage(res.usage, genMs);
       // Logged (not shown) so the --log analyzer can compute tokens-to-solution.
       // `thinking` records THIS call's mode, so malformed-call rates can be
       // correlated with it (analyze-malformed).
-      report({
-        kind: "usage",
-        task: SESSION_ID,
-        message: `tokens ${res.usage.promptTokens} in / ${res.usage.completionTokens} out · ${Math.round(tps)} tok/s`,
-        promptTokens: res.usage.promptTokens,
-        completionTokens: res.usage.completionTokens,
-        totalTokens: res.usage.totalTokens,
-        tokensPerSecond: Math.round(tps),
-        ms: Math.round(genMs),
-        ...(enableThinking === undefined ? {} : { thinking: enableThinking }),
-      });
+      report(
+        usageEvent({
+          task: SESSION_ID,
+          usage: res.usage,
+          genMs,
+          ...(enableThinking === undefined ? {} : { thinking: enableThinking }),
+        })
+      );
     }
 
     ctx.messages.push(assistantMessage(res));

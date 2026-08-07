@@ -129,3 +129,43 @@ describe("eval metrics: analyzeEvents", () => {
     expect(analyzeEvents(subSecond).wallClockSeconds).toBe(1);
   });
 });
+
+describe("eval metrics: prefix-cache hit rate", () => {
+  function usage(promptTokens: number, cached?: number): ILoopEvent {
+    return {
+      kind: "usage",
+      task: "1",
+      message: "",
+      promptTokens,
+      completionTokens: 10,
+      totalTokens: promptTokens + 10,
+      ...(cached === undefined ? {} : { cachedPromptTokens: cached }),
+    };
+  }
+
+  test("is the token-weighted share across the run, not a mean of ratios", () => {
+    // 900+100 cached of 1000+1000 prompt = 0.5. A mean of per-call rates would
+    // say 0.5 too — so weight the calls unevenly to tell them apart.
+    const m = analyzeEvents([usage(1000, 900), usage(100, 10)]);
+
+    expect(m.cacheHitRate).toBeCloseTo(910 / 1100, 6);
+  });
+
+  test("is NULL when no call reported a cache figure", () => {
+    // Not 0: an endpoint that never publishes the field must stay
+    // distinguishable from one whose prefix actually went cold.
+    expect(analyzeEvents([usage(1000), usage(500)]).cacheHitRate).toBeNull();
+    expect(analyzeEvents([]).cacheHitRate).toBeNull();
+  });
+
+  test("is 0 when the server reported hits and there were none", () => {
+    expect(analyzeEvents([usage(1000, 0)]).cacheHitRate).toBe(0);
+  });
+
+  test("silent calls do not dilute the calls that did report", () => {
+    // One reporting call at 90%, one silent. The answer is 90%, not 45%.
+    const m = analyzeEvents([usage(1000, 900), usage(1000)]);
+
+    expect(m.cacheHitRate).toBeCloseTo(0.9, 6);
+  });
+});

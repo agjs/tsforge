@@ -1,5 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { selectThinking, offeredToolsFor } from "../src/loop/model-call";
+import {
+  selectThinking,
+  offeredToolsFor,
+  usageEvent,
+} from "../src/loop/model-call";
 import { READ_ONLY_TOOL_NAMES, TOOL_NAME } from "../src/agent";
 
 /** The pure per-call decisions extracted from Session.askModel (B2): the
@@ -204,5 +208,66 @@ describe("offeredToolsFor: overlay tool wiring", () => {
     expect(offered.some((t) => t.function.name === TOOL_NAME.edit)).toBe(
       READ_ONLY_TOOL_NAMES.has(TOOL_NAME.edit)
     );
+  });
+});
+
+describe("usageEvent (one shape for both loops)", () => {
+  const usage = {
+    promptTokens: 1000,
+    completionTokens: 50,
+    totalTokens: 1050,
+  };
+
+  test("renders the cache hit as a count AND a share of the prompt", () => {
+    const e = usageEvent({
+      task: "t",
+      usage: { ...usage, cachedPromptTokens: 800 },
+    });
+
+    expect(e.cachedPromptTokens).toBe(800);
+    expect(e.message).toContain("800 cached (80%)");
+  });
+
+  test("says NOTHING about cache when the server reported none", () => {
+    const e = usageEvent({ task: "t", usage });
+
+    expect(e.cachedPromptTokens).toBeUndefined();
+    // Not "0 cached (0%)" — an endpoint without prefix caching must not read as
+    // a cold prefix, which is a harness bug and looks identical otherwise.
+    expect(e.message).not.toContain("cached");
+  });
+
+  test("a reported zero shows as 0%, distinct from silence", () => {
+    const e = usageEvent({
+      task: "t",
+      usage: { ...usage, cachedPromptTokens: 0 },
+    });
+
+    expect(e.cachedPromptTokens).toBe(0);
+    expect(e.message).toContain("0 cached (0%)");
+  });
+
+  test("omits a generation rate when no generation time was measured", () => {
+    // The build driver times a whole turn (tool execution included); publishing
+    // that as tok/s would understate it by an order of magnitude.
+    const e = usageEvent({ task: "t", usage });
+
+    expect(e.tokensPerSecond).toBeUndefined();
+    expect(e.ms).toBeUndefined();
+    expect(e.message).not.toContain("tok/s");
+  });
+
+  test("reports a generation rate when one was measured", () => {
+    const e = usageEvent({ task: "t", usage, genMs: 1000 });
+
+    expect(e.tokensPerSecond).toBe(50);
+    expect(e.message).toContain("50 tok/s");
+  });
+
+  test("carries this call's thinking mode when known", () => {
+    expect(usageEvent({ task: "t", usage, thinking: true }).thinking).toBe(
+      true
+    );
+    expect(usageEvent({ task: "t", usage }).thinking).toBeUndefined();
   });
 });

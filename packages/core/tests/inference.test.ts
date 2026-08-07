@@ -599,3 +599,73 @@ test("a body with no choices and no error is still an empty response", () => {
   // stay a soft empty, as before.
   expect(parseResponse({ id: "x" }).content).toBe("");
 });
+
+/** One non-streaming response carrying `usage`, so a test can assert what the
+ *  wire made of a server's token accounting. */
+function providerReporting(usage: Record<string, unknown>) {
+  const f = (async () =>
+    new Response(
+      JSON.stringify({ choices: [{ message: { content: "ok" } }], usage }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+
+  return new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: f,
+  });
+}
+
+test("reads prefix-cache hits from the OpenAI/vLLM nested spelling", async () => {
+  const p = providerReporting({
+    prompt_tokens: 1000,
+    completion_tokens: 10,
+    total_tokens: 1010,
+    prompt_tokens_details: { cached_tokens: 800 },
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }]);
+
+  expect(r.usage?.cachedPromptTokens).toBe(800);
+});
+
+test("reads prefix-cache hits from DeepSeek's top-level spelling", async () => {
+  const p = providerReporting({
+    prompt_tokens: 1000,
+    completion_tokens: 10,
+    total_tokens: 1010,
+    prompt_cache_hit_tokens: 640,
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }]);
+
+  expect(r.usage?.cachedPromptTokens).toBe(640);
+});
+
+test("a server that reports NO cache field leaves it absent, not zero", async () => {
+  const p = providerReporting({
+    prompt_tokens: 1000,
+    completion_tokens: 10,
+    total_tokens: 1010,
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }]);
+
+  // Absent and 0 must stay distinguishable: 0 means the prefix went cold (a
+  // harness bug worth chasing), absent means the endpoint never said.
+  expect(r.usage?.cachedPromptTokens).toBeUndefined();
+  expect("cachedPromptTokens" in (r.usage ?? {})).toBe(false);
+});
+
+test("a reported zero cache hit is preserved as zero", async () => {
+  const p = providerReporting({
+    prompt_tokens: 1000,
+    completion_tokens: 10,
+    total_tokens: 1010,
+    prompt_tokens_details: { cached_tokens: 0 },
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }]);
+
+  expect(r.usage?.cachedPromptTokens).toBe(0);
+});

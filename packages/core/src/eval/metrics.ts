@@ -19,6 +19,16 @@ export interface IRunMetrics {
   tokensOut: number;
   /** Largest prompt-token count seen (the run's context high-water mark). */
   peakContext: number;
+  /** Share of the run's prompt tokens the server served from its prefix cache,
+   *  in [0,1] — or null when the endpoint never reported it.
+   *
+   *  NULL AND 0 ARE DIFFERENT ANSWERS. Null means we cannot see the cache; 0
+   *  means we can, and the prefix went cold — which on a local vLLM is the
+   *  harness having mutated its own prompt prefix mid-run, and reads from the
+   *  outside as nothing worse than a slow model. Only calls that reported the
+   *  field count toward either side of the ratio, so an endpoint that reports it
+   *  intermittently isn't diluted by the calls that stayed silent. */
+  cacheHitRate: number | null;
   /** File mutations (`edit` + `create`). */
   edits: number;
   /** Edit batches rolled back (`reverted` events) — gate-break or no quality gain.
@@ -59,6 +69,7 @@ function emptyMetrics(): IRunMetrics {
     modelCalls: 0,
     tokensOut: 0,
     peakContext: 0,
+    cacheHitRate: null,
     edits: 0,
     editsReverted: 0,
     acceptRate: 0,
@@ -93,6 +104,10 @@ function countPolicy(m: IRunMetrics, event: ILoopEvent): void {
 interface IAccum {
   tpsSum: number;
   tpsCount: number;
+  /** Cache-hit and prompt totals over ONLY the calls that reported a cache
+   *  figure, so silent calls never dilute the ratio. */
+  cachedTokens: number;
+  cachedOfPrompt: number;
   wallMs: number;
   created: Set<string>;
 }
@@ -106,6 +121,14 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   if (event.tokensPerSecond !== undefined && event.tokensPerSecond > 0) {
     acc.tpsSum += event.tokensPerSecond;
     acc.tpsCount += 1;
+  }
+
+  if (
+    event.cachedPromptTokens !== undefined &&
+    event.promptTokens !== undefined
+  ) {
+    acc.cachedTokens += event.cachedPromptTokens;
+    acc.cachedOfPrompt += event.promptTokens;
   }
 }
 
@@ -163,7 +186,14 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
   const m = emptyMetrics();
   // Accumulate raw ms and round ONCE at the end: rounding each timing event
   // would floor sub-second turns to 0s (400+400+400ms → 0s instead of 1s).
-  const acc: IAccum = { tpsSum: 0, tpsCount: 0, wallMs: 0, created: new Set() };
+  const acc: IAccum = {
+    tpsSum: 0,
+    tpsCount: 0,
+    cachedTokens: 0,
+    cachedOfPrompt: 0,
+    wallMs: 0,
+    created: new Set(),
+  };
 
   for (const event of events) {
     tallyEvent(m, event, acc);
@@ -178,6 +208,9 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
     netAccepted > 0 ? Math.round(m.tokensOut / netAccepted) : 0;
   m.avgTokensPerSecond =
     acc.tpsCount > 0 ? Math.round(acc.tpsSum / acc.tpsCount) : 0;
+  // Null, not 0, when no call reported a cache figure — see IRunMetrics.
+  m.cacheHitRate =
+    acc.cachedOfPrompt > 0 ? acc.cachedTokens / acc.cachedOfPrompt : null;
   m.wallClockSeconds = Math.round(acc.wallMs / 1000);
   m.failureClass = classifyRun(events).failureClass;
 
