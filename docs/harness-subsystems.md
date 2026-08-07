@@ -108,10 +108,10 @@ handlers for `throw` reaching the caller.
 ## gate / detect-gate — `src/gate/*`, `src/validate/*`
 
 Composes the gate command (tsc strict + eslint + opt-in oracles) and the fix/auto-format.
-(PR #66 split the old single files: `src/gate/*` = `core-gate.ts`, `web-gate.ts`,
-`linter.ts`, `tsconfig.ts`, `shell.ts`, `test-discovery.ts`, `tool-paths.ts`,
-`types.ts`; `src/validate/*` = `validate.ts`, `accept.ts`, `parse.ts`, `run-tests.ts`,
-`errors.ts`.)
+(PR #66 split the old single files: `src/gate/*` includes `core-gate.ts`,
+`gate-runner.ts` (the `IGate`/stage composition seam), `pack-config.ts`, `linter.ts`,
+`tsconfig.ts`, `shell.ts`, `test-discovery.ts`, `tool-paths.ts`, and `types.ts`;
+`src/validate/*` owns command execution and structured error parsing.)
 
 **Invariants** the gate uses tsforge's OWN bundled toolchain (works on any target);
 opt-in oracles only join when their env var is set; a failing gate never reports green.
@@ -119,6 +119,49 @@ opt-in oracles only join when their env var is set; a failing gate never reports
 **Risk areas** error-parser fallback dumping a raw blob; opt-in oracle wired in by default.
 
 **Checklist** each opt-in oracle is env-gated; combined parser degrades legibly.
+
+## files / edit primitives — `src/files/*`, `src/loop/tools/edit-hashline.ts`, `src/loop/tools/file-ops.ts`
+
+The byte-level mutation substrate: exact and fuzzy `str_replace`, atomic edit
+batches, create-without-clobber, hash-anchored line edits, stale-anchor recovery,
+and cheap syntax-regression detection. Scope/policy stay at the tool boundary;
+these primitives must report enough truth for that boundary to account correctly.
+
+**Invariants** an exact edit matches once or fails `not-found`/`ambiguous`; fuzzy
+matching is a unique-window fallback and never guesses; a batch computes every
+replacement before its one write, so a bad member writes nothing; byte-identical
+results return `changed:false`; create refuses an existing file unless the caller
+has explicitly authorized overwrite of model-authored work; a stale hashline edit
+merges only against a recorded base and rejects conflicts; a new TS/JS parse error
+reverts the hashline write before success is reported.
+
+**Risk areas** a primitive writing before all checks pass; a no-op reported as a
+mutation; stale recovery overwriting concurrent work; caller bypassing
+`resolveWritable` because the low-level primitive accepts a path.
+
+**Checklist** `tests/files-edit.test.ts`, `tests/files-create.test.ts`,
+`tests/hashline.test.ts`, `tests/execute-tool.test.ts` (overwrite + mutation truth).
+
+## lsp — `src/lsp/*`, `src/loop/tools/lsp-ops.ts`, write feedback in `src/loop/turn.ts`
+
+An in-process TypeScript LanguageService for diagnostics, navigation, semantic
+rename, organize-imports, and conservative quick fixes. It accelerates feedback;
+`tsc -p` in the deterministic gate remains authoritative.
+
+**Invariants** every disk mutation calls `refresh` before diagnostics are trusted;
+automatic fixes exclude assertions/non-null insertions that fight the constitution;
+multi-file text changes are planned before writing and roll back already-written
+files on failure; rename/organize targets are normalized and scope-checked at the
+tool boundary before the service writes; write-time diagnostics are capped and
+advisory, never a substitute for re-gating.
+
+**Risk areas** stale LanguageService snapshots; a cross-file rename touching one
+out-of-scope reference; a partial multi-file write; a new TypeScript fix name that
+weakens strictness.
+
+**Checklist** `tests/lsp-service.test.ts`, `tests/lsp-navigation.test.ts`,
+`tests/execute-lsp.test.ts`, `tests/lsp-write-feedback.test.ts`,
+`tests/lsp-bundler-resolution.test.ts`.
 
 ## oracles — `scripts/boot-check.ts`, `src/browser/oracle.ts`, `scripts/*-check.ts`
 
@@ -156,6 +199,45 @@ degenerate stream; reasoning/content channels are kept distinct.
 **Risk areas** repetition penalty penalizing tool-call JSON (→ narration, no writes);
 reasoning-token capture for the active provider dialect.
 
+## loop / TTSR — `src/loop/ttsr.ts`, `src/loop/ttsr-init.ts`, `src/loop/ttsr-defaults.ts`, stream wiring in `src/inference/*`
+
+Test-time stream rules watch prose/tool-argument deltas, interrupt a known-bad
+generation before it becomes a mutation, and inject corrective guidance on retry.
+
+**Invariants** matching keeps separate bounded rolling buffers for prose and tool
+arguments, honors channel + file scope, and compiles a rule once; an interrupt
+drops the partial tool call (it must never reach dispatch); repeat/cooldown and
+per-rule caps silence only the offending rule, while the global cap prevents an
+infinite retry loop; interactive sends reset interrupt state between unrelated
+prompts; built-in/project rules register before overlay rules, so an overlay cannot
+silently replace a base rule with the same name.
+
+**Risk areas** matching stale text from another channel/task; a partial tool call
+surviving abort; one noisy rule disabling every guard; a project glob that makes a
+rule inert.
+
+**Checklist** `tests/ttsr.test.ts`, `tests/run-ttsr.test.ts`,
+`tests/ttsr-silencing.test.ts`, `tests/ttsr-project-rules.test.ts`.
+
+## loop / cross-session memory — `src/loop/memory/*`, session/run consolidation wiring
+
+Mines a gate-failure → edit → disappearance sequence into a conservative candidate
+lesson, then promotes recurring lessons into project-local TTSR rules.
+
+**Invariants** only diagnostic rules that disappear after a real edit teach;
+creates and structural/behavioral verdicts do not; hits count distinct sessions,
+duplicate evidence in one run counts once, activation requires the hit floor, and
+old lessons decay; persisted malformed memory degrades to empty; active rules are
+loaded at task start, so a run cannot inject the lesson it just mined back into
+itself; `memory forget` removes both the ledger and derived rules.
+
+**Risk areas** attributing an unrelated edit to a vanished rule; a same-session
+burst satisfying the recurrence floor; a broad learned regex interrupting valid
+code; decayed rules remaining active on disk.
+
+**Checklist** `tests/memory.test.ts`, `tests/session-memory.test.ts`, TTSR project-rule
+loading tests.
+
 ## rule-packs / meta-rules — `src/meta-rules/*`, `src/rule-packs/*`, `src/infer-rules/*`, `scripts/build-rule-docs.ts`
 
 ESLint rule packs, structural meta-rules, profile gating.
@@ -190,6 +272,26 @@ the ghost-row / non-ASCII / cursor-clip bugs string assertions missed).
 
 **Checklist** spinner inline gate off in the interactive REPL; teardown on
 `process.on("exit")`; resize handler calls `statusBar.resize` AND `editorHandle.resize`.
+
+## CLI args + session persistence — `src/cli/args.ts`, `src/cli/repl.ts`, `src/cli/gate-setup.ts`, `src/session-store.ts`, `src/config/*`
+
+Pure flag parsing feeds the one-shot/REPL entry points; interactive state is saved
+after turns so `--continue`/`--resume` can restore the exact safety posture.
+
+**Invariants** every value-taking flag fails loudly when missing a value or followed
+by another known flag (the second flag is never swallowed); profile/policy ids are
+validated before use; an explicit launch flag wins over a saved value, while a
+saved profile/plan mode is revalidated before restoration; resumed auto gates are
+re-detected from the current stack, while manual/off gates retain their stored
+choice; a paused unvalidated edit remains pending across resume; persisted messages
+are secret-redacted before an owner-only file is written.
+
+**Risk areas** parser tables and help text drifting; corrupt session data restoring
+an invalid mode/profile; resume silently dropping plan/read-only or a deferred gate;
+an auto gate freezing to a stale stored command.
+
+**Checklist** `tests/cli.test.ts`, `tests/session-store.test.ts`,
+`tests/session-gate.test.ts`, `tests/session-interim-check.test.ts`, REPL resume tests.
 
 ## editor — `src/editor/*` (`buffer.ts`, `completion.ts`, `controller.ts`, `index.ts`, `keys.ts`, `kill-ring.ts`, `paste.ts`, `segments.ts`, `undo-stack.ts`, `view.ts`)
 
@@ -284,6 +386,71 @@ edit-before-spawn ordering), `tests/agent-tree.test.ts`, `tests/agent-tree-rende
 `tests/output-router.test.ts`; PTY: `scripts/e2e-spawn-agent-pty.py`,
 `scripts/e2e-agents-pty.py`.
 
+## reviewers / independent panel — `src/reviewers/*`, `src/cli/harness-review-mode.ts`
+
+Resolves independent model/binary reviewers, invokes them concurrently, validates
+their structured findings, and aggregates a fail-closed verdict over a frozen review
+request/artifact.
+
+**Invariants** the panel floor is at least two; reviewers that front the builder or
+the same underlying model cannot cast duplicate independent votes; every invocation
+resolves to an `ok` or categorized error (timeout, exit, truncation, unparseable,
+throw), so one dropout never rejects the whole worker pool; partial/flooded binary
+output is never parsed as a vote; no quorum blocks; pre-review and no-quorum outcomes
+are not cached as judgments about the tree; serious agreement/security findings and
+explicit rejects retain their blocking semantics.
+
+**Risk areas** identity aliases producing duplicate votes; a killed binary's prefix
+counting as a review; transient endpoint failure poisoning the verdict cache; flat
+finding grouping merging unrelated loci.
+
+**Checklist** `tests/reviewers-registry.test.ts`, `tests/reviewers-invoke.test.ts`,
+`tests/reviewers-aggregate.test.ts`, `tests/reviewers-artifact.test.ts`,
+`tests/reviewers-binary-independence.test.ts`, `tests/reviewers-harness-review.test.ts`.
+
+## eval / measurement — `src/eval/*`, `scripts/sweep.ts`, eval corpus runners
+
+Turns event ledgers and corpus outcomes into comparable run records, failure classes,
+behavioral/cost metrics, judged quality, and statistical A/B reports.
+
+**Invariants** JSONL parsing accepts the wrapped ledger and legacy flat events but
+drops malformed/non-finite fields; null signal is distinct from measured zero
+(especially cache rate and graded progress); reverted edit batches subtract their
+full mutation count; timing is accumulated before rounding; a variant report carries
+run count, pass rate + Wilson interval, turns-to-green, measured wall time, quality,
+LOC, cache hit rate, and failure classes; baseline comparisons use the recorded runs,
+not reconstructed summaries.
+
+**Risk areas** a metric computed but never copied onto `IRunRecord`; silent endpoint
+fields diluted as zeros; failed runs omitted from denominators; cost improvements
+reported without the outcome tradeoff beside them.
+
+**Checklist** `tests/eval-*.test.ts`, `tests/reviewers-aggregate.test.ts` (shared run
+records), `tests/self-harness-evaluate-progress.test.ts` (production wiring).
+
+## self-harness — `src/self-harness/*`
+
+A regression-gated hill climb over declarative prompt/TTSR/agent/procedure/tool
+overlays: evaluate → mine → propose → validate on held-in + hidden held-out → merge,
+with a separate statistical proof gate before live promotion.
+
+**Invariants** the editable overlay has no gate-strictness/model/capability-granting
+surface; held-out task ids/evidence never enter the proposer prompt; a candidate must
+gain without held-out regression and still pass quality, concision, progress, and
+cycle-blowup guards; missing/invalid graded figures fail closed on the graded path;
+infrastructure errors are counted separately and cannot become measured task failure;
+every completed or errored attempt records real wall time; merged scores are derived
+from raw records through one constructor; live installation is atomic and keeps a
+rollback point, while regression rollback is easier to trigger than promotion.
+
+**Risk areas** verifier leakage into the editable overlay; a score field dropped at a
+merge seam; proposer exposure to held-out data; endpoint weather credited/blamed as a
+candidate delta; a partial overlay visible to a starting session.
+
+**Checklist** `tests/self-harness-injection.test.ts`, `tests/self-harness-loop.test.ts`,
+`tests/self-harness-merge.test.ts`, `tests/self-harness-evaluate-progress.test.ts`,
+`tests/self-harness-promote.test.ts`, `tests/self-harness-propose.test.ts`.
+
 ## mcp — `src/mcp/*`
 
 Hand-rolled JSON-RPC 2.0 client/server, tool registry.
@@ -374,6 +541,25 @@ the kill-timeout (the fixed `runNotify` hang).
 
 - custom env; `tests/cli.test.ts` `runNotify` is timeout-bounded; content-built
   commands use `runArgvCommand`.
+
+## architecture / generated map — `src/architecture/*`, `scripts/build-architecture-md.ts`, `ARCHITECTURE.md`, docs internals output
+
+Builds the exhaustive subsystem inventory, static import graph, mutual-dependency
+pairs, CLI entry points, adapter seams, and imports that leave `src/`.
+
+**Invariants** the hand-written registry and actual top-level source directories
+match exactly (a new/missing subsystem fails); source paths are sorted before analysis
+so edge witnesses are deterministic across filesystems; import resolution prefers a
+same-name file over a directory (load-bearing for `cli.ts` + `cli/`); generated repo
+and site artifacts are byte-identical after `arch:build`; limitations such as dynamic
+imports, tests/scripts, globals, and longer cycles stay explicitly disclosed.
+
+**Risk areas** regex/text scanning imports inside generated string literals; a type-only
+edge disappearing; nondeterministic first witness; adding a new adapter seam or CLI
+entry shape that the scanner does not recognize.
+
+**Checklist** `tests/architecture.test.ts`, `bun run arch:check`; compare the registry
+to `packages/core/src/`, never hand-edit generated outputs.
 
 ---
 

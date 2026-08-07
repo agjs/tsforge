@@ -172,6 +172,7 @@ describe("evaluateHarness records the graded score", () => {
 
         expect(out.score.errored).toBe(1);
         expect(out.score.passed).toBe(0);
+        expect(out.records[0]?.ms).toBeGreaterThan(0);
         // Unmeasured, NOT zero — an outage is not a run that made no progress.
         expect(out.score.avgProgress).toBeUndefined();
       } finally {
@@ -233,6 +234,7 @@ describe("evaluateHarness records the graded score", () => {
         const scores = out.records.map((r) => r.progress);
 
         expect(scores.every((v) => typeof v === "number")).toBe(true);
+        expect(out.records.every((r) => r.ms > 0)).toBe(true);
         expect(out.score.avgProgress).toBe(meanProgress(scores));
 
         // And the invariant a constant cannot satisfy: a PASSING run records

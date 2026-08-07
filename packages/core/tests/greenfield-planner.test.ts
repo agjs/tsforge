@@ -60,6 +60,8 @@ describe("planner: parsePlan / planFeatures", () => {
           { id: "Has Space", desc: "space" },
           { id: "trailing-", desc: "trailing hyphen — not kebab" },
           { id: "-leading", desc: "leading hyphen — not kebab" },
+          { id: "test--item", desc: "double hyphen — not kebab" },
+          { id: "a---b", desc: "hyphen run — not kebab" },
           { id: "good-feature", desc: "fine" },
           { id: "a", desc: "single char is valid kebab" },
         ],

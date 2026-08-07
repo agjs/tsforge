@@ -58,6 +58,12 @@ export interface IEvaluateOptions {
  *  (query's measured 15–17-cycle crawls are the motivating case). */
 export const SPEC_SLOW_THRESHOLD = 8;
 
+/** A completed attempt always carries a positive measured duration, even on a
+ *  clock whose observable resolution is coarser than the attempted work. */
+function elapsedMs(startedAt: number): number {
+  return Math.max(performance.now() - startedAt, Number.EPSILON);
+}
+
 export interface IEvaluateOutcome {
   readonly score: ISplitScore;
   /** Per-run event streams, for weakness mining (held-in only is mined, but
@@ -409,6 +415,7 @@ async function runTaskOnce(
   runDir: string,
   opts: IEvaluateOptions
 ): Promise<ITaskRunOutput> {
+  const startedAt = performance.now();
   const seedDir = join(opts.corpusDir, taskId);
 
   await setupRunDir(runDir, seedDir);
@@ -508,7 +515,7 @@ async function runTaskOnce(
       label: taskId,
       passed,
       cycles,
-      ms: 0,
+      ms: elapsedMs(startedAt),
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
@@ -635,6 +642,8 @@ async function runOneSpec(
   opts: IEvaluateOptions,
   sink: IRunSink
 ): Promise<void> {
+  const startedAt = performance.now();
+
   try {
     const { record, run } = await runTaskOnce(taskId, runDir, opts);
 
@@ -643,7 +652,12 @@ async function runOneSpec(
     sink.log(verdictLine(taskId, attempt, record));
   } catch (err) {
     sink.erroredCount += 1;
-    sink.records.push({ label: taskId, passed: false, cycles: 0, ms: 0 });
+    sink.records.push({
+      label: taskId,
+      passed: false,
+      cycles: 0,
+      ms: elapsedMs(startedAt),
+    });
     sink.log(
       `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
     );

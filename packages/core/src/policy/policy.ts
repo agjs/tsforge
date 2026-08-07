@@ -475,6 +475,29 @@ export function evaluatePolicy(
   action: IProposedAction,
   ctx: IPolicyContext
 ): IPolicyEvaluation {
+  // Runtime callers include JavaScript and deserialized config. Even though
+  // TypeScript callers carry PolicyMode, a malformed/prototype-named value must
+  // not index through MODE_MATRIX and throw or yield an undefined verdict.
+  if (!Object.hasOwn(MODE_MATRIX, ctx.mode)) {
+    return evaluation(
+      "deny",
+      `unknown policy mode blocked: ${ctx.mode}`,
+      ["critical:invalid-policy-mode"],
+      "critical"
+    );
+  }
+
+  const modeDefaults = MODE_MATRIX[ctx.mode];
+
+  if (!Object.hasOwn(modeDefaults, action.kind)) {
+    return evaluation(
+      "deny",
+      `unknown action kind blocked: ${action.kind}`,
+      ["critical:invalid-action-kind"],
+      "critical"
+    );
+  }
+
   const critical = criticalDeny(action, ctx);
 
   if (critical !== null) {
@@ -487,7 +510,7 @@ export function evaluatePolicy(
     return resolve(ruled.decision, ruled.id, [ruled.id], action, ctx);
   }
 
-  const base = MODE_MATRIX[ctx.mode][action.kind];
+  const base = modeDefaults[action.kind];
 
   return resolve(
     base,

@@ -1,7 +1,7 @@
 import type { ITask } from "../spec";
 import type { ErrorParser, ErrorSet, IValidateResult } from "./validate.types";
 import { runAccept, type IAcceptOptions } from "./accept";
-import { parserFor, isEslintJsonLine } from "./parse";
+import { capWithNotice, parserFor, isEslintJsonLine } from "./parse";
 
 /** Longest fallback message we'll surface — a vite/render error fits; a wall of
  *  build logs does not. */
@@ -22,9 +22,7 @@ export function fallbackMessage(output: string): string {
     return "command exited non-zero";
   }
 
-  return cleaned.length > FALLBACK_CAP
-    ? `${cleaned.slice(0, FALLBACK_CAP)}\n… (output truncated)`
-    : cleaned;
+  return capWithNotice(cleaned, FALLBACK_CAP);
 }
 
 /**

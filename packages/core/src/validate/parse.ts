@@ -2,6 +2,14 @@ import type { IErrorItem, ErrorParserFn } from "./validate.types";
 import { isArray, isRecord } from "../lib/guards";
 
 const TSC = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/;
+const GENERIC_CAP = 500;
+
+/** Bound raw output without hiding that more text exists. */
+export function capWithNotice(text: string, cap: number): string {
+  return text.length > cap
+    ? `${text.slice(0, cap)}\n… (output truncated)`
+    : text;
+}
 
 /** Parse `tsc` output into a structured error set (one item per diagnostic). */
 export function parseTsc(output: string): IErrorItem[] {
@@ -41,7 +49,9 @@ export function parseTsc(output: string): IErrorItem[] {
 export function genericErrors(output: string): IErrorItem[] {
   const text = output.trim();
 
-  return text.length > 0 ? [{ key: "raw", message: text.slice(0, 500) }] : [];
+  return text.length > 0
+    ? [{ key: "raw", message: capWithNotice(text, GENERIC_CAP) }]
+    : [];
 }
 
 /** A line is eslint's `--format json` blob when it begins `[{` and carries the

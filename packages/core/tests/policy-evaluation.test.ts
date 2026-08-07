@@ -202,6 +202,53 @@ describe("destructive-shell detection", () => {
     expect(isDestructiveShell("find . -exec grep TODO {} +")).toBe(false);
   });
 
+  test("unwraps wrapper options and complete eval argument lists", () => {
+    const destructive = [
+      "eval 'rm -rf /' ignored",
+      'eval "rm -rf /" ignored',
+      "eval 'rm' -rf /",
+      "eval 'r''m' -rf /",
+      "sudo -- rm -rf /",
+      "sudo -S rm -rf /",
+      "sudo --stdin rm -rf /",
+      "sudo --user=root rm -rf /",
+      "sudo --user root rm -rf /",
+      "env --chdir /tmp rm -rf /",
+      "env --split-string 'rm -rf /'",
+      "nice --adjustment 5 rm -rf /",
+      "stdbuf --output L rm -rf /",
+      "timeout --kill-after=1 10 rm -rf /",
+      "/usr/bin/time -o timing.log rm -rf /",
+      "/usr/bin/time --output=timing.log rm -rf /",
+      "time -f '%E' rm -rf /",
+      "timeout 10 time --format '%E' rm -rf /",
+      "find . | xargs --max-args=1 rm -rf /",
+    ];
+
+    for (const command of destructive) {
+      expect(isDestructiveShell(command)).toBe(true);
+    }
+
+    const benign = [
+      "eval 'echo' rm -rf /",
+      "eval 'e''cho' rm -rf /",
+      'git commit -m "eval rm -rf old docs"',
+      "sudo -S bun test",
+      "sudo --user=root bun test",
+      "env --chdir /tmp bun test",
+      "nice --adjustment 5 bun test",
+      "stdbuf --output L bun test",
+      "timeout --kill-after=1 10 bun test",
+      "/usr/bin/time -o timing.log bun test",
+      "time --format '%E' bun test",
+      "find . | xargs --max-args=1 grep TODO",
+    ];
+
+    for (const command of benign) {
+      expect(isDestructiveShell(command)).toBe(false);
+    }
+  });
+
   test("sees through quote-wrapping bypasses (the shell strips the quotes)", () => {
     // a quoted head still runs the bare command
     expect(isDestructiveShell('"rm" -rf /')).toBe(true);
@@ -437,6 +484,22 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
       "echo $(rm -rf x)",
       "find . -exec rm {} +",
       "sh -c 'rm -rf /'",
+      "timeout 10 rm -rf /",
+      "timeout --signal KILL 10 rm -rf /",
+      "time rm -rf /",
+      "/usr/bin/time rm -rf /",
+      "timeout 10 time rm -rf /",
+      "eval 'rm -rf /'",
+      "$'rm' -rf /",
+      "find . | xargs rm -rf /",
+      "find . | xargs -0 -n 1 rm -rf /",
+      "exec rm -rf /",
+      "exec -a cleanup rm -rf /",
+      "builtin rm -rf /",
+      "command -p rm -rf /",
+      "env -S 'rm -rf /'",
+      "/usr/bin/timeout 10 /bin/rm -rf /",
+      "sh <<< 'rm -rf /'",
     ];
 
     for (const command of disguises) {
@@ -446,6 +509,58 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
         expect(v.decision).toBe("deny");
         expect(v.risk).toBe("critical");
       }
+    }
+  });
+
+  test("shell-wrapper detection preserves benign wrapped commands", () => {
+    const commands = [
+      "timeout 10 bun test",
+      "timeout --signal KILL 10 bun test",
+      "time bun test",
+      "eval 'echo safe'",
+      "$'echo' safe",
+      "find . | xargs grep TODO",
+      "find . | xargs -0 -n 1 grep TODO",
+      "exec bun test",
+      "exec -a test bun test",
+      "builtin echo safe",
+      "command -p ls",
+      "env -u FOO bun test",
+      "sh <<< 'echo safe'",
+    ];
+
+    for (const command of commands) {
+      expect(
+        evaluatePolicy(action("shell", { command }), ctx("bypassPermissions"))
+          .decision
+      ).toBe("allow");
+    }
+  });
+
+  test("an unknown or prototype-named policy mode denies", () => {
+    for (const mode of ["not-a-mode", "constructor", "toString"]) {
+      // defineProperty changes the runtime value without lying to TypeScript
+      // about IPolicyContext — this is the malformed JS/config boundary the
+      // evaluator must fail closed against even though typed callers validate.
+      const invalid = Object.defineProperty(ctx("default"), "mode", {
+        value: mode,
+      });
+      const verdict = evaluatePolicy(action("read_file"), invalid);
+
+      expect(verdict.decision).toBe("deny");
+      expect(verdict.matchedRules).toContain("critical:invalid-policy-mode");
+    }
+  });
+
+  test("an invalid or prototype-named action kind denies", () => {
+    for (const kind of ["not-a-kind", "constructor", "toString"]) {
+      const invalid = Object.defineProperty(action("read_file"), "kind", {
+        value: kind,
+      });
+      const verdict = evaluatePolicy(invalid, ctx("default"));
+
+      expect(verdict.decision).toBe("deny");
+      expect(verdict.matchedRules).toContain("critical:invalid-action-kind");
     }
   });
 
