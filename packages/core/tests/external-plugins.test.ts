@@ -13,7 +13,6 @@ import {
   FREEZE_LIMITS,
   fingerprintPluginEntry,
 } from "../src/config/plugin-fingerprint";
-import { createRule } from "../src/rule-packs/create-rule";
 import {
   assertExternalPacksFrozen,
   buildPackEslintConfig,
@@ -110,6 +109,91 @@ describe("external-plugins: loading", () => {
     const { rules } = buildPackEslintConfig(["example-external"]);
 
     expect(Object.keys(rules)).toContain("tsforge/no-foo-identifier");
+  });
+
+  test("a rule defined as an accessor cannot answer differently after loading", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-accessor-"));
+    const entry = join(dir, "plugin.ts");
+
+    // `Object.freeze` on an object with an accessor makes the accessor
+    // non-configurable — it does not stop the getter from running, or from
+    // returning something new every time ESLint reads it. Freezing the plugin's
+    // live object therefore pins nothing; only a materialized copy does.
+    await writeFile(
+      entry,
+      `let reads = 0;
+function enforcing() { return {}; }
+function neutered() { return {}; }
+export const pack = {
+  id: "accessor-pack",
+  description: "d",
+  rules: {
+    "no-foo": {
+      meta: { type: "problem", docs: { description: "d" }, schema: [], messages: { m: "m" } },
+      get create() {
+        reads += 1;
+        return reads === 1 ? enforcing : neutered;
+      },
+    },
+  },
+  rulesConfig: { "no-foo": "error" },
+};
+`
+    );
+
+    const [loaded] = await loadExternalPacks(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      () => undefined
+    );
+
+    // ESLint reads `create` when it lints, long after load. That read has to
+    // return the implementation the pack was accepted with, not whatever the
+    // getter feels like answering by then.
+    expect(loaded?.pack.rules["no-foo"]?.create.name).toBe("enforcing");
+  });
+
+  test("a declared pack name that the module does not export fails the run", async () => {
+    // The check asks whether the plugin PATH produced anything, so a config
+    // naming two packs is satisfied by one. The missing name is a typo or a
+    // renamed export, and either way its rules silently stop being enforced.
+    await expect(
+      loadAndRegisterPlugins(
+        [{ path: FIXTURE, packs: ["examplePack", "noSuchPack"] }],
+        import.meta.dir,
+        () => undefined
+      )
+    ).rejects.toThrow(/noSuchPack/);
+  });
+
+  test("an export whose getter throws is reported, not fatal", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-throwing-"));
+    const entry = join(dir, "plugin.ts");
+    const messages: string[] = [];
+
+    await writeFile(
+      entry,
+      `export const pack = {
+  get id() {
+    throw new Error("boom");
+  },
+  description: "d",
+  rules: {},
+  rulesConfig: {},
+};
+`
+    );
+
+    // Reading the export happens outside the per-plugin try, so a throwing
+    // getter escapes the loop and takes down every other plugin's load with it.
+    const loaded = await loadExternalPacks(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      (m) => messages.push(m)
+    );
+
+    expect(loaded).toHaveLength(0);
+    expect(messages.some((m) => m.includes("boom"))).toBe(true);
   });
 
   test("a rulesConfig is read once, so a getter cannot weaken what was validated", async () => {
@@ -292,58 +376,22 @@ describe("external-plugins: content freeze (F19)", () => {
     );
   });
 
-  test("freezeRulePack freezes each rule module so create cannot be swapped", () => {
-    const rule = createRule<[], "noFoo">({
-      name: "no-foo",
-      meta: {
-        type: "problem",
-        docs: { description: "d" },
-        schema: [],
-        messages: { noFoo: "no foo" },
-      },
-      defaultOptions: [],
-      create: () => ({}),
-    });
-    const frozen = freezeRulePack({
-      id: "x",
-      description: "d",
-      rules: { r: rule },
-      rulesConfig: { r: "error" },
-    });
+  test("a loaded rule is frozen all the way down, not just at its top level", async () => {
+    const [loaded] = await loadExternalPacks(
+      [{ path: FIXTURE, packs: ["examplePack"] }],
+      import.meta.dir,
+      () => undefined
+    );
+    const rule = loaded?.pack.rules["no-foo-identifier"];
 
     // A plugin keeping a reference to its own exported rule must not be able to
-    // neuter it after registration — the disk never changes, so the fingerprint
-    // cannot catch this one. Freezing the key set alone leaves `create` writable.
-    expect(Object.isFrozen(frozen.rules.r)).toBe(true);
-    expect(() => {
-      rule.create = () => ({});
-    }).toThrow(TypeError);
-  });
-
-  test("freezeRulePack freezes a rule's meta, not just its top level", () => {
-    const rule = createRule<[], "noFoo">({
-      name: "no-foo",
-      meta: {
-        type: "problem",
-        docs: { description: "d" },
-        schema: [],
-        messages: { noFoo: "no foo" },
-      },
-      defaultOptions: [],
-      create: () => ({}),
-    });
-    const frozen = freezeRulePack({
-      id: "x",
-      description: "d",
-      rules: { r: rule },
-      rulesConfig: { r: "error" },
-    });
-
-    // `meta` carries the reportable messages and the option schema — rewriting a
-    // message or widening the schema changes what the rule enforces just as much
-    // as swapping `create`, and a one-level freeze leaves all of it writable.
-    expect(Object.isFrozen(frozen.rules.r?.meta)).toBe(true);
-    expect(Object.isFrozen(frozen.rules.r?.meta.messages)).toBe(true);
+    // neuter it after registration: the disk never changes, so the fingerprint
+    // cannot catch that one. `meta` counts as much as `create` — rewriting a
+    // message or widening the schema changes what the rule enforces.
+    expect(Object.isFrozen(rule)).toBe(true);
+    expect(Object.isFrozen(rule?.meta)).toBe(true);
+    expect(Object.isFrozen(rule?.meta.messages)).toBe(true);
+    expect(Object.isFrozen(rule?.meta.schema)).toBe(true);
   });
 });
 
@@ -378,7 +426,7 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     // Silent truncation would fingerprint an arbitrary prefix of the graph, so
     // every edit past the cut would pass the freeze.
     await expect(fingerprintPluginEntry(join(dir, "index.ts"))).rejects.toThrow(
-      /exceeds the freeze limit/
+      /exceeds the freeze limit \(\d+ files/
     );
   });
 

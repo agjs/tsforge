@@ -25,24 +25,58 @@ const REFUSED = "refused";
  *  changed content can be refused rather than served from the ESM cache. */
 const IMPORTED_AT = new Map<string, string>();
 
-/** Freeze an object and everything reachable from it. Cycles are handled via
- *  `seen`; functions are left alone (a rule's `create` cannot be reassigned once
- *  its owner is frozen, and freezing the function object itself buys nothing). */
-function deepFreeze(value: unknown, seen: Set<object>): void {
-  if (typeof value !== "object" || value === null || seen.has(value)) {
-    return;
+/**
+ * Copy a plugin value into frozen plain data, reading every property once.
+ *
+ * Freezing the plugin's own object in place does not do this job. `Object.freeze`
+ * on an accessor property makes it non-configurable and leaves the getter
+ * running, so `rules["no-foo"].create` can still answer ESLint with a different
+ * function on every read — and the disk never changes, so no fingerprint sees
+ * it. Freezing in place also reaches whatever the plugin's objects happen to
+ * reference: a shared constant, a library object from `@typescript-eslint/utils`,
+ * any singleton it imported. Those belong to someone else.
+ *
+ * Functions are kept by reference (a rule's `create` IS the implementation);
+ * everything else becomes ours.
+ */
+function materialize(value: unknown, seen: Map<object, unknown>): unknown {
+  if (typeof value !== "object" || value === null) {
+    return value;
   }
 
-  seen.add(value);
-  Object.freeze(value);
+  const already = seen.get(value);
 
-  for (const nested of Object.values(value)) {
-    deepFreeze(nested, seen);
+  if (already !== undefined) {
+    return already;
   }
+
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+
+    seen.set(value, copy);
+
+    for (const item of value) {
+      copy.push(materialize(item, seen));
+    }
+
+    return Object.freeze(copy);
+  }
+
+  const copy: Record<string, unknown> = {};
+
+  seen.set(value, copy);
+
+  for (const [key, nested] of Object.entries(value)) {
+    copy[key] = materialize(nested, seen);
+  }
+
+  return Object.freeze(copy);
 }
 
-/** Deep-freeze a pack's rulesConfig (and the pack shell) so a live export
- *  cannot be mutated after registration to weaken severities under the same id. */
+/** Freeze a pack so a live export cannot be mutated after registration to weaken
+ *  severities under the same id. Packs coming from `loadExternalPacks` have
+ *  already been materialized by `snapshotPack`; this stays for callers holding a
+ *  pack from somewhere else, and is a no-op on an already-frozen copy. */
 export function freezeRulePack(pack: IRulePack): IRulePack {
   const rulesConfig: Record<string, "error" | "warn"> = {};
 
@@ -52,13 +86,7 @@ export function freezeRulePack(pack: IRulePack): IRulePack {
 
   const rules: Record<string, IRulePack["rules"][string]> = {};
 
-  // Freeze each rule MODULE and everything under it, not just the key set: a
-  // plugin that keeps a reference to its own exported rule could otherwise
-  // replace `create` with a no-op, rewrite a `meta.messages` entry, or widen
-  // `meta.schema` after registration. The disk never changes in any of those
-  // cases, so the content fingerprint cannot see them — only the freeze can.
   for (const [name, rule] of Object.entries(pack.rules)) {
-    deepFreeze(rule, new Set());
     rules[name] = rule;
   }
 
@@ -96,18 +124,7 @@ function resolvePluginEntryPath(pluginPath: string, cwd: string): string {
  * says first is what is validated, frozen, and enforced.
  */
 function snapshotPack(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  const { id, description, rules, rulesConfig } = value;
-
-  return {
-    id,
-    description,
-    rules: isRecord(rules) ? { ...rules } : rules,
-    rulesConfig: isRecord(rulesConfig) ? { ...rulesConfig } : rulesConfig,
-  };
+  return materialize(value, new Map());
 }
 
 /** Type guard: a well-formed IRulePack (no `as` — every field is checked). */
@@ -167,16 +184,17 @@ export function parsePlugins(raw: unknown): IExternalPlugin[] {
   return plugins;
 }
 
-/** Collect the candidate exports to validate from a loaded module. */
+/** The candidate exports to validate, paired with the name each came from so a
+ *  failure can say WHICH export it was about. */
 function candidateExports(
   mod: Record<string, unknown>,
   names: readonly string[] | undefined
-): unknown[] {
+): [string, unknown][] {
   if (names === undefined) {
-    return Object.values(mod);
+    return Object.entries(mod);
   }
 
-  return names.map((name) => mod[name]);
+  return names.map((name) => [name, mod[name]]);
 }
 
 /** A pack loaded from disk with the content fingerprint that freezes it. */
@@ -187,6 +205,9 @@ export interface ILoadedExternalPack {
   /** The `plugins[].path` this pack came from, so a caller can tell which
    *  configured entries produced nothing. */
   readonly source: string;
+  /** The export name it was loaded from, so a caller can tell which DECLARED
+   *  pack names produced nothing. */
+  readonly exportName: string;
 }
 
 /**
@@ -266,19 +287,38 @@ export async function loadExternalPacks(
       continue;
     }
 
-    for (const candidate of candidateExports(mod, plugin.packs)) {
-      // Snapshot BEFORE validating: from here on the pack is plain data, so the
-      // thing that was checked and the thing that gets registered cannot differ.
-      const snapshot = snapshotPack(candidate);
+    for (const [name, candidate] of candidateExports(mod, plugin.packs)) {
+      let snapshot: unknown;
+
+      try {
+        // Snapshot BEFORE validating: from here on the pack is plain data, so
+        // the thing that was checked and the thing that gets registered cannot
+        // differ. Reading it runs the plugin's getters, which can throw — and
+        // this is outside the load try/catch, so an unguarded throw here takes
+        // every other configured plugin down with it.
+        snapshot = snapshotPack(candidate);
+      } catch (err) {
+        report(
+          `plugin '${plugin.path}': reading export '${name}' failed: ${errMessage(err)}`
+        );
+
+        continue;
+      }
 
       if (isRulePack(snapshot)) {
         const pack = freezeRulePack(snapshot);
 
-        out.push({ pack, entryPath, fingerprint, source: plugin.path });
+        out.push({
+          pack,
+          entryPath,
+          fingerprint,
+          source: plugin.path,
+          exportName: name,
+        });
         report(`plugin '${plugin.path}': loaded pack '${pack.id}'`);
       } else {
         report(
-          `plugin '${plugin.path}': an export is not a valid rule pack — skipped`
+          `plugin '${plugin.path}': export '${name}' is not a valid rule pack — skipped`
         );
       }
     }
@@ -305,9 +345,22 @@ export async function loadAndRegisterPlugins(
   report: (message: string) => void
 ): Promise<string[]> {
   const loaded = await loadExternalPacks(plugins, cwd, report);
-  const empty = plugins
-    .map((p) => p.path)
-    .filter((path) => !loaded.some((l) => l.source === path));
+  // Per DECLARED NAME, not per plugin path. `{ path, packs: ["strict", "extra"] }`
+  // that exports only `strict` produced a pack, so a path-level check is
+  // satisfied — while `extra`, a typo or a renamed export, quietly stops being
+  // enforced. A path with no `packs` list is satisfied by any pack at all.
+  const empty = plugins.flatMap((p) =>
+    p.packs === undefined
+      ? loaded.some((l) => l.source === p.path)
+        ? []
+        : [p.path]
+      : p.packs
+          .filter(
+            (name) =>
+              !loaded.some((l) => l.source === p.path && l.exportName === name)
+          )
+          .map((name) => `${p.path} (${name})`)
+  );
 
   // Decided BEFORE anything is registered. The registry is global, so throwing
   // after a partial registration leaves the rule set half-applied behind an

@@ -120,7 +120,11 @@ export async function assertExternalPacksFrozen(): Promise<void> {
     const now = await fingerprintPluginEntry(meta.entryPath).catch(
       (err: unknown) => {
         throw new ExternalPackDriftError(
-          `tsforge: external plugin pack '${id}' can no longer be verified (${meta.entryPath}): ${err instanceof Error ? err.message : String(err)}`
+          `tsforge: external plugin pack '${id}' can no longer be verified (${meta.entryPath}): ${err instanceof Error ? err.message : String(err)}`,
+          // Keep the original: the message says verification failed, the cause
+          // says whether the entry vanished, grew past the limit, or something
+          // else — and only one of those is the user's to fix.
+          { cause: err }
         );
       }
     );
