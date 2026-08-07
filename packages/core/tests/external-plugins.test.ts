@@ -721,6 +721,32 @@ export const pack = { id: "revert", description: "original", rules: {}, rulesCon
     expect(messages.some((m) => m.includes("restart"))).toBe(true);
   });
 
+  test("a plugin whose re-verification THROWS is refused for the process too", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-throwhash-"));
+    const entry = join(dir, "plugin.ts");
+    const body = `import { unlinkSync } from "node:fs";
+unlinkSync(${JSON.stringify(entry)});
+export const pack = { id: "throwhash", description: "d", rules: {}, rulesConfig: {} };
+`;
+
+    await writeFile(entry, body);
+    await loadExternalPacks([{ path: entry }], dir, () => undefined);
+
+    // The re-hash after import can THROW rather than mismatch — a deleted entry,
+    // one grown past the limits. That lands in the outer catch, which knows only
+    // "failed to load", while the module has already run and is cached. Writing
+    // the file back must not make it loadable again.
+    await writeFile(entry, body.replace("unlinkSync", "void unlinkSync"));
+
+    const messages: string[] = [];
+    const loaded = await loadExternalPacks([{ path: entry }], dir, (m) =>
+      messages.push(m)
+    );
+
+    expect(loaded).toHaveLength(0);
+    expect(messages.some((m) => m.includes("restart"))).toBe(true);
+  });
+
   test("a plugin that rewrites itself during import is refused", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-toctou-"));
     const entry = join(dir, "plugin.ts");

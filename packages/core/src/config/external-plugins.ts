@@ -62,12 +62,27 @@ function materialize(value: unknown, seen: Map<object, unknown>): unknown {
     return Object.freeze(copy);
   }
 
-  const copy: Record<string, unknown> = {};
+  // Anything that is not a plain object — a RegExp in a schema, a Map, a Date,
+  // an instance of the plugin's own class — is kept as it is. Rebuilding one
+  // property-by-property does not reproduce it: the prototype goes, and with it
+  // every method, leaving `{}` where ESLint expected a working object. These are
+  // leaves in practice, and a leaf we pass through is a smaller risk than a
+  // silently broken rule.
+  const proto: unknown = Object.getPrototypeOf(value);
+
+  if (proto !== Object.prototype && proto !== null) {
+    return value;
+  }
+
+  const copy: Record<string | symbol, unknown> = {};
 
   seen.set(value, copy);
 
-  for (const [key, nested] of Object.entries(value)) {
-    copy[key] = materialize(nested, seen);
+  // Every own key, not just the enumerable string ones: a property defined with
+  // `Object.defineProperty` or under a symbol is still a property ESLint may
+  // read, and dropping it silently changes the rule.
+  for (const key of Reflect.ownKeys(value)) {
+    copy[key] = materialize(Reflect.get(value, key), seen);
   }
 
   return Object.freeze(copy);
@@ -211,6 +226,71 @@ export interface ILoadedExternalPack {
 }
 
 /**
+ * Import one plugin entry and prove the bytes that ran are the bytes that were
+ * hashed. Returns undefined — after reporting why — when it cannot be trusted.
+ */
+async function importVerified(
+  plugin: IExternalPlugin,
+  entryPath: string,
+  report: (message: string) => void
+): Promise<{ mod: unknown; fingerprint: string } | undefined> {
+  try {
+    const fingerprint = await fingerprintPluginEntry(entryPath);
+    // A second load of an entry whose content changed cannot be honored: the
+    // ESM cache is keyed by resolved path and Bun ignores query strings, so
+    // `import` returns the module from the FIRST load. Registering it would
+    // pair a stale module with a fresh digest — a pack whose rules and whose
+    // freeze describe different content, which no later check can detect.
+    const importedAt = IMPORTED_AT.get(entryPath);
+
+    if (
+      importedAt === REFUSED ||
+      (importedAt !== undefined && importedAt !== fingerprint)
+    ) {
+      report(
+        `plugin '${plugin.path}' cannot be loaded again in this process — restart tsforge to pick up plugin changes`
+      );
+
+      return undefined;
+    }
+
+    // Import the file that was HASHED, not the specifier: a bare specifier
+    // re-resolved at import time can select a different file than the one the
+    // fingerprint pinned.
+    const mod: unknown = await import(pathToFileURL(entryPath).href);
+
+    // Poisoned the instant the module RUNS, and cleared only once every check
+    // below has passed. From here on the ESM cache holds this module for the
+    // life of the process, so any exit that is not a clean success — a mismatch,
+    // or a re-hash that THROWS because the entry was deleted or outgrew the
+    // limits — must leave the entry unloadable. Marking it in the failure
+    // branches instead means the throw paths miss it, and restoring the original
+    // bytes then re-admits the cached module.
+    IMPORTED_AT.set(entryPath, REFUSED);
+
+    // Re-hash AFTER the module body ran. Content swapped in that window is
+    // EXECUTED while the stored digest describes bytes that were never loaded —
+    // and a plugin can do the swapping itself, at import. Every later check
+    // would then compare against a phantom, so refuse the plugin outright.
+    if ((await fingerprintPluginEntry(entryPath)) !== fingerprint) {
+      report(
+        `plugin '${plugin.path}' changed while loading — refusing to register it`
+      );
+
+      return undefined;
+    }
+
+    IMPORTED_AT.set(entryPath, fingerprint);
+
+    return { mod, fingerprint };
+  } catch (err) {
+    report(`plugin '${plugin.path}' failed to load: ${errMessage(err)}`);
+
+    return undefined;
+  }
+}
+
+/**
  * Dynamically import each plugin and collect its valid exported rule packs.
  * Never throws — an unimportable module or an export that is not a valid pack is
  * reported and skipped, so a broken plugin can't take down a run.
@@ -227,67 +307,34 @@ export async function loadExternalPacks(
 
   for (const plugin of plugins) {
     const entryPath = resolvePluginEntryPath(plugin.path, cwd);
+    const verified = await importVerified(plugin, entryPath, report);
 
-    let mod: unknown;
-    let fingerprint: string;
-
-    try {
-      fingerprint = await fingerprintPluginEntry(entryPath);
-
-      // A second load of an entry whose content changed cannot be honored: the
-      // ESM cache is keyed by resolved path and Bun ignores query strings, so
-      // `import` returns the module from the FIRST load. Registering it would
-      // pair a stale module with a fresh digest — a pack whose rules and whose
-      // freeze describe different content, which no later check can detect.
-      const importedAt = IMPORTED_AT.get(entryPath);
-
-      if (
-        importedAt === REFUSED ||
-        (importedAt !== undefined && importedAt !== fingerprint)
-      ) {
-        report(
-          `plugin '${plugin.path}' cannot be loaded again in this process — restart tsforge to pick up plugin changes`
-        );
-
-        continue;
-      }
-
-      // Import the file that was HASHED, not the specifier: a bare specifier
-      // re-resolved at import time can select a different file than the one the
-      // fingerprint pinned.
-      mod = await import(pathToFileURL(entryPath).href);
-
-      // Re-hash AFTER the module body ran. Content swapped in that window is
-      // EXECUTED while the stored digest describes bytes that were never loaded —
-      // and a plugin can do the swapping itself, at import. Every later check
-      // would then compare against a phantom, so refuse the plugin outright.
-      if ((await fingerprintPluginEntry(entryPath)) !== fingerprint) {
-        // REFUSED, not the fingerprint: the module ran, so the ESM cache holds
-        // it for the life of the process. Restoring the original bytes would
-        // otherwise make the digest match again and admit the very module this
-        // branch just rejected.
-        IMPORTED_AT.set(entryPath, REFUSED);
-        report(
-          `plugin '${plugin.path}' changed while loading — refusing to register it`
-        );
-
-        continue;
-      }
-
-      // Recorded only once every check has passed, so the entry always names
-      // content that both the cache and the disk agree on.
-      IMPORTED_AT.set(entryPath, fingerprint);
-    } catch (err) {
-      report(`plugin '${plugin.path}' failed to load: ${errMessage(err)}`);
-
+    if (verified === undefined) {
       continue;
     }
+
+    const { mod, fingerprint } = verified;
 
     if (!isRecord(mod)) {
       continue;
     }
 
-    for (const [name, candidate] of candidateExports(mod, plugin.packs)) {
+    let exports: [string, unknown][];
+
+    try {
+      // Enumerating the namespace and indexing into it both run plugin code. In
+      // a for-of header that runs outside every catch, so one throwing getter
+      // ends the whole load — including the plugins after this one.
+      exports = candidateExports(mod, plugin.packs);
+    } catch (err) {
+      report(
+        `plugin '${plugin.path}': reading its exports failed: ${errMessage(err)}`
+      );
+
+      continue;
+    }
+
+    for (const [name, candidate] of exports) {
       let snapshot: unknown;
 
       try {
