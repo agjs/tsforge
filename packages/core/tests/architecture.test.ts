@@ -174,6 +174,44 @@ test("mutual imports are reported once, with both directions", async () => {
   ]);
 });
 
+test("the witness for an edge does not depend on file order", async () => {
+  // An edge keeps the FIRST file that produces it. Glob.scan yields filesystem order,
+  // so without a sort the same commit generates a different map on a Mac than in CI
+  // and the drift check fails on a file nobody touched. It did.
+  put(
+    "alpha/a-first.ts",
+    'import { x } from "../beta/thing";\nexport const a = x;\n'
+  );
+  put(
+    "alpha/z-last.ts",
+    'import { x } from "../beta/thing";\nexport const z = x;\n'
+  );
+  put("beta/thing.ts", "export const x = 1;\n");
+
+  const sources = await readSources(root);
+  const paths = [...sources.keys()];
+
+  const forward = await analyzeImports(root, paths);
+  const reversed = await analyzeImports(root, [...paths].reverse());
+
+  expect(forward.edges.map((e) => e.witness)).toEqual([
+    join("alpha", "a-first.ts") + ":1",
+  ]);
+  expect(reversed.edges.map((e) => e.witness)).toEqual(
+    forward.edges.map((e) => e.witness)
+  );
+});
+
+test("readSources yields files in sorted order", async () => {
+  put("zulu/z.ts", "export const z = 1;\n");
+  put("alpha/a.ts", "export const a = 1;\n");
+  put("mike/m.ts", "export const m = 1;\n");
+
+  const keys = [...(await readSources(root)).keys()];
+
+  expect(keys).toEqual([...keys].sort());
+});
+
 test("a one-way import is not a cycle", async () => {
   put(
     "alpha/index.ts",

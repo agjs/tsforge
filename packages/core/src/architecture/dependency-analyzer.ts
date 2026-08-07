@@ -127,7 +127,13 @@ export async function analyzeImports(
   const edges: IEdge[] = [];
   const externals: IExternalImport[] = [];
 
-  for (const file of files) {
+  // Sorted HERE, not left to the caller. An edge keeps the first file that produces it
+  // as its witness, so witness choice is decided by iteration order. `Glob.scan` yields
+  // filesystem order, which differs between a laptop and a CI runner, and the result is
+  // a generated file that differs by machine and a drift check that fails on code nobody
+  // touched. Making the order intrinsic to this function means no caller can reintroduce
+  // that by passing an unsorted list.
+  for (const file of [...files].sort()) {
     const from = ownerOfScanned(srcRoot, file);
     const text = await Bun.file(file).text();
     const info = ts.preProcessFile(text, true, true);

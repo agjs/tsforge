@@ -34,18 +34,31 @@ export { fanIn, fanOut, findMutualCycles } from "./subsystem-graph";
 export { findEntryPoints, findSeams, SEAM_NAMES } from "./entry-points";
 
 /**
- * Read every `.ts` file under `srcRoot`, keyed by absolute path.
+ * Read every `.ts` file under `srcRoot`, keyed by absolute path, in sorted order.
  *
  * Read once and shared by every pass — the analyzer, the entry-point scan and the
  * seam scan all need the same text, and re-reading 540 files three times is the
  * difference between a generator someone runs and one they skip.
+ *
+ * The sort is load-bearing, not tidiness. `Glob.scan` yields filesystem order, which
+ * differs between machines, and an edge keeps the FIRST file that produces it as its
+ * witness. Unsorted, the same commit generates a different `ARCHITECTURE.md` on a Mac
+ * than in CI, and the drift check fails on a file nobody touched. It did exactly that
+ * on this generator's first real CI run.
  */
 export async function readSources(
   srcRoot: string
 ): Promise<Map<string, string>> {
   const sources = new Map<string, string>();
+  const relatives: string[] = [];
 
   for await (const rel of new Glob("**/*.ts").scan(srcRoot)) {
+    relatives.push(rel);
+  }
+
+  relatives.sort();
+
+  for (const rel of relatives) {
     const path = resolve(srcRoot, rel);
 
     sources.set(path, await Bun.file(path).text());
