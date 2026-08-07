@@ -10,11 +10,10 @@ export function greenfieldDir(cwd: string): string {
 }
 
 /**
- * A safe feature id: kebab-case, no slashes or dots. Feature ids come from the
- * model (the planner) and are later used to build file paths
- * (`contracts/<id>.md`), so an id like `../../README` would escape the state dir.
- * Validate at parse/load time so a malicious/hallucinated id is dropped, never
- * trusted as a path component.
+ * A stable feature id: kebab-case, no slashes or dots. Feature ids come from the
+ * model (the planner) and are persisted and replayed through state, progress,
+ * prompts, and logs. Validate at parse/load time so a malformed or hallucinated
+ * id is dropped instead of becoming a durable control identifier.
  */
 export function isFeatureId(id: string): boolean {
   // One or more alphanumeric segments separated by single hyphens: true

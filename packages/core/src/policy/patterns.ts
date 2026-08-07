@@ -30,6 +30,7 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   "setsid",
   "stdbuf",
   "timeout",
+  "time",
   "xargs",
   "exec",
   "builtin",
@@ -41,7 +42,6 @@ const SUDO_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "-u",
   "-g",
   "-C",
-  "-S",
   "-p",
   "--user",
   "--group",
@@ -108,6 +108,35 @@ function unquote(s: string): string {
   return (q === "'" || q === '"') && t.length >= 2 && t.endsWith(q)
     ? t.slice(1, -1)
     : t;
+}
+
+/** Remove visible shell quote syntax while preserving whitespace and adjacent
+ *  fragments. This mirrors the source `eval` constructs after its argv has
+ *  been joined (`'r''m' -rf /` → `rm -rf /`). */
+function visibleShellSource(source: string): string {
+  let out = "";
+  let quote: "'" | '"' | null = null;
+
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i] ?? "";
+
+    if (quote === null && (char === "'" || char === '"')) {
+      if (char === "'" && out.endsWith("$")) {
+        out = out.slice(0, -1); // ANSI-C `$'…'` quote marker
+      }
+
+      quote = char;
+    } else if (quote !== null && char === quote) {
+      quote = null;
+    } else if (char === "\\" && quote !== "'" && i + 1 < source.length) {
+      i += 1;
+      out += source[i] ?? "";
+    } else {
+      out += char;
+    }
+  }
+
+  return out;
 }
 
 function bareCommand(token: string): string {
@@ -256,11 +285,13 @@ function shellSegments(command: string): string[] {
 
     // `eval` reparses its argument as shell source. Lift the visible body into
     // the same segment scan as interpreter `-c`, without denying benign evals.
-    const evalCall = /\beval\s+(?:\$?'([^']*)'|"([^"]*)"|(.+))$/u.exec(seg);
-    const evalArg = evalCall?.[1] ?? evalCall?.[2] ?? evalCall?.[3];
+    const evalArgs =
+      commandHead(seg) === "eval"
+        ? /\beval\b\s+(.+)$/u.exec(seg)?.[1]
+        : undefined;
 
-    if (evalArg !== undefined) {
-      out.push(evalArg);
+    if (evalArgs !== undefined) {
+      out.push(visibleShellSource(evalArgs));
     }
 
     // `env -S/--split-string` reparses one argument into argv, so inspect that

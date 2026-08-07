@@ -487,6 +487,17 @@ export function evaluatePolicy(
     );
   }
 
+  const modeDefaults = MODE_MATRIX[ctx.mode];
+
+  if (!Object.hasOwn(modeDefaults, action.kind)) {
+    return evaluation(
+      "deny",
+      `unknown action kind blocked: ${action.kind}`,
+      ["critical:invalid-action-kind"],
+      "critical"
+    );
+  }
+
   const critical = criticalDeny(action, ctx);
 
   if (critical !== null) {
@@ -499,7 +510,7 @@ export function evaluatePolicy(
     return resolve(ruled.decision, ruled.id, [ruled.id], action, ctx);
   }
 
-  const base = MODE_MATRIX[ctx.mode][action.kind];
+  const base = modeDefaults[action.kind];
 
   return resolve(
     base,

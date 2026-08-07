@@ -58,6 +58,12 @@ export interface IEvaluateOptions {
  *  (query's measured 15–17-cycle crawls are the motivating case). */
 export const SPEC_SLOW_THRESHOLD = 8;
 
+/** A completed attempt always carries a positive measured duration, even on a
+ *  clock whose observable resolution is coarser than the attempted work. */
+function elapsedMs(startedAt: number): number {
+  return Math.max(performance.now() - startedAt, Number.EPSILON);
+}
+
 export interface IEvaluateOutcome {
   readonly score: ISplitScore;
   /** Per-run event streams, for weakness mining (held-in only is mined, but
@@ -509,7 +515,7 @@ async function runTaskOnce(
       label: taskId,
       passed,
       cycles,
-      ms: performance.now() - startedAt,
+      ms: elapsedMs(startedAt),
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
@@ -650,7 +656,7 @@ async function runOneSpec(
       label: taskId,
       passed: false,
       cycles: 0,
-      ms: performance.now() - startedAt,
+      ms: elapsedMs(startedAt),
     });
     sink.log(
       `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
