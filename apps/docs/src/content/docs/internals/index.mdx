@@ -10,6 +10,42 @@ start with rediscovery.
 For what tsforge is and how it is layered conceptually, start with
 [Big picture](/big-picture/) instead.
 
+## The whole system
+
+Every subsystem in `packages/core/src`, grouped by the job it does. A task enters at the
+top and moves down; the loop and the gate pass work back and forth until it is green.
+
+```mermaid
+flowchart TB
+  ui["<b>What you talk to</b><br/>cli &nbsp;·&nbsp; render &nbsp;·&nbsp; editor<br/>(root) · cli.ts, models, sessions"]
+  plan["<b>Work out what to build</b><br/>spec &nbsp;·&nbsp; codebase<br/>loop/planning &nbsp;·&nbsp; loop/greenfield"]
+  engine["<b>Drive it to green</b><br/>loop/turn &nbsp;·&nbsp; run &nbsp;·&nbsp; session<br/>prompt &nbsp;·&nbsp; tools &nbsp;·&nbsp; files<br/>feedback &nbsp;·&nbsp; memory"]
+  model["<b>Talk to the model</b><br/>inference &nbsp;·&nbsp; agent"]
+  oracle["<b>Decide if it is done</b><br/>gate &nbsp;·&nbsp; validate<br/>rule-packs &nbsp;·&nbsp; meta-rules<br/>stack-detection<br/>infer-rules &nbsp;·&nbsp; lsp &nbsp;·&nbsp; browser"]
+  adapter["<b>Stack-specific</b><br/>loop/boringstack &nbsp;·&nbsp; scaffold"]
+
+  ui --> plan
+  plan --> engine
+  engine <-->|"prompt / reply"| model
+  engine -->|"the edits"| oracle
+  oracle -.->|"errors to fix"| engine
+  engine -.->|"through the seams"| adapter
+```
+
+Read it as a pipeline with one loop in it. Everything above **Decide if it is done**
+works out *what* to write. That box decides *whether it counts*, and the dotted line back
+is the whole harness: the gate hands errors to the loop, the loop tries again, until
+nothing comes back.
+
+Four subsystems sit under all of it rather than in the flow: **lib** (fs, json, guards,
+globs), **config** (project config, profiles, recipes), **policy** (what an action is
+allowed to do), and **constitution** (the baseline system role).
+
+Seven more never run during an ordinary build: **eval** and **self-harness** (measuring
+and improving the harness itself), **reviewers** (the independent review panel),
+**proptest**, **setup**, **mcp**, and **architecture** (which generates the
+[subsystems map](/internals/subsystems/)).
+
 ## Start here
 
 | If you want to | Read |
@@ -38,13 +74,3 @@ manifest**, listing per-subsystem invariants, risk areas and a P1/P2/P3 checklis
 what the `harness-review` skill reads when auditing a subsystem. Reach for it when you
 are checking whether the code still upholds its contracts; reach for these pages when you
 are trying to find or change something.
-
-## The shape in one paragraph
-
-`cli.ts` picks a mode. One-shot runs go through `loop/run.ts`, interactive sessions
-through `loop/session.ts`, and both drive the same primitives in `loop/turn.ts`: offer
-tools, execute tool calls, run the gate, decide what the result means. When the gate
-fails, the loop steers up an escalation ladder rather than repeating itself. Everything
-stack-specific (scaffolding, what an error means, how a feature is verified) arrives
-through the [adapter seams](/internals/seams/), and a lint rule stops the core loop from
-importing an adapter directly.

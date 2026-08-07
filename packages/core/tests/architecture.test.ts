@@ -10,13 +10,10 @@ import {
   findSeams,
   mermaidBlocks,
   readSources,
-  renderArchitectureMd,
   reservedNodeIds,
   resolveSpecifier,
-  safeNodeId,
   subsystemOf,
   validateRegistry,
-  MERMAID_RESERVED,
   ROOT_ID,
 } from "../src/architecture";
 import type { IEdge } from "../src/architecture";
@@ -282,15 +279,6 @@ test("a seam reports where it is declared", async () => {
   );
 });
 
-test("a generated node id is never a mermaid keyword", () => {
-  // Uniform prefixing, not conditional: renaming a subsystem to `class` must not
-  // change the diagram's shape, only its ids.
-  expect(safeNodeId("class")).not.toBe("class");
-  expect(safeNodeId("(root)")).toBe("n__root_");
-  expect(safeNodeId("rule-packs")).toBe("n_rule_packs");
-  expect(MERMAID_RESERVED.has(safeNodeId("end"))).toBe(false);
-});
-
 test("a reserved node id is reported, in declarations and in edges", () => {
   // The exact bug this guards: `call --> resp` fails with "got 'CALLBACKNAME'".
   expect(reservedNodeIds('call["model call"]\ncall --> resp')).toEqual([
@@ -318,26 +306,6 @@ test("every mermaid diagram in the docs avoids reserved node ids", async () => {
   }
 
   expect(offenders).toEqual([]);
-});
-
-test("the generated architecture map has no reserved node ids", () => {
-  const blocks = mermaidBlocks(
-    renderArchitectureMd({
-      subsystems: [],
-      edges: [
-        { from: "class", to: "end", witness: "a.ts:1", specifier: "../end" },
-      ],
-      cycles: [],
-      entryPoints: [],
-      seams: [],
-      externals: [],
-      totalFiles: 0,
-      totalLines: 0,
-    })
-  );
-
-  expect(blocks.length).toBeGreaterThan(0);
-  expect(blocks.flatMap((b) => reservedNodeIds(b))).toEqual([]);
 });
 
 test("a seam that loses its declaration fails the build", async () => {

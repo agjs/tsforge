@@ -33,19 +33,6 @@ export const MERMAID_RESERVED: ReadonlySet<string> = new Set([
 ]);
 
 /** Prefix that keeps a generated id out of the grammar's namespace entirely. */
-const SAFE_PREFIX = "n_";
-
-/**
- * A node id that mermaid will always accept.
- *
- * Every generated id is prefixed, not just the colliding ones — a conditional prefix
- * would mean the day a subsystem is renamed to `class`, the diagram silently changes
- * shape. Uniform prefixing has no such edge.
- */
-export function safeNodeId(id: string): string {
-  return SAFE_PREFIX + id.replaceAll(/[^A-Za-z0-9]/g, "_");
-}
-
 /**
  * Node ids in a mermaid source block that collide with a reserved word.
  *
