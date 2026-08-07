@@ -26,72 +26,14 @@ const REFUSED = "refused";
  *  changed content can be refused rather than served from the ESM cache. */
 const IMPORTED_AT = new Map<string, string>();
 
-/**
- * Copy a plugin value into frozen plain data, reading every property once.
+/** Freeze a pack's own copy of its rules and severities, so a live export cannot
+ *  be mutated after registration to weaken rules under the same id.
  *
- * Freezing the plugin's own object in place does not do this job. `Object.freeze`
- * on an accessor property makes it non-configurable and leaves the getter
- * running, so `rules["no-foo"].create` can still answer ESLint with a different
- * function on every read — and the disk never changes, so no fingerprint sees
- * it. Freezing in place also reaches whatever the plugin's objects happen to
- * reference: a shared constant, a library object from `@typescript-eslint/utils`,
- * any singleton it imported. Those belong to someone else.
- *
- * Functions are kept by reference (a rule's `create` IS the implementation);
- * everything else becomes ours.
- */
-function materialize(value: unknown, seen: Map<object, unknown>): unknown {
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-
-  const already = seen.get(value);
-
-  if (already !== undefined) {
-    return already;
-  }
-
-  if (Array.isArray(value)) {
-    const copy: unknown[] = [];
-
-    seen.set(value, copy);
-
-    for (const item of value) {
-      copy.push(materialize(item, seen));
-    }
-
-    return Object.freeze(copy);
-  }
-
-  // Anything that is not a plain object — a RegExp in a schema, a Map, a Date,
-  // an instance of some class — passes through as it is. Rebuilding one from its
-  // properties does not reproduce it: internal slots are not properties, so the
-  // copy comes out inert and its methods throw. `meta` is JSON-shaped by
-  // ESLint's own contract, so this is a rare leaf rather than a common one.
-  const proto: unknown = Object.getPrototypeOf(value);
-
-  if (proto !== Object.prototype && proto !== null) {
-    return value;
-  }
-
-  const copy: Record<string | symbol, unknown> = {};
-
-  seen.set(value, copy);
-
-  // Every own key, not just the enumerable string ones: a property defined with
-  // `Object.defineProperty` or under a symbol is still a property ESLint may
-  // read, and dropping it silently changes the rule.
-  for (const key of Reflect.ownKeys(value)) {
-    copy[key] = materialize(Reflect.get(value, key), seen);
-  }
-
-  return Object.freeze(copy);
-}
-
-/** Freeze a pack so a live export cannot be mutated after registration to weaken
- *  severities under the same id. Packs coming from `loadExternalPacks` have
- *  already been materialized by `snapshotPack`; this stays for callers holding a
- *  pack from somewhere else, and is a no-op on an already-frozen copy. */
+ *  This stops mutation, not deception. A plugin that hands back one thing when
+ *  it is inspected and another when it is used defeats any in-memory pinning —
+ *  its code runs in this process, so it decides what to answer. That is not the
+ *  threat here: the freeze exists so a plugin FILE edited mid-session cannot
+ *  quietly change the gate, and the content fingerprint is what enforces it. */
 export function freezeRulePack(pack: IRulePack): IRulePack {
   const rulesConfig: Record<string, "error" | "warn"> = {};
 
@@ -125,70 +67,6 @@ function resolvePluginEntryPath(pluginPath: string, cwd: string): string {
   } catch {
     return resolve(cwd, pluginPath);
   }
-}
-
-/**
- * Materialize a plugin export into plain data, reading each property ONCE.
- *
- * Validation and the freeze are two reads of the same object, and a property
- * defined as a getter is under no obligation to answer them the same way: a pack
- * can show `"error"` to the validator and `"warn"` to the copy that gets
- * registered, weakening itself with no on-disk change for the fingerprint to
- * catch. Checking the second read only narrows that to severities that are
- * INVALID. Reading once removes the second read instead — whatever the plugin
- * says first is what is validated, frozen, and enforced.
- */
-function snapshotPack(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  // Destructured, so each field is read exactly once.
-  const { id, description, rules, rulesConfig } = value;
-
-  return {
-    id,
-    description,
-    rules: isRecord(rules) ? pinRules(rules) : rules,
-    rulesConfig: materialize(rulesConfig, new Map()),
-  };
-}
-
-/**
- * Rebuild each rule as the shape ESLint actually consumes.
- *
- * Copying the rule's object GRAPH cannot pin it: a rule written as
- * `class R { get create() {…} }` keeps its getter on the prototype, so a copy —
- * even one that preserves the prototype — still asks the plugin for `create`
- * every time ESLint reads it, and the plugin is free to answer differently.
- * A rule module is `{ meta, create }` and nothing else, so read those once and
- * build that object. The shape is known; the graph was never the thing.
- */
-function pinRules(rules: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-
-  for (const [name, rule] of Object.entries(rules)) {
-    if (!isRecord(rule)) {
-      out[name] = rule;
-
-      continue;
-    }
-
-    const create: unknown = Reflect.get(rule, "create");
-    const meta = materialize(Reflect.get(rule, "meta"), new Map());
-    const defaultOptions = materialize(
-      Reflect.get(rule, "defaultOptions"),
-      new Map()
-    );
-
-    out[name] = Object.freeze({
-      create,
-      meta,
-      ...(defaultOptions === undefined ? {} : { defaultOptions }),
-    });
-  }
-
-  return Object.freeze(out);
 }
 
 /** Type guard: a well-formed IRulePack (no `as` — every field is checked). */
@@ -397,15 +275,14 @@ export async function loadExternalPacks(
     }
 
     for (const [name, candidate] of exports) {
-      let snapshot: unknown;
+      let pack: IRulePack | undefined;
 
       try {
-        // Snapshot BEFORE validating: from here on the pack is plain data, so
-        // the thing that was checked and the thing that gets registered cannot
-        // differ. Reading it runs the plugin's getters, which can throw — and
-        // this is outside the load try/catch, so an unguarded throw here takes
-        // every other configured plugin down with it.
-        snapshot = snapshotPack(candidate);
+        // Validating and freezing both READ the export, which runs whatever the
+        // plugin defined those properties as. That is outside the load
+        // try/catch, so an unguarded throw here takes every other configured
+        // plugin down with it.
+        pack = isRulePack(candidate) ? freezeRulePack(candidate) : undefined;
       } catch (err) {
         report(
           `plugin '${plugin.path}': reading export '${name}' failed: ${errMessage(err)}`
@@ -414,9 +291,7 @@ export async function loadExternalPacks(
         continue;
       }
 
-      if (isRulePack(snapshot)) {
-        const pack = freezeRulePack(snapshot);
-
+      if (pack !== undefined) {
         out.push({
           pack,
           entryPath,

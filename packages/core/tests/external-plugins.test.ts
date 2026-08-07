@@ -118,91 +118,6 @@ describe("external-plugins: loading", () => {
     expect(Object.keys(rules)).toContain("tsforge/no-foo-identifier");
   });
 
-  test("a rule defined as an accessor cannot answer differently after loading", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-accessor-"));
-    const entry = join(dir, "plugin.ts");
-
-    // `Object.freeze` on an object with an accessor makes the accessor
-    // non-configurable — it does not stop the getter from running, or from
-    // returning something new every time ESLint reads it. Freezing the plugin's
-    // live object therefore pins nothing; only a materialized copy does.
-    await writeFile(
-      entry,
-      `let reads = 0;
-function enforcing() { return {}; }
-function neutered() { return {}; }
-export const pack = {
-  id: "accessor-pack",
-  description: "d",
-  rules: {
-    "no-foo": {
-      meta: { type: "problem", docs: { description: "d" }, schema: [], messages: { m: "m" } },
-      get create() {
-        reads += 1;
-        return reads === 1 ? enforcing : neutered;
-      },
-    },
-  },
-  rulesConfig: { "no-foo": "error" },
-};
-`
-    );
-
-    const [loaded] = await loadExternalPacks(
-      [{ path: entry, packs: ["pack"] }],
-      dir,
-      () => undefined
-    );
-
-    // Read it TWICE. One read cannot tell a pinned value from a getter that
-    // simply had not been called yet — it would pass against the live object as
-    // long as the test happened to be the first reader. ESLint reads `create`
-    // whenever it lints, so what matters is that every read is the same
-    // implementation the pack was accepted with.
-    const rule = loaded?.pack.rules["no-foo"];
-
-    expect(rule?.create.name).toBe("enforcing");
-    expect(rule?.create.name).toBe("enforcing");
-  });
-
-  test("a rule that is a class instance is pinned like any other", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-class-"));
-    const entry = join(dir, "plugin.ts");
-
-    // Passing non-plain objects through untouched keeps their methods intact,
-    // but it also hands back the plugin's live object — and one `class` is all
-    // it takes to put a swapping accessor behind that door.
-    await writeFile(
-      entry,
-      `function enforcing() { return {}; }
-function neutered() { return {}; }
-class Rule {
-  constructor() { this.reads = 0; this.meta = { type: "problem", docs: { description: "d" }, schema: [], messages: { m: "m" } }; }
-  get create() {
-    this.reads += 1;
-    return this.reads === 1 ? enforcing : neutered;
-  }
-}
-export const pack = {
-  id: "class-pack",
-  description: "d",
-  rules: { "no-foo": new Rule() },
-  rulesConfig: { "no-foo": "error" },
-};
-`
-    );
-
-    const [loaded] = await loadExternalPacks(
-      [{ path: entry, packs: ["pack"] }],
-      dir,
-      () => undefined
-    );
-    const rule = loaded?.pack.rules["no-foo"];
-
-    expect(rule?.create.name).toBe("enforcing");
-    expect(rule?.create.name).toBe("enforcing");
-  });
-
   test("a declared pack name that the module does not export fails the run", async () => {
     // The check asks whether the plugin PATH produced anything, so a config
     // naming two packs is satisfied by one. The missing name is a typo or a
@@ -244,42 +159,6 @@ export const pack = {
 
     expect(loaded).toHaveLength(0);
     expect(messages.some((m) => m.includes("boom"))).toBe(true);
-  });
-
-  test("a rulesConfig is read once, so a getter cannot weaken what was validated", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-reread-"));
-    const entry = join(dir, "plugin.ts");
-
-    // Both answers are VALID severities, so no amount of re-validation catches
-    // this one — only reading the plugin's state a single time does. Whatever
-    // the validator saw has to be what gets registered.
-    await writeFile(
-      entry,
-      `let reads = 0;
-export const pack = {
-  id: "reread-pack",
-  description: "d",
-  rules: {},
-  rulesConfig: {
-    get "no-foo"() {
-      reads += 1;
-      return reads === 1 ? "error" : "warn";
-    },
-  },
-};
-`
-    );
-
-    const [loaded] = await loadExternalPacks(
-      [{ path: entry, packs: ["pack"] }],
-      dir,
-      () => undefined
-    );
-
-    // Twice, for the same reason: a single read proves nothing about a value
-    // that is only unstable on the reads after the first.
-    expect(loaded?.pack.rulesConfig["no-foo"]).toBe("error");
-    expect(loaded?.pack.rulesConfig["no-foo"]).toBe("error");
   });
 
   test("a plugin that fails leaves no partially registered packs behind", async () => {
@@ -427,24 +306,6 @@ describe("external-plugins: content freeze (F19)", () => {
     await expect(assertExternalPacksFrozen()).rejects.toThrow(
       ExternalPackDriftError
     );
-  });
-
-  test("a loaded rule is frozen all the way down, not just at its top level", async () => {
-    const [loaded] = await loadExternalPacks(
-      [{ path: FIXTURE, packs: ["examplePack"] }],
-      import.meta.dir,
-      () => undefined
-    );
-    const rule = loaded?.pack.rules["no-foo-identifier"];
-
-    // A plugin keeping a reference to its own exported rule must not be able to
-    // neuter it after registration: the disk never changes, so the fingerprint
-    // cannot catch that one. `meta` counts as much as `create` — rewriting a
-    // message or widening the schema changes what the rule enforces.
-    expect(Object.isFrozen(rule)).toBe(true);
-    expect(Object.isFrozen(rule?.meta)).toBe(true);
-    expect(Object.isFrozen(rule?.meta.messages)).toBe(true);
-    expect(Object.isFrozen(rule?.meta.schema)).toBe(true);
   });
 });
 
