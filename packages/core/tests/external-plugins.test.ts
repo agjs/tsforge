@@ -112,39 +112,37 @@ describe("external-plugins: loading", () => {
     expect(Object.keys(rules)).toContain("tsforge/no-foo-identifier");
   });
 
-  test("a rulesConfig whose severities change between reads is refused", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-getter-"));
+  test("a rulesConfig is read once, so a getter cannot weaken what was validated", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-reread-"));
     const entry = join(dir, "plugin.ts");
-    const messages: string[] = [];
 
-    // Validation reads `rulesConfig` once and the freeze copies it again. A
-    // getter that answers "error" to the validator and something else to the
-    // copy registers a pack weaker than the one that was checked — and the
-    // content fingerprint sees nothing, because the file never changes.
+    // Both answers are VALID severities, so no amount of re-validation catches
+    // this one — only reading the plugin's state a single time does. Whatever
+    // the validator saw has to be what gets registered.
     await writeFile(
       entry,
       `let reads = 0;
 export const pack = {
-  id: "getter-pack",
+  id: "reread-pack",
   description: "d",
   rules: {},
   rulesConfig: {
     get "no-foo"() {
       reads += 1;
-      return reads === 1 ? "error" : "off";
+      return reads === 1 ? "error" : "warn";
     },
   },
 };
 `
     );
 
-    const loaded = await loadExternalPacks(
+    const [loaded] = await loadExternalPacks(
       [{ path: entry, packs: ["pack"] }],
       dir,
-      (m) => messages.push(m)
+      () => undefined
     );
 
-    expect(loaded).toHaveLength(0);
+    expect(loaded?.pack.rulesConfig["no-foo"]).toBe("error");
   });
 
   test("a plugin that fails leaves no partially registered packs behind", async () => {
@@ -509,6 +507,47 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     expect(await fingerprintPluginEntry(entry)).not.toBe(before);
   });
 
+  test("a NodeNext .js specifier pins the .ts file it resolves to", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-nodenext-"));
+    const dep = join(dir, "dep.ts");
+    const entry = join(dir, "plugin.ts");
+
+    await writeFile(dep, "export const severity = 'error';\n");
+    // Under NodeNext, TypeScript sources import each other with a `.js`
+    // extension that no `.js` file answers. Treating an extension-bearing
+    // specifier as literal-only leaves `dep.ts` — real, executed, editable —
+    // out of the graph.
+    await writeFile(
+      entry,
+      `import { severity } from "./dep.js";\nexport const v = severity;\n`
+    );
+
+    const before = await fingerprintPluginEntry(entry);
+
+    await writeFile(dep, "export const severity = 'warn';\n");
+
+    expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
+  test("a single file cannot fan out past the speculative queue bound", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-fanout-"));
+    const specs = Math.ceil(FREEZE_LIMITS.maxQueue / 16) + 8;
+    const lines: string[] = [];
+
+    for (let i = 0; i < specs; i += 1) {
+      lines.push(`import "./missing${String(i)}";`);
+    }
+
+    await writeFile(join(dir, "plugin.ts"), `${lines.join("\n")}\n`);
+
+    // None of these resolve, so neither the file nor the byte cap ever fires —
+    // only the queue bound stands between one file of imports and 16 speculative
+    // paths per specifier.
+    await expect(
+      fingerprintPluginEntry(join(dir, "plugin.ts"))
+    ).rejects.toThrow(/speculative/);
+  });
+
   test("a side-effect import is part of the frozen graph", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-sidefx-"));
     const dep = join(dir, "dep.ts");
@@ -576,7 +615,7 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     );
 
     expect(loaded).toHaveLength(0);
-    expect(messages.some((m) => m.includes("restart the session"))).toBe(true);
+    expect(messages.some((m) => m.includes("restart tsforge"))).toBe(true);
   });
 
   test("a bare-specifier plugin is loaded from the file that was pinned", async () => {
@@ -605,6 +644,33 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
 
     expect(loaded?.pack.id).toBe("bare");
     expect(loaded?.entryPath).toBe(join(pkg, "index.ts"));
+  });
+
+  test("a plugin refused for rewriting itself stays refused after a revert", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-revert-"));
+    const entry = join(dir, "plugin.ts");
+    const swapped = `export const pack = { id: "revert", description: "swapped", rules: {}, rulesConfig: {} };\n`;
+    const original = `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(entry)}, ${JSON.stringify(swapped)});
+export const pack = { id: "revert", description: "original", rules: {}, rulesConfig: {} };
+`;
+
+    await writeFile(entry, original);
+    await loadExternalPacks([{ path: entry }], dir, () => undefined);
+
+    // The refused module RAN, so the ESM cache holds it for the rest of the
+    // process. Putting the original bytes back makes the digest match again —
+    // and if the refusal was not remembered, that match admits the cached
+    // module the refusal was about.
+    await writeFile(entry, original);
+
+    const messages: string[] = [];
+    const loaded = await loadExternalPacks([{ path: entry }], dir, (m) =>
+      messages.push(m)
+    );
+
+    expect(loaded).toHaveLength(0);
+    expect(messages.some((m) => m.includes("restart"))).toBe(true);
   });
 
   test("a plugin that rewrites itself during import is refused", async () => {

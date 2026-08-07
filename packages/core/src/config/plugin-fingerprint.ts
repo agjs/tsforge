@@ -67,13 +67,22 @@ const CODE_EXT = new Set([
 const SPEC =
   /(?:from\s+|import\s*\(|require\s*\(|import\s+)\s*['"]([^'"]+)['"]/gu;
 
+/** The TypeScript sources an emitted-extension specifier can stand for. */
+const TS_FOR_EMITTED = new Map<string, readonly string[]>([
+  [".js", [".ts", ".tsx"]],
+  [".jsx", [".tsx"]],
+  [".mjs", [".mts"]],
+  [".cjs", [".cts"]],
+]);
+
 /** Fail the walk when a bound is crossed. A graph too big to pin is not a graph
  *  that may be pinned partially: everything past the cut would be editable under
- *  an unchanged digest. */
-function limit(withinBounds: boolean, entry: string): void {
+ *  an unchanged digest. `exceeded` names WHICH bound, since the fix for a file
+ *  count is not the fix for a fan-out of unresolvable specifiers. */
+function limit(withinBounds: boolean, entry: string, exceeded: string): void {
   if (!withinBounds) {
     throw new Error(
-      `tsforge: plugin '${entry}' exceeds the freeze limit (${String(FREEZE_LIMITS.maxFiles)} files / ${String(FREEZE_LIMITS.maxBytes)} bytes) — its content cannot be pinned. Split the plugin or ship it as a package.`
+      `tsforge: plugin '${entry}' exceeds the freeze limit (${exceeded}) — its content cannot be pinned. Split the plugin or ship it as a package.`
     );
   }
 }
@@ -112,12 +121,25 @@ function candidatePaths(fromFile: string, spec: string): string[] {
   const out: string[] = [];
 
   // A specifier that already names a file — `./rules.ts` or `./severities.json`
-  // — resolves to exactly that file. Only an EXTENSIONLESS specifier needs the
-  // spellings guessed. Speculating code extensions for `./severities.json`
-  // produces `severities.json.ts` and friends, none of which exist, dropping a
-  // plugin's own config out of the graph.
+  // — resolves to that file. Only an EXTENSIONLESS specifier needs the spellings
+  // guessed: speculating code extensions for `./severities.json` produces
+  // `severities.json.ts` and friends, none of which exist, dropping a plugin's
+  // own config out of the graph.
+  //
+  // `.js` is the exception. Under NodeNext, TypeScript sources import each other
+  // by the extension of the emitted file, so `./dep.js` is how a plugin refers
+  // to `dep.ts` and no `.js` file ever exists — treating it as literal-only
+  // leaves the real source unpinned.
   if (extname(base).length > 0) {
     out.push(base);
+
+    const ts = TS_FOR_EMITTED.get(extname(base));
+
+    if (ts !== undefined) {
+      for (const ext of ts) {
+        out.push(`${base.slice(0, -extname(base).length)}${ext}`);
+      }
+    }
   } else {
     for (const ext of CODE_EXT) {
       out.push(`${base}${ext}`);
@@ -170,7 +192,11 @@ async function enqueueImports(
     // as someone cares to write, each queuing up to 16 spellings and costing a
     // resolve, so a bound applied after the whole file has been walked is a
     // bound that has already been exceeded.
-    limit(queue.length <= FREEZE_LIMITS.maxQueue, entry);
+    limit(
+      queue.length <= FREEZE_LIMITS.maxQueue,
+      entry,
+      `${String(FREEZE_LIMITS.maxQueue)} speculative paths queued`
+    );
   }
 }
 
@@ -237,7 +263,8 @@ export async function fingerprintPluginEntry(
     // graph that fits is never refused for the phantoms trailing behind it.
     limit(
       files <= FREEZE_LIMITS.maxFiles && bytes <= FREEZE_LIMITS.maxBytes,
-      entry
+      entry,
+      `${String(FREEZE_LIMITS.maxFiles)} files / ${String(FREEZE_LIMITS.maxBytes)} bytes`
     );
 
     // Stable path key relative to the plugin root so absolute cwd moves don't

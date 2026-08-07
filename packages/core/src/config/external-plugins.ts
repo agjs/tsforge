@@ -17,6 +17,10 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Marks an entry whose module RAN but was rejected. Not a digest — no content
+ *  can produce it — so the entry can never match a later load. */
+const REFUSED = "refused";
+
 /** Fingerprint each plugin entry was IMPORTED at in this process, so a reload of
  *  changed content can be refused rather than served from the ESM cache. */
 const IMPORTED_AT = new Map<string, string>();
@@ -42,23 +46,7 @@ function deepFreeze(value: unknown, seen: Set<object>): void {
 export function freezeRulePack(pack: IRulePack): IRulePack {
   const rulesConfig: Record<string, "error" | "warn"> = {};
 
-  // Re-validate as we copy. `isRulePack` checked an EARLIER read of the same
-  // plugin-controlled object, and a property defined as a getter can answer the
-  // validator and the copy differently — registering a pack weaker than the one
-  // that passed, with no on-disk change for the fingerprint to catch. This read
-  // is the one that becomes the frozen pack, so it is the one that must hold.
-  // Read through a widened view: the declared `"error" | "warn"` describes what
-  // the validator SAW, and a getter is under no obligation to say it twice, so
-  // the type here is a claim about untrusted state rather than a guarantee.
-  const declared: Record<string, unknown> = pack.rulesConfig;
-
-  for (const [name, severity] of Object.entries(declared)) {
-    if (severity !== "error" && severity !== "warn") {
-      throw new Error(
-        `tsforge: rule pack '${pack.id}' reported severity '${String(severity)}' for '${name}' after validation — refusing a pack whose configuration changes between reads.`
-      );
-    }
-
+  for (const [name, severity] of Object.entries(pack.rulesConfig)) {
     rulesConfig[name] = severity;
   }
 
@@ -94,6 +82,32 @@ function resolvePluginEntryPath(pluginPath: string, cwd: string): string {
   } catch {
     return resolve(cwd, pluginPath);
   }
+}
+
+/**
+ * Materialize a plugin export into plain data, reading each property ONCE.
+ *
+ * Validation and the freeze are two reads of the same object, and a property
+ * defined as a getter is under no obligation to answer them the same way: a pack
+ * can show `"error"` to the validator and `"warn"` to the copy that gets
+ * registered, weakening itself with no on-disk change for the fingerprint to
+ * catch. Checking the second read only narrows that to severities that are
+ * INVALID. Reading once removes the second read instead — whatever the plugin
+ * says first is what is validated, frozen, and enforced.
+ */
+function snapshotPack(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const { id, description, rules, rulesConfig } = value;
+
+  return {
+    id,
+    description,
+    rules: isRecord(rules) ? { ...rules } : rules,
+    rulesConfig: isRecord(rulesConfig) ? { ...rulesConfig } : rulesConfig,
+  };
 }
 
 /** Type guard: a well-formed IRulePack (no `as` — every field is checked). */
@@ -206,9 +220,12 @@ export async function loadExternalPacks(
       // freeze describe different content, which no later check can detect.
       const importedAt = IMPORTED_AT.get(entryPath);
 
-      if (importedAt !== undefined && importedAt !== fingerprint) {
+      if (
+        importedAt === REFUSED ||
+        (importedAt !== undefined && importedAt !== fingerprint)
+      ) {
         report(
-          `plugin '${plugin.path}' changed since it was first loaded in this process — restart the session to pick it up`
+          `plugin '${plugin.path}' cannot be loaded again in this process — restart tsforge to pick up plugin changes`
         );
 
         continue;
@@ -219,19 +236,26 @@ export async function loadExternalPacks(
       // fingerprint pinned.
       mod = await import(pathToFileURL(entryPath).href);
 
-      IMPORTED_AT.set(entryPath, fingerprint);
-
       // Re-hash AFTER the module body ran. Content swapped in that window is
       // EXECUTED while the stored digest describes bytes that were never loaded —
       // and a plugin can do the swapping itself, at import. Every later check
       // would then compare against a phantom, so refuse the plugin outright.
       if ((await fingerprintPluginEntry(entryPath)) !== fingerprint) {
+        // REFUSED, not the fingerprint: the module ran, so the ESM cache holds
+        // it for the life of the process. Restoring the original bytes would
+        // otherwise make the digest match again and admit the very module this
+        // branch just rejected.
+        IMPORTED_AT.set(entryPath, REFUSED);
         report(
           `plugin '${plugin.path}' changed while loading — refusing to register it`
         );
 
         continue;
       }
+
+      // Recorded only once every check has passed, so the entry always names
+      // content that both the cache and the disk agree on.
+      IMPORTED_AT.set(entryPath, fingerprint);
     } catch (err) {
       report(`plugin '${plugin.path}' failed to load: ${errMessage(err)}`);
 
@@ -243,16 +267,12 @@ export async function loadExternalPacks(
     }
 
     for (const candidate of candidateExports(mod, plugin.packs)) {
-      if (isRulePack(candidate)) {
-        let pack: IRulePack;
+      // Snapshot BEFORE validating: from here on the pack is plain data, so the
+      // thing that was checked and the thing that gets registered cannot differ.
+      const snapshot = snapshotPack(candidate);
 
-        try {
-          pack = freezeRulePack(candidate);
-        } catch (err) {
-          report(`plugin '${plugin.path}': ${errMessage(err)}`);
-
-          continue;
-        }
+      if (isRulePack(snapshot)) {
+        const pack = freezeRulePack(snapshot);
 
         out.push({ pack, entryPath, fingerprint, source: plugin.path });
         report(`plugin '${plugin.path}': loaded pack '${pack.id}'`);
