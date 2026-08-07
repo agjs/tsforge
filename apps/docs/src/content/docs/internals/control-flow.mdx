@@ -43,27 +43,27 @@ Each turn:
 
 ```mermaid
 flowchart TB
-  call["provider.complete() · model call"]
+  modelCall["provider.complete() · model call"]
   resp["handleModelResponse()"]
   tools["runToolCalls() · dispatch tools"]
-  gate["settleGate() → evaluateGate()"]
+  gateStep["settleGate() → evaluateGate()"]
   green{"gate green?"}
   progress{"making progress?"}
   steer["injectFeedback() · steer and retry"]
   stuck["checkStuck() → escalate or park"]
-  done["done"]
+  finished["done"]
 
-  call --> resp
+  modelCall --> resp
   resp -->|"tool calls"| tools
-  resp -->|"no tool calls"| gate
-  tools --> gate
-  gate --> green
-  green -->|"yes"| done
+  resp -->|"no tool calls"| gateStep
+  tools --> gateStep
+  gateStep --> green
+  green -->|"yes"| finished
   green -->|"no"| progress
   progress -->|"yes"| steer
   progress -->|"no"| stuck
-  steer --> call
-  stuck --> call
+  steer --> modelCall
+  stuck --> modelCall
 ```
 
 The rule that keeps this honest: **every workspace mutation re-runs the gate.** A tool

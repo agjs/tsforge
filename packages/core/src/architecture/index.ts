@@ -19,6 +19,12 @@ export type {
 } from "./architecture.types";
 export { renderArchitectureMd } from "./serializer";
 export {
+  MERMAID_RESERVED,
+  mermaidBlocks,
+  reservedNodeIds,
+  safeNodeId,
+} from "./mermaid";
+export {
   SUBSYSTEM_REGISTRY,
   entryFor,
   validateRegistry,

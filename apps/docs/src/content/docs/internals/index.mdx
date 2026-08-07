@@ -31,6 +31,14 @@ It also refuses to build when a directory appears under `src/` with no entry in
 
 The other three pages are hand-written: they carry intent, which no generator can derive.
 
+## Related, in the repo
+
+`docs/harness-subsystems.md` is a different artifact for a different job: a **review
+manifest**, listing per-subsystem invariants, risk areas and a P1/P2/P3 checklist. It is
+what the `harness-review` skill reads when auditing a subsystem. Reach for it when you
+are checking whether the code still upholds its contracts; reach for these pages when you
+are trying to find or change something.
+
 ## The shape in one paragraph
 
 `cli.ts` picks a mode. One-shot runs go through `loop/run.ts`, interactive sessions

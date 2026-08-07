@@ -1,4 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { Glob } from "bun";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,10 +8,15 @@ import {
   findEntryPoints,
   findMutualCycles,
   findSeams,
+  mermaidBlocks,
   readSources,
+  renderArchitectureMd,
+  reservedNodeIds,
   resolveSpecifier,
+  safeNodeId,
   subsystemOf,
   validateRegistry,
+  MERMAID_RESERVED,
   ROOT_ID,
 } from "../src/architecture";
 import type { IEdge } from "../src/architecture";
@@ -274,6 +280,64 @@ test("a seam reports where it is declared", async () => {
   expect(adapter?.implementors).toContain(
     join("loop", "boringstack", "planning.ts")
   );
+});
+
+test("a generated node id is never a mermaid keyword", () => {
+  // Uniform prefixing, not conditional: renaming a subsystem to `class` must not
+  // change the diagram's shape, only its ids.
+  expect(safeNodeId("class")).not.toBe("class");
+  expect(safeNodeId("(root)")).toBe("n__root_");
+  expect(safeNodeId("rule-packs")).toBe("n_rule_packs");
+  expect(MERMAID_RESERVED.has(safeNodeId("end"))).toBe(false);
+});
+
+test("a reserved node id is reported, in declarations and in edges", () => {
+  // The exact bug this guards: `call --> resp` fails with "got 'CALLBACKNAME'".
+  expect(reservedNodeIds('call["model call"]\ncall --> resp')).toEqual([
+    "call",
+  ]);
+  expect(reservedNodeIds("a --> end")).toEqual(["end"]);
+  expect(reservedNodeIds('modelCall["fine"]\nmodelCall --> resp')).toEqual([]);
+});
+
+test("every mermaid diagram in the docs avoids reserved node ids", async () => {
+  // Mermaid parses in the browser, so a bad id renders as a blank gap while
+  // `astro build` still succeeds. Nothing else in CI looks at these blocks.
+  const docsDir = join(import.meta.dir, "..", "..", "..", "apps", "docs");
+  const pages = new Glob("src/content/docs/**/*.{md,mdx}");
+  const offenders: string[] = [];
+
+  for await (const rel of pages.scan(docsDir)) {
+    const text = await Bun.file(join(docsDir, rel)).text();
+
+    for (const block of mermaidBlocks(text)) {
+      for (const id of reservedNodeIds(block)) {
+        offenders.push(`${rel}: ${id}`);
+      }
+    }
+  }
+
+  expect(offenders).toEqual([]);
+});
+
+test("the generated architecture map has no reserved node ids", () => {
+  const blocks = mermaidBlocks(
+    renderArchitectureMd({
+      subsystems: [],
+      edges: [
+        { from: "class", to: "end", witness: "a.ts:1", specifier: "../end" },
+      ],
+      cycles: [],
+      entryPoints: [],
+      seams: [],
+      externals: [],
+      totalFiles: 0,
+      totalLines: 0,
+    })
+  );
+
+  expect(blocks.length).toBeGreaterThan(0);
+  expect(blocks.flatMap((b) => reservedNodeIds(b))).toEqual([]);
 });
 
 test("a seam that loses its declaration fails the build", async () => {
