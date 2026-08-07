@@ -31,6 +31,47 @@ export function scripted(steps: IModelResponse[]): IProvider {
   };
 }
 
+/** What one model call was actually SENT — the parts a prefix-cache guard has to
+ *  compare. Kept as pre-serialized strings so a test asserts byte equality
+ *  rather than structural equality: a reordered tool array is a different prefix
+ *  to the server even though `toEqual` would call the two the same. */
+export interface ISentPrefix {
+  readonly system: string;
+  readonly tools: string;
+  readonly firstUser: string;
+}
+
+/** Like `scripted`, but records the cache-relevant prefix of every request.
+ *  For asserting that a run never mutates what it re-sends each turn. */
+export function recordingScripted(
+  steps: IModelResponse[],
+  sink: ISentPrefix[]
+): IProvider {
+  let i = 0;
+
+  return {
+    async complete(messages, options) {
+      const system = messages.find((m) => m.role === "system");
+      const firstUser = messages.find((m) => m.role === "user");
+
+      sink.push({
+        system: system?.content ?? "",
+        tools: JSON.stringify(options?.tools ?? []),
+        firstUser: firstUser?.content ?? "",
+      });
+
+      const step = steps[Math.min(i, steps.length - 1)] ?? {
+        content: "",
+        toolCalls: [],
+      };
+
+      i += 1;
+
+      return step;
+    },
+  };
+}
+
 export function runStep(command: string): IModelResponse {
   return { content: "", toolCalls: [{ name: "run", arguments: { command } }] };
 }
