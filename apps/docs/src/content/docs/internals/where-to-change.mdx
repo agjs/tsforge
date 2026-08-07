@@ -1,0 +1,110 @@
+---
+title: Where do I change X?
+description: A task-to-file index for the tsforge harness — the fastest route from "I want to change this" to the files that implement it.
+---
+
+The harness is ~97k lines across 30 subsystems. Most changes touch two or three files
+and a registration point, and the registration point is the part that is hard to find.
+This page is the index.
+
+Paths are relative to `packages/core/src/`. Line numbers move; the symbol names are the
+durable part, so grep for those if a number has drifted.
+
+## Adding capability
+
+### A new tool the model can call
+
+The one people get wrong, because registration is spread over four files.
+
+| Step | Where |
+| --- | --- |
+| 1. Name it | `TOOL_NAME` in `agent/agent.constants.ts` — also where the JSON schema the model sees lives |
+| 2. Write the handler | `loop/tools/<your-tool>.ts` |
+| 3. Register it | `HANDLERS` in `loop/tools/execute-tool.ts` |
+| 4. Advertise it | `toolsFor()` in `loop/turn.ts` |
+
+Step 3 is typed `Record<ToolName, ToolHandler>`, so **the compiler will not let you skip
+it** — add the name in step 1 and typecheck tells you exactly what is missing.
+
+If the tool mutates the workspace it must surface `mutated` (and `edit`/`create` for file
+writes) on its event, or the gate will not re-run and a stale green can be reported as done.
+
+### A new CLI command
+
+Write an `async function yourMode(args: ICliArgs): Promise<number>` in `cli.ts`, then add
+the dispatch branch in `main()`. The `Promise<number>` is the contract — it is the process
+exit code, and it is how the generated [entry-point list](/internals/subsystems/#entry-points)
+finds your command. Document it in `reference/commands.mdx`.
+
+### A new stack adapter
+
+Create `loop/<your-stack>/` and implement the five seams described in
+[Adapters and seams](/internals/seams/). Register it at a composition root — `cli.ts` or
+`cli/**` — never from inside the core loop, which an ESLint rule forbids from importing an
+adapter at all. `loop/boringstack/` is the worked example.
+
+### An MCP server capability
+
+`mcp/registry.ts` holds the client; servers are declared in the user's
+`tsforge.config.json`, parsed by `config/tsforge-config.ts`.
+
+## Changing what "done" means
+
+### The gate itself
+
+| I want to | Go to |
+| --- | --- |
+| Change when the loop calls a run finished | `settleGate` / `evaluateGate` in `loop/turn.ts` |
+| Change how the gate is composed | `gate/gate-runner.ts` (the `IGate` contract), `gate/core-gate.ts` |
+| Change the stage order for BoringStack | `loop/boringstack/gate-stages.ts` |
+| Change how tool output becomes errors | `validate/parse.ts` and the parsers beside it |
+| Change what the write-time linter enforces | `gate/linter.ts` |
+
+Never relax a rule to get past a failure — the gate is the only signal that the work is
+real. Fix the thing that makes the model satisfy it.
+
+### Rules the gate enforces
+
+| I want to | Go to | Then |
+| --- | --- | --- |
+| Add a rule to an existing pack | `rule-packs/<pack>/rules/<rule>.ts` | export it from the pack's `index.ts` |
+| Create a whole pack | `rule-packs/<pack>/index.ts` | add to `RULE_PACKS` in `rule-packs/index.ts`, then a descriptor in `PACK_REGISTRY` (`stack-detection/packs.ts`) |
+| Add a non-AST rule | `meta-rules/rules/<category>/` | register in `META_RULES` (`meta-rules/registry.ts`); add to `PER_WRITE_META_RULES` only if it must run on every write |
+
+After any of these run `bun run rules:docs && bun run rules:build` — CI fails if the
+generated catalog drifts from the source.
+
+## Changing how the model is driven
+
+| I want to | Go to |
+| --- | --- |
+| Change the system prompt | `loop/prompt/prompt.ts`; the baseline role text is `constitution/baseline.ts` |
+| Change per-call decisions (thinking budget, tool filtering) | `loop/model-call.ts` |
+| Change how the loop steers a stuck run | `buildSteerMessage` in `loop/feedback/steer.ts`; the rungs are `EscalationRung` in `loop/loop.types.ts` |
+| Change rule help shown on a gate failure | `loop/feedback/rule-docs.ts` and its siblings |
+| Support a new model provider | `inference/openai-compatible.ts`; per-model config is `IModelEntry` in `models-config.ts` |
+| Change reasoning handling for a model family | `inference/reasoning-profile.ts` |
+| Change what counts as degenerate output | `inference/stream-guard.ts` |
+
+## Configuration and persistence
+
+| I want to | Go to |
+| --- | --- |
+| Add a CLI flag | `ICliArgs` in `cli/args.ts` — parsing and recipe overlay are in the same file, pure and unit-tested in `tests/cli.test.ts` |
+| Add an environment flag | `config/flags.ts` |
+| Change `tsforge.config.json` | `config/tsforge-config.ts` |
+| Change a strictness profile | `config/profiles.ts` |
+| Change what a session stores | `session-store.ts`; the structured event log is `loop/ledger-writer.ts` |
+
+## Before you commit
+
+`bun run validate` is the merge bar: typecheck, lint, format, tests, PTY end-to-end. It is
+the same gate the harness holds your code to.
+
+Two house rules that catch most review comments:
+
+- **A test is not coverage until it has failed.** Break the line and watch the test go
+  red. An assertion that cannot fail proves nothing about the code beneath it.
+- **Scripts orchestrate; `src/` decides.** Anything it would be a bug to get wrong belongs
+  in `src/`, where a test can import it. The generated map lists any import that violates
+  this under *Imports that leave `src/`*.

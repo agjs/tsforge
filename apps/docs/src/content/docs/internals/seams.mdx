@@ -1,0 +1,101 @@
+---
+title: Adapters and seams
+description: The five injected interfaces that let a stack plug into the core loop, how BoringStack fills them, and what to implement for a new stack.
+---
+
+tsforge is one general engine plus adapters. The engine — write, check, steer, repeat —
+is the same for any TypeScript project. Everything stack-specific arrives through a fixed
+set of interfaces.
+
+This page is the contract. For the conceptual version aimed at users, see
+[Big picture](/big-picture/). Paths are relative to `packages/core/src/`.
+
+## The rule that makes it real
+
+The core loop **cannot import an adapter**. That is not a convention — it is a lint rule
+in `eslint.config.js`:
+
+```js
+files: ["packages/core/src/loop/**/*.ts"],
+ignores: ["packages/core/src/loop/boringstack/**"],
+rules: { "@typescript-eslint/no-restricted-imports": [/* bans **/boringstack** */] }
+```
+
+It matches the import *specifier*, so it also catches `import type` — a type-only import
+still couples two modules. A companion `no-restricted-syntax` selector covers the direct
+dynamic-loader forms (`import("../boringstack/x")`, `createRequire`).
+
+The rule's own comment states its ceiling honestly: it cannot follow a renamed binding,
+resolve dataflow through a variable, or evaluate a segment-splitting concatenation. It is
+a coupling guardrail, not an adversarial sandbox — and it closes every normal way a file
+drifts into depending on a stack.
+
+## The five seams
+
+| Seam | Declared in | Answers |
+| --- | --- | --- |
+| `IStackAdapter` | `loop/planning/stack-adapter.ts` | Is this project mine, and how is it planned? |
+| `IPlanSchema<TUi>` | `loop/planning/plan-types.ts` | What shape is a valid plan, and is this one valid? |
+| `IProductPlan<TUi>` / `ISlice<TUi>` | `loop/planning/plan-types.ts` | What is a feature, in this stack's terms? |
+| `IConventionProvider` | `loop/conventions-provider.ts` | How is code written correctly here? |
+| `IGate` | `gate/gate-runner.ts` | How do we know it works? |
+
+The live declaration sites and reference counts are in the generated
+[subsystems map](/internals/subsystems/#adapter-seams), so they cannot drift from this page.
+
+### IStackAdapter
+
+`detect(dir)` must be authoritative — no false positives, because the first adapter that
+claims a project owns it. `planSchema` is deliberately **type-erased** to
+`IPlanSchema<unknown>` so a registry of heterogeneous adapters stays well-typed; the
+adapter keeps a concretely-typed schema for its own build path.
+
+`planConstraints(onStripped)` is fail-closed *at the type level*: `reservedEntities` can
+only be set together with some `onStripped` callback, so a silently dropped entity is not
+expressible. What the type cannot enforce is that an adapter forwards the *caller's*
+reporter rather than attaching its own — that part is contract, checked per-adapter in
+`tests/stack-adapter.test.ts`.
+
+### IConventionProvider
+
+Guidance reaches the model three ways, and the split matters:
+
+- `buildGuides()` — **front-loaded** into the system prompt.
+- `unseenForErrors(errors, seen)` — **reactive push**: when the gate fails on a rule, the
+  guide for that rule is injected once. It mutates `seen` to dedupe within a run.
+- `guide(topic)` / `topics()` — **on-demand pull**, backing the `pull_conventions` tool.
+
+Front-loading everything would burn context on guidance the run never needs; pushing
+nothing means the model rediscovers the same rule every time.
+
+### IGate
+
+One `run()` that returns structured errors. Adapters compose *stages* on top of it —
+BoringStack layers a command gate, a differential check over edited files, and an
+end-to-end acceptance judge in `loop/boringstack/gate-stages.ts`.
+
+## BoringStack, the worked example
+
+`loop/boringstack/` (30 files) is the only adapter today. Useful entry points:
+
+| Concern | File |
+| --- | --- |
+| Detection + adapter object | `boringstack/planning.ts` |
+| UI-shaped plan extension | `boringstack/plan-extension.ts` |
+| Conventions | `boringstack/conventions.ts` |
+| Feature build loop | `boringstack/build.ts` |
+| Gate composition | `boringstack/gate-stages.ts` |
+| Error interpretation | `boringstack/extract-failures.ts` |
+| End-to-end acceptance | `boringstack/acceptance/` |
+
+## Adding a stack
+
+1. Create `loop/<your-stack>/`.
+2. Implement the five seams above.
+3. Register the adapter at a **composition root** — `cli.ts` or `cli/**`. Registering it
+   from inside `loop/` fails the lint rule, which is the intended outcome.
+4. Add a behavioral test per seam. `tests/stack-adapter.test.ts` shows the shape.
+
+Nothing in `loop/` outside your directory should need to change. If it does, the thing
+you are adding is probably a missing seam rather than adapter-specific behavior — worth
+raising before working around it.

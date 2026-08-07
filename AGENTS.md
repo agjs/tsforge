@@ -11,6 +11,8 @@ tsforge                                       # run harness (after install or bu
 bun run tsforge                               # run harness from monorepo checkout
 bun run rules:build                           # regenerate RULES.md
 bun run rules:docs                            # regenerate rule-docs.generated.json
+bun run arch:build                            # regenerate ARCHITECTURE.md (the subsystem map)
+bun run arch:check                            # fail if ARCHITECTURE.md has drifted
 bun run eval:sweep                            # A/B feature sweep (see tsforge.dev/eval/ab-testing/)
 bun run eval:benchmark                        # compare edit mechanisms across runs
 ./scripts/audit-repo-settings.sh             # diff GitHub repo settings vs .github/desired-repo-settings.json
@@ -19,22 +21,19 @@ bun run eval:benchmark                        # compare edit mechanisms across r
 
 ## Layout
 
-| Path | Role |
-| --- | --- |
-| `packages/core/src/stack-detection/` | detect stack, enable rule packs |
-| `packages/core/src/rule-packs/` | ESLint rule pack implementations (13 packs) |
-| `packages/core/src/meta-rules/` | non-AST gate rules (config, CI, supply chain) |
-| `packages/core/src/config/` | runtime flags, tsforge.config.json loader |
-| `packages/core/src/files/` | edit, create, hashline |
-| `packages/core/src/inference/` | model adapter, stream guard |
-| `packages/core/src/loop/` | implement loop, TTSR, validation |
-| `packages/core/src/lsp/` | LSP tools + write feedback |
-| `packages/core/src/agent/` | ModelAgent, tool-call repair ladder |
-| `packages/core/scripts/` | eval, sweep, doc generators |
-| `packages/core/src/validate/` | gate runner, error parsers |
-| `apps/docs/` | Astro Starlight docs site |
+`packages/core/ARCHITECTURE.md` is the layout map: every subsystem with its purpose, size,
+dependencies, mutual-dependency pairs, CLI entry points and adapter seams. It is generated
+by `bun run arch:build` and drift-checked in CI, so it is never stale — read it instead of
+a hand-kept table here.
 
-CI: run `bun run validate` locally; no remote CI wired yet.
+Top level: `packages/core` (the harness), `apps/docs` (Astro Starlight site),
+`packages/core/scripts/` (thin entry points — eval, sweep, doc generators).
+
+To find the files behind a specific change, use
+[Where do I change X?](https://tsforge.dev/internals/where-to-change/).
+
+CI runs on every PR and push to `main` — see the workflow table in `CONTRIBUTING.md`.
+`bun run validate` is the same gate locally; run it before every push.
 
 Remote: https://github.com/agjs/tsforge
 

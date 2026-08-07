@@ -18,6 +18,8 @@
     "validate": "bun run check:bun && bun run typecheck && bun run lint && bun run format:check && bun run test && bun run e2e:pty",
     "rules:build": "bun packages/core/scripts/build-rules-md.ts",
     "rules:docs": "bun packages/core/scripts/build-rule-docs.ts",
+    "arch:build": "bun packages/core/scripts/build-architecture-md.ts",
+    "arch:check": "bun run arch:build && git diff --exit-code packages/core/ARCHITECTURE.md",
     "eval:sweep": "bun packages/core/scripts/sweep.ts",
     "eval:spec": "bun packages/core/scripts/eval-spec.ts",
     "eval:benchmark": "bun packages/core/scripts/edit-benchmark.ts",

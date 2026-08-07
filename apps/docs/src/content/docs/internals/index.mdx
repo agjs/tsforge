@@ -1,0 +1,42 @@
+---
+title: Internals
+description: How the tsforge harness is built — the subsystem map, the control-flow spine, the adapter seams, and where to go to change something.
+---
+
+These pages are about the harness **codebase**, not about using tsforge. They exist so
+that opening `packages/core` for the first time — or the first time in a month — does not
+start with rediscovery.
+
+For what tsforge is and how it is layered conceptually, start with
+[Big picture](/big-picture/) instead.
+
+## Start here
+
+| If you want to | Read |
+| --- | --- |
+| Change something and need the files | [Where do I change X?](/internals/where-to-change/) |
+| Trace a bug through a run | [How a run executes](/internals/control-flow/) |
+| See every subsystem and how they couple | [Subsystems](/internals/subsystems/) |
+| Add support for a new stack | [Adapters and seams](/internals/seams/) |
+
+## What is generated
+
+[Subsystems](/internals/subsystems/) is produced from source by `bun run arch:build` and
+committed as `packages/core/ARCHITECTURE.md`. CI fails if the committed copy drifts from
+what the code would generate, so its file counts, dependency edges, cycles, entry points
+and seam locations are accurate by construction rather than by discipline.
+
+It also refuses to build when a directory appears under `src/` with no entry in
+`subsystem-registry.ts` — a new subsystem cannot land without someone saying what it is.
+
+The other three pages are hand-written: they carry intent, which no generator can derive.
+
+## The shape in one paragraph
+
+`cli.ts` picks a mode. One-shot runs go through `loop/run.ts`, interactive sessions
+through `loop/session.ts`, and both drive the same primitives in `loop/turn.ts`: offer
+tools, execute tool calls, run the gate, decide what the result means. When the gate
+fails, the loop steers up an escalation ladder rather than repeating itself. Everything
+stack-specific — scaffolding, what an error means, how a feature is verified — arrives
+through the [adapter seams](/internals/seams/), and a lint rule stops the core loop from
+importing an adapter directly.

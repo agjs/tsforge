@@ -239,6 +239,17 @@ export default defineConfig({
             { label: "A/B testing (eval)", link: "/eval/ab-testing/" },
           ],
         },
+        {
+          label: "Internals",
+          collapsed: true,
+          items: [
+            { label: "Overview", link: "/internals/" },
+            { label: "Where do I change X?", link: "/internals/where-to-change/" },
+            { label: "How a run executes", link: "/internals/control-flow/" },
+            { label: "Subsystems", link: "/internals/subsystems/" },
+            { label: "Adapters and seams", link: "/internals/seams/" },
+          ],
+        },
       ],
     }),
   ],
