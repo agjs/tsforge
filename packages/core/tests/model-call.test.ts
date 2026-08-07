@@ -1,5 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { selectThinking, offeredToolsFor } from "../src/loop/model-call";
+import {
+  selectThinking,
+  offeredToolsFor,
+  usageEvent,
+} from "../src/loop/model-call";
 import { READ_ONLY_TOOL_NAMES, TOOL_NAME } from "../src/agent";
 
 /** The pure per-call decisions extracted from Session.askModel (B2): the
@@ -205,4 +209,116 @@ describe("offeredToolsFor: overlay tool wiring", () => {
       READ_ONLY_TOOL_NAMES.has(TOOL_NAME.edit)
     );
   });
+});
+
+describe("usageEvent (one shape for both loops)", () => {
+  const usage = {
+    promptTokens: 1000,
+    completionTokens: 50,
+    totalTokens: 1050,
+  };
+
+  test("renders the cache hit as a count AND a share of the prompt", () => {
+    const e = usageEvent({
+      task: "t",
+      usage: { ...usage, cachedPromptTokens: 800 },
+    });
+
+    expect(e.cachedPromptTokens).toBe(800);
+    expect(e.message).toContain("800 cached (80%)");
+  });
+
+  test("says NOTHING about cache when the server reported none", () => {
+    const e = usageEvent({ task: "t", usage });
+
+    expect(e.cachedPromptTokens).toBeUndefined();
+    // Not "0 cached (0%)" — an endpoint without prefix caching must not read as
+    // a cold prefix, which is a harness bug and looks identical otherwise.
+    expect(e.message).not.toContain("cached");
+  });
+
+  test("a reported zero shows as 0%, distinct from silence", () => {
+    const e = usageEvent({
+      task: "t",
+      usage: { ...usage, cachedPromptTokens: 0 },
+    });
+
+    expect(e.cachedPromptTokens).toBe(0);
+    expect(e.message).toContain("0 cached (0%)");
+  });
+
+  test("omits a generation rate when no generation time was measured", () => {
+    // The build driver times a whole turn (tool execution included); publishing
+    // that as tok/s would understate it by an order of magnitude.
+    const e = usageEvent({ task: "t", usage });
+
+    expect(e.tokensPerSecond).toBeUndefined();
+    expect(e.ms).toBeUndefined();
+    expect(e.message).not.toContain("tok/s");
+  });
+
+  test("reports a generation rate when one was measured", () => {
+    const e = usageEvent({ task: "t", usage, genMs: 1000 });
+
+    expect(e.tokensPerSecond).toBe(50);
+    expect(e.message).toContain("50 tok/s");
+  });
+
+  test("carries this call's thinking mode when known", () => {
+    expect(usageEvent({ task: "t", usage, thinking: true }).thinking).toBe(
+      true
+    );
+    expect(usageEvent({ task: "t", usage }).thinking).toBeUndefined();
+  });
+});
+
+describe("usageEvent: measured-at-zero is not unmeasured", () => {
+  const usage = {
+    promptTokens: 10,
+    completionTokens: 5,
+    totalTokens: 15,
+  };
+
+  test("a supplied genMs of 0 still reports a rate of 0", () => {
+    // Dropping the field here would silently remove sub-millisecond calls from
+    // the rate metrics; only an UNMEASURED call may omit it.
+    const e = usageEvent({ task: "t", usage, genMs: 0 });
+
+    expect(e.tokensPerSecond).toBe(0);
+    expect(e.message).toContain("0 tok/s");
+  });
+});
+
+test("the log line clamps a backend that over-reports its cache", () => {
+  // Must agree with the run-level metric, which clamps too — one bad server
+  // telling two different stories is worse than either number alone.
+  const e = usageEvent({
+    task: "t",
+    usage: {
+      promptTokens: 100,
+      completionTokens: 5,
+      totalTokens: 105,
+      cachedPromptTokens: 500,
+    },
+  });
+
+  expect(e.message).toContain("500 cached (100%)");
+});
+
+test("cached tokens against a zero-token prompt is 'unknown', not 0%", () => {
+  // parseUsage defaults a missing prompt_tokens to 0, so a server can report
+  // cached tokens with no prompt. That is incoherent, not cold — and 0% is the
+  // reserved reading for a prefix the harness broke.
+  const e = usageEvent({
+    task: "t",
+    usage: {
+      promptTokens: 0,
+      completionTokens: 5,
+      totalTokens: 5,
+      cachedPromptTokens: 40,
+    },
+  });
+
+  expect(e.message).toContain("share unknown");
+  expect(e.message).not.toContain("(0%)");
 });

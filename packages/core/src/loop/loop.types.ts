@@ -122,6 +122,12 @@ export interface ILoopEvent {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** For `usage` events: how much of `promptTokens` the server served from its
+   *  prefix cache. Absent when the endpoint doesn't report it — which is NOT the
+   *  same as a cold prefix, so the analyzer must not read a missing field as 0.
+   *  A ratio that collapses part-way through a run is the harness having broken
+   *  its own prompt prefix; without this the same symptom reads as "slow model". */
+  cachedPromptTokens?: number;
   /** For `usage` events: output generation rate (completion tokens / second),
    *  measured from the first streamed token to the call's end. */
   tokensPerSecond?: number;

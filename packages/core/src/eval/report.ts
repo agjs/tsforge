@@ -144,17 +144,22 @@ function baselineCell(report: IVariantReport, baseline: string | null): string {
  *  (p < 0.05) from the baseline. */
 export function renderSweepReportMarkdown(report: ISweepReport): string {
   const header =
-    "| Variant | Runs | Pass | 95% CI | Cycles | T2G | Ms | Quality | LOC | vs baseline |\n" +
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |";
+    "| Variant | Runs | Pass | 95% CI | Cycles | T2G | Ms | Quality | LOC | Cache | vs baseline |\n" +
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |";
 
   const rows = report.variants.map((v) => {
     const ci = `${pct(v.passRateCI[0])}–${pct(v.passRateCI[1])}`;
     const t2g = v.avgTurnsToGreen === null ? "—" : v.avgTurnsToGreen.toFixed(1);
+    // Cost beside outcome. A variant that lengthens the prompt — reasoning
+    // replay, a bigger guide block — can lift Pass while destroying prompt
+    // reuse, and that belongs in the same table rather than surfacing later as
+    // unexplained wall-clock. "—" when no run's endpoint reported a figure.
+    const cache = v.avgCacheHitRate === null ? "—" : pct(v.avgCacheHitRate);
 
     return (
       `| ${v.label} | ${String(v.runs)} | ${pct(v.passRate)} | ${ci} | ` +
       `${v.avgCycles.toFixed(1)} | ${t2g} | ${String(Math.round(v.avgMs))} | ` +
-      `${v.avgQuality.toFixed(1)} | ${v.avgLoc.toFixed(1)} | ${baselineCell(v, report.baseline)} |`
+      `${v.avgQuality.toFixed(1)} | ${v.avgLoc.toFixed(1)} | ${cache} | ${baselineCell(v, report.baseline)} |`
     );
   });
 

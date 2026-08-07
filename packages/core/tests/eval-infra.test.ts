@@ -7,6 +7,7 @@ import {
   renderSweepReportMarkdown,
   wilsonInterval,
   twoProportionZ,
+  summarize,
 } from "../src/eval";
 
 function rec(label: string, passed: boolean): IRunRecord {
@@ -127,5 +128,220 @@ describe("eval metrics: analyzeEvents", () => {
     ];
 
     expect(analyzeEvents(subSecond).wallClockSeconds).toBe(1);
+  });
+});
+
+describe("eval metrics: prefix-cache hit rate", () => {
+  function usage(promptTokens: number, cached?: number): ILoopEvent {
+    return {
+      kind: "usage",
+      task: "1",
+      message: "",
+      promptTokens,
+      completionTokens: 10,
+      totalTokens: promptTokens + 10,
+      ...(cached === undefined ? {} : { cachedPromptTokens: cached }),
+    };
+  }
+
+  test("is the token-weighted share across the run, not a mean of ratios", () => {
+    // 900+100 cached of 1000+1000 prompt = 0.5. A mean of per-call rates would
+    // say 0.5 too — so weight the calls unevenly to tell them apart.
+    const m = analyzeEvents([usage(1000, 900), usage(100, 10)]);
+
+    expect(m.cacheHitRate).toBeCloseTo(910 / 1100, 6);
+  });
+
+  test("is NULL when no call reported a cache figure", () => {
+    // Not 0: an endpoint that never publishes the field must stay
+    // distinguishable from one whose prefix actually went cold.
+    expect(analyzeEvents([usage(1000), usage(500)]).cacheHitRate).toBeNull();
+    expect(analyzeEvents([]).cacheHitRate).toBeNull();
+  });
+
+  test("is 0 when the server reported hits and there were none", () => {
+    expect(analyzeEvents([usage(1000, 0)]).cacheHitRate).toBe(0);
+  });
+
+  test("silent calls do not dilute the calls that did report", () => {
+    // One reporting call at 90%, one silent. The answer is 90%, not 45%.
+    const m = analyzeEvents([usage(1000, 900), usage(1000)]);
+
+    expect(m.cacheHitRate).toBeCloseTo(0.9, 6);
+  });
+});
+
+describe("eval metrics: cache rate survives a server's bad arithmetic", () => {
+  function usage(promptTokens: number, cached: number): ILoopEvent {
+    return {
+      kind: "usage",
+      task: "1",
+      message: "",
+      promptTokens,
+      completionTokens: 10,
+      totalTokens: promptTokens + 10,
+      cachedPromptTokens: cached,
+    };
+  }
+
+  test("clamps a backend claiming more cached tokens than prompt tokens", () => {
+    // parseUsage takes any JSON number at face value, so an out-of-range rate
+    // would otherwise reach the self-harness, which compares it as a ratio.
+    expect(analyzeEvents([usage(100, 500)]).cacheHitRate).toBe(1);
+  });
+
+  test("clamps a negative cache count to zero", () => {
+    expect(analyzeEvents([usage(100, -50)]).cacheHitRate).toBe(0);
+  });
+
+  test("a reporting call with a zero-token prompt is not read as silence", () => {
+    // Degenerate, but it must not masquerade as "endpoint doesn't report".
+    expect(analyzeEvents([usage(0, 0)]).cacheHitRate).toBeNull();
+  });
+});
+
+describe("eval summary: cache hit rate per variant", () => {
+  function run(label: string, cacheHitRate?: number): IRunRecord {
+    return {
+      label,
+      passed: true,
+      cycles: 3,
+      ms: 1000,
+      ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
+    };
+  }
+
+  test("averages only the runs whose endpoint reported a figure", () => {
+    // The silent run must not enter as 0 and halve the variant's rate.
+    const [s] = summarize([run("a", 0.9), run("a")]);
+
+    expect(s?.avgCacheHitRate).toBeCloseTo(0.9, 6);
+  });
+
+  test("is null when no run in the variant reported one", () => {
+    const [s] = summarize([run("a"), run("a")]);
+
+    expect(s?.avgCacheHitRate).toBeNull();
+  });
+});
+
+describe("eval metrics: one bad call cannot mask the rest of the run", () => {
+  test("a cached-but-promptless call neither counts nor hides real misses", () => {
+    // Unclamped, this call added 5000 to the numerator and nothing to the
+    // denominator, so the run reported full reuse while the other call missed
+    // entirely.
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 0,
+        completionTokens: 1,
+        totalTokens: 1,
+        cachedPromptTokens: 5000,
+      },
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 1000,
+        completionTokens: 10,
+        totalTokens: 1010,
+        cachedPromptTokens: 0,
+      },
+    ]);
+
+    expect(m.cacheHitRate).toBe(0);
+  });
+
+  test("a single over-reporting call is capped at its own prompt", () => {
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 100,
+        completionTokens: 1,
+        totalTokens: 101,
+        cachedPromptTokens: 100000,
+      },
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 100,
+        completionTokens: 1,
+        totalTokens: 101,
+        cachedPromptTokens: 0,
+      },
+    ]);
+
+    // Capped per call → 100 of 200, not "everything was a hit".
+    expect(m.cacheHitRate).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe("eval metrics: a non-finite prompt size cannot poison the run", () => {
+  test("a call reporting an infinite prompt is dropped, not averaged in", () => {
+    // JSON.parse('1e999') is Infinity and parseUsage accepts any JSON number.
+    // Unguarded, this call carried the denominator to Infinity and drove the
+    // whole run's rate to 0 — the reading reserved for a prefix the harness
+    // broke. The healthy call's 90% must survive it.
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: Number.POSITIVE_INFINITY,
+        completionTokens: 1,
+        totalTokens: 1,
+        cachedPromptTokens: 10,
+      },
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 1000,
+        completionTokens: 10,
+        totalTokens: 1010,
+        cachedPromptTokens: 900,
+      },
+    ]);
+
+    expect(m.cacheHitRate).toBeCloseTo(0.9, 6);
+  });
+
+  test("a call reporting an infinite cache count is dropped too", () => {
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 1000,
+        completionTokens: 1,
+        totalTokens: 1001,
+        cachedPromptTokens: Number.POSITIVE_INFINITY,
+      },
+    ]);
+
+    // Nothing measurable was reported, so there is no rate — not 100%.
+    expect(m.cacheHitRate).toBeNull();
+  });
+});
+
+describe("sweep report: the cache column", () => {
+  test("renders the variant's cache share, and '—' when unreported", () => {
+    // The figure existed on IVariantSummary but the fixed-column table never
+    // showed it, so a sweep still couldn't see cost beside outcome.
+    const warm = buildSweepReport([
+      { label: "a", passed: true, cycles: 3, ms: 1, cacheHitRate: 0.94 },
+    ]);
+    const silent = buildSweepReport([
+      { label: "a", passed: true, cycles: 3, ms: 1 },
+    ]);
+
+    expect(renderSweepReportMarkdown(warm)).toContain("| Cache |");
+    expect(renderSweepReportMarkdown(warm)).toContain("94%");
+    expect(renderSweepReportMarkdown(silent)).toContain("| Cache |");
   });
 });

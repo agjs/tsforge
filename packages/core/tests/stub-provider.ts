@@ -1,5 +1,17 @@
 import type { IModelResponse, IProvider } from "../src/inference";
 
+/** A `typeof fetch` that answers every call with a freshly built response.
+ *
+ *  Composed with `Object.assign` rather than cast: Bun's `typeof fetch` also
+ *  carries `preconnect`, so a bare async function does not satisfy it — and the
+ *  house rule forbids the `as unknown as typeof fetch` shortcut. A factory, not
+ *  a value, because a `Response` body can only be consumed once. */
+export function fetchReturning(make: () => Response): typeof fetch {
+  const impl = async (): Promise<Response> => make();
+
+  return Object.assign(impl, { preconnect: globalThis.fetch.preconnect });
+}
+
 /** A provider that replays a scripted sequence of responses, one per turn
  *  (repeating the last once exhausted). For driving the agentic loop in tests. */
 export function scripted(steps: IModelResponse[]): IProvider {
@@ -7,6 +19,47 @@ export function scripted(steps: IModelResponse[]): IProvider {
 
   return {
     async complete() {
+      const step = steps[Math.min(i, steps.length - 1)] ?? {
+        content: "",
+        toolCalls: [],
+      };
+
+      i += 1;
+
+      return step;
+    },
+  };
+}
+
+/** What one model call was actually SENT — the parts a prefix-cache guard has to
+ *  compare. Kept as pre-serialized strings so a test asserts byte equality
+ *  rather than structural equality: a reordered tool array is a different prefix
+ *  to the server even though `toEqual` would call the two the same. */
+export interface ISentPrefix {
+  readonly system: string;
+  readonly tools: string;
+  readonly firstUser: string;
+}
+
+/** Like `scripted`, but records the cache-relevant prefix of every request.
+ *  For asserting that a run never mutates what it re-sends each turn. */
+export function recordingScripted(
+  steps: IModelResponse[],
+  sink: ISentPrefix[]
+): IProvider {
+  let i = 0;
+
+  return {
+    async complete(messages, options) {
+      const system = messages.find((m) => m.role === "system");
+      const firstUser = messages.find((m) => m.role === "user");
+
+      sink.push({
+        system: system?.content ?? "",
+        tools: JSON.stringify(options?.tools ?? []),
+        firstUser: firstUser?.content ?? "",
+      });
+
       const step = steps[Math.min(i, steps.length - 1)] ?? {
         content: "",
         toolCalls: [],

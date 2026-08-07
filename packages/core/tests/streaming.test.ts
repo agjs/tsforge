@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { OpenAICompatibleProvider } from "../src/inference";
+import { fetchReturning } from "./stub-provider";
 
 function sseResponse(chunks: string[]): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -310,4 +311,66 @@ test("switching endpoints forgets what the old one refused", async () => {
   expect(
     bodies.filter((b) => b.includes("thinking_token_budget"))
   ).toHaveLength(2);
+});
+
+test("carries prefix-cache hits through the STREAMING path", async () => {
+  // The path that matters: run.ts sets `onToken` unconditionally, so every
+  // build-loop call streams. Parsing that only worked non-streaming would leave
+  // the long builds — the whole reason to watch the cache — unmeasured.
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+    `data: {"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,"prompt_tokens_details":{"cached_tokens":900}}}\n`,
+    `data: [DONE]\n`,
+  ];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => sseResponse(chunks)),
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+  });
+
+  expect(r.usage?.promptTokens).toBe(1000);
+  expect(r.usage?.cachedPromptTokens).toBe(900);
+});
+
+test("streaming: DeepSeek's top-level cache spelling is read too", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+    `data: {"choices":[],"usage":{"prompt_tokens":800,"completion_tokens":5,"total_tokens":805,"prompt_cache_hit_tokens":512}}\n`,
+    `data: [DONE]\n`,
+  ];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => sseResponse(chunks)),
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+  });
+
+  expect(r.usage?.cachedPromptTokens).toBe(512);
+});
+
+test("streaming: a silent server leaves the cache field absent", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+    `data: {"choices":[],"usage":{"prompt_tokens":800,"completion_tokens":5,"total_tokens":805}}\n`,
+    `data: [DONE]\n`,
+  ];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => sseResponse(chunks)),
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+  });
+
+  expect(r.usage?.promptTokens).toBe(800);
+  expect(r.usage?.cachedPromptTokens).toBeUndefined();
 });

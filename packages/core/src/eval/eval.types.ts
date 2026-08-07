@@ -71,6 +71,15 @@ export interface IRunRecord {
    *  scoring — and absence must be skipped, not read as zero, or an outage
    *  enters the graded figure as measured failure. */
   progress?: number;
+  /** Share of the run's prompt tokens the server served from its prefix cache,
+   *  in [0,1]. Absent when the endpoint never reported it — skip it rather than
+   *  reading it as 0, the same way `progress` absence is skipped.
+   *
+   *  Here so a variant comparison can see cost alongside outcome: reasoning
+   *  replay and longer prompts can lift `progress` while destroying cache reuse,
+   *  and that trade should be visible in the sweep rather than turning up later
+   *  as unexplained wall-clock. */
+  cacheHitRate?: number;
 }
 
 /** Aggregated metrics for a variant across its runs. */
@@ -90,6 +99,10 @@ export interface IVariantSummary {
   /** Average LOC across runs that recorded it — i.e. green runs (0 if none). The
    *  lower-is-better concision metric, compared per task across variants. */
   avgLoc: number;
+  /** Mean prefix-cache hit rate over the runs whose endpoint reported one, or
+   *  null when none did. Null rather than 0 so a variant measured against a
+   *  server that doesn't publish the figure isn't reported as running cold. */
+  avgCacheHitRate: number | null;
   /** Count of failed runs by failure class (e.g. {"type-error": 2}); empty when
    *  no run carried a class. Lets a sweep show WHY a variant failed, not just how
    *  often. */

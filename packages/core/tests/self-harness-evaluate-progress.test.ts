@@ -326,3 +326,87 @@ describe("allMustRun", () => {
     expect((await run([])).exitCode).toBe(0);
   });
 });
+
+describe("evaluateHarness records the prefix-cache figure", () => {
+  test("the run record carries the cache rate the server reported", () => {
+    // Same lesson as `progress` above: a figure that is computed correctly and
+    // never lands on the record is worth nothing to a variant comparison. The
+    // derivation and the summary aggregate are unit-tested elsewhere; this is
+    // the wiring between them, through the real evaluateHarness path.
+    return (async () => {
+      const corpusDir = await corpus();
+      const runsDir = await mkdtemp(join(tmpdir(), "tsforge-cache-rate-"));
+
+      try {
+        const out = await evaluateHarness(["tiny"], {
+          corpusDir,
+          runsDir,
+          provider: {
+            complete: () =>
+              Promise.resolve({
+                content: "I will not.",
+                toolCalls: [],
+                usage: {
+                  promptTokens: 1000,
+                  completionTokens: 10,
+                  totalTokens: 1010,
+                  cachedPromptTokens: 800,
+                },
+              }),
+          },
+          repeats: 1,
+          overlay: null,
+        });
+
+        expect(out.records.length).toBeGreaterThan(0);
+
+        for (const r of out.records) {
+          expect(r.cacheHitRate).toBeCloseTo(0.8, 6);
+        }
+      } finally {
+        await rm(corpusDir, { recursive: true, force: true });
+        await rm(runsDir, { recursive: true, force: true });
+      }
+    })();
+  }, 120_000);
+
+  test("a silent endpoint leaves the record's cache rate ABSENT", () => {
+    // Absent, not 0: the mean must skip this run rather than report it as a
+    // cold prefix, which is the reading reserved for the harness having broken
+    // its own prompt prefix.
+    return (async () => {
+      const corpusDir = await corpus();
+      const runsDir = await mkdtemp(join(tmpdir(), "tsforge-cache-silent-"));
+
+      try {
+        const out = await evaluateHarness(["tiny"], {
+          corpusDir,
+          runsDir,
+          provider: {
+            complete: () =>
+              Promise.resolve({
+                content: "I will not.",
+                toolCalls: [],
+                usage: {
+                  promptTokens: 1000,
+                  completionTokens: 10,
+                  totalTokens: 1010,
+                },
+              }),
+          },
+          repeats: 1,
+          overlay: null,
+        });
+
+        expect(out.records.length).toBeGreaterThan(0);
+
+        for (const r of out.records) {
+          expect(r.cacheHitRate).toBeUndefined();
+        }
+      } finally {
+        await rm(corpusDir, { recursive: true, force: true });
+        await rm(runsDir, { recursive: true, force: true });
+      }
+    })();
+  }, 120_000);
+});

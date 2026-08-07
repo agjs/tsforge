@@ -47,6 +47,15 @@ export function formatTrace(events: readonly ILoopEvent[]): string {
         ? `${m.peakContext} (${pct}% of ${contextWindow})`
         : String(m.peakContext),
     ],
+    // "—" for an endpoint that never reported, NOT "0%". A run that reads 0% is
+    // the harness having broken its own prompt prefix — a bug with a findable
+    // cause — and it must not look like a server that simply stays quiet.
+    [
+      "prefix cache",
+      m.cacheHitRate === null
+        ? "—"
+        : `${String(Math.round(m.cacheHitRate * 100))}% of prompt reused`,
+    ],
     ["edits/creates", `${m.edits} (${m.filesCreated} created)`],
     [
       "accept rate",

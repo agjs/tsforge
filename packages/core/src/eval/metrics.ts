@@ -1,5 +1,6 @@
 import type { ILoopEvent } from "../loop/loop.types";
 import { classifyRun, type FailureClass } from "./failure-class";
+import { clampRatio } from "../lib/ratio";
 
 /** Behavioral metrics distilled from a run's event stream — the signals the
  *  local-model literature says predict outcomes (tokens-to-solution, repair
@@ -19,6 +20,16 @@ export interface IRunMetrics {
   tokensOut: number;
   /** Largest prompt-token count seen (the run's context high-water mark). */
   peakContext: number;
+  /** Share of the run's prompt tokens the server served from its prefix cache,
+   *  in [0,1] — or null when the endpoint never reported it.
+   *
+   *  NULL AND 0 ARE DIFFERENT ANSWERS. Null means we cannot see the cache; 0
+   *  means we can, and the prefix went cold — which on a local vLLM is the
+   *  harness having mutated its own prompt prefix mid-run, and reads from the
+   *  outside as nothing worse than a slow model. Only calls that reported the
+   *  field count toward either side of the ratio, so an endpoint that reports it
+   *  intermittently isn't diluted by the calls that stayed silent. */
+  cacheHitRate: number | null;
   /** File mutations (`edit` + `create`). */
   edits: number;
   /** Edit batches rolled back (`reverted` events) — gate-break or no quality gain.
@@ -59,6 +70,7 @@ function emptyMetrics(): IRunMetrics {
     modelCalls: 0,
     tokensOut: 0,
     peakContext: 0,
+    cacheHitRate: null,
     edits: 0,
     editsReverted: 0,
     acceptRate: 0,
@@ -93,6 +105,10 @@ function countPolicy(m: IRunMetrics, event: ILoopEvent): void {
 interface IAccum {
   tpsSum: number;
   tpsCount: number;
+  /** Cache-hit and prompt totals over ONLY the calls that reported a cache
+   *  figure, so the calls that stayed silent never dilute the ratio. */
+  cachedTokens: number;
+  cachedOfPrompt: number;
   wallMs: number;
   created: Set<string>;
 }
@@ -106,6 +122,31 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   if (event.tokensPerSecond !== undefined && event.tokensPerSecond > 0) {
     acc.tpsSum += event.tokensPerSecond;
     acc.tpsCount += 1;
+  }
+
+  // Bounded PER CALL, not just on the final quotient. A call carrying cached
+  // tokens with a zero-token prompt would otherwise add to the numerator and
+  // nothing to the denominator, letting one over-reporting call mask genuine
+  // misses on every other call in the run — the final clamp cannot undo that,
+  // because by then the misses are already gone.
+  //
+  // BOTH sides must be finite, not just the cached count. `parseUsage` accepts
+  // any JSON number and `JSON.parse("1e999")` is Infinity, so a single call
+  // reporting a non-finite prompt size would carry the denominator to Infinity
+  // and drive the whole run's rate to 0 — the reading reserved for a prefix the
+  // harness broke. An incoherent call contributes nothing instead.
+  if (
+    event.cachedPromptTokens !== undefined &&
+    event.promptTokens !== undefined &&
+    Number.isFinite(event.promptTokens) &&
+    Number.isFinite(event.cachedPromptTokens) &&
+    event.promptTokens > 0
+  ) {
+    acc.cachedTokens += Math.min(
+      Math.max(0, event.cachedPromptTokens),
+      event.promptTokens
+    );
+    acc.cachedOfPrompt += event.promptTokens;
   }
 }
 
@@ -157,13 +198,41 @@ function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   }
 }
 
+/**
+ * The run's prefix-cache hit rate, or null when there is no rate to state.
+ *
+ * Null covers two situations that a caller cannot act on differently anyway: no
+ * call reported a cache figure, and every call that did carried a zero-token
+ * prompt. Only calls that reported reach the accumulator, so a silent endpoint
+ * leaves the denominator at zero and lands in the same branch.
+ *
+ * Clamped to [0,1] because the inputs are a remote server's self-report, which
+ * `parseUsage` takes at face value (any JSON number). A backend that reports
+ * more cached tokens than prompt tokens — or a negative count — must not put an
+ * out-of-range rate into a comparison the self-harness treats as a ratio.
+ */
+function cacheHitRate(acc: IAccum): number | null {
+  if (acc.cachedOfPrompt <= 0) {
+    return null;
+  }
+
+  return clampRatio(acc.cachedTokens / acc.cachedOfPrompt);
+}
+
 /** Reduce a run's event stream to its behavioral metrics. Pure — feed it the
  *  events from a `--log` JSONL or a captured `onEvent` stream. */
 export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
   const m = emptyMetrics();
   // Accumulate raw ms and round ONCE at the end: rounding each timing event
   // would floor sub-second turns to 0s (400+400+400ms → 0s instead of 1s).
-  const acc: IAccum = { tpsSum: 0, tpsCount: 0, wallMs: 0, created: new Set() };
+  const acc: IAccum = {
+    tpsSum: 0,
+    tpsCount: 0,
+    cachedTokens: 0,
+    cachedOfPrompt: 0,
+    wallMs: 0,
+    created: new Set(),
+  };
 
   for (const event of events) {
     tallyEvent(m, event, acc);
@@ -178,6 +247,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
     netAccepted > 0 ? Math.round(m.tokensOut / netAccepted) : 0;
   m.avgTokensPerSecond =
     acc.tpsCount > 0 ? Math.round(acc.tpsSum / acc.tpsCount) : 0;
+  m.cacheHitRate = cacheHitRate(acc);
   m.wallClockSeconds = Math.round(acc.wallMs / 1000);
   m.failureClass = classifyRun(events).failureClass;
 

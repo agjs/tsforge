@@ -19,7 +19,7 @@ import { runAccept, parserFor } from "../validate";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
 import {
-  classifyRun,
+  analyzeEvents,
   countTaskLoc,
   judge,
   overBudgetScore,
@@ -484,7 +484,16 @@ async function runTaskOnce(
     }
   }
 
-  const failureClass = passed ? undefined : classifyRun(events).failureClass;
+  // ONE pass over the event stream for both derived figures. `analyzeEvents`
+  // already runs `classifyRun` internally, so calling both walked a long build's
+  // events twice and classified it twice for one extra field.
+  const metrics = analyzeEvents(events);
+  const failureClass = passed ? undefined : metrics.failureClass;
+  // Cost, alongside outcome: an edit can lift `progress` while wrecking prompt
+  // reuse, and that belongs in the same comparison rather than surfacing later
+  // as unexplained wall-clock. Null (endpoint never reported) is omitted, so it
+  // is skipped in the mean rather than read as a cold prefix.
+  const cacheHitRate = metrics.cacheHitRate;
   // How far the run got, not merely whether it arrived. See ./progress.ts.
   const endErrors = passed ? 0 : await gateErrorCount(runDir, measureCommand);
   // A null on either end is an unusable measurement, scored as no progress —
@@ -503,6 +512,7 @@ async function runTaskOnce(
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
+      ...(cacheHitRate === null ? {} : { cacheHitRate }),
       progress,
     },
     run: {
