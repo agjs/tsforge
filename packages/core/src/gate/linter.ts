@@ -82,7 +82,12 @@ export function makeFileLinter(
 
         // Add pack rules if provided
         if (packIds !== undefined && packIds.length > 0) {
-          const { buildPackEslintConfig } = await import("../rule-packs/index");
+          const { assertExternalPacksFrozen, buildPackEslintConfig } =
+            await import("../rule-packs/index");
+
+          // F19: refuse to lint with external packs whose on-disk content drifted
+          // since load (a workspace plugin must not silently weaken mid-session).
+          await assertExternalPacksFrozen();
 
           const { plugin, rules } = buildPackEslintConfig(
             packIds,

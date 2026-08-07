@@ -1,7 +1,9 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { isRecord } from "../lib/guards";
 import { registerExternalPack } from "../rule-packs";
 import type { IRulePack } from "../rule-packs/rule-packs.types";
+import { fingerprintPluginEntry } from "./plugin-fingerprint";
 
 /** One external plugin entry from tsforge.config.json `plugins`. */
 export interface IExternalPlugin {
@@ -13,6 +15,37 @@ export interface IExternalPlugin {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Deep-freeze a pack's rulesConfig (and the pack shell) so a live export
+ *  cannot be mutated after registration to weaken severities under the same id. */
+export function freezeRulePack(pack: IRulePack): IRulePack {
+  const rulesConfig: Record<string, "error" | "warn"> = {};
+
+  for (const [name, severity] of Object.entries(pack.rulesConfig)) {
+    rulesConfig[name] = severity;
+  }
+
+  return Object.freeze({
+    id: pack.id,
+    description: pack.description,
+    rules: Object.freeze({ ...pack.rules }),
+    rulesConfig: Object.freeze(rulesConfig),
+  });
+}
+
+/** Absolute filesystem path for a plugin entry, when one exists. */
+function resolvePluginEntryPath(pluginPath: string, cwd: string): string {
+  if (pluginPath.startsWith(".") || isAbsolute(pluginPath)) {
+    return resolve(cwd, pluginPath);
+  }
+
+  // Bare package specifier: best-effort resolve to a file path for hashing.
+  try {
+    return Bun.resolveSync(pluginPath, cwd);
+  } catch {
+    return resolve(cwd, pluginPath);
+  }
 }
 
 /** Type guard: a well-formed IRulePack (no `as` — every field is checked). */
@@ -84,26 +117,39 @@ function candidateExports(
   return names.map((name) => mod[name]);
 }
 
+/** A pack loaded from disk with the content fingerprint that freezes it. */
+export interface ILoadedExternalPack {
+  readonly pack: IRulePack;
+  readonly entryPath: string;
+  readonly fingerprint: string;
+}
+
 /**
  * Dynamically import each plugin and collect its valid exported rule packs.
  * Never throws — an unimportable module or an export that is not a valid pack is
  * reported and skipped, so a broken plugin can't take down a run.
+ *
+ * Each successful pack is paired with a content fingerprint of its entry file
+ * and relative import graph so mid-session edits can be detected (F19).
  */
 export async function loadExternalPacks(
   plugins: readonly IExternalPlugin[],
   cwd: string,
   report: (message: string) => void
-): Promise<IRulePack[]> {
-  const out: IRulePack[] = [];
+): Promise<ILoadedExternalPack[]> {
+  const out: ILoadedExternalPack[] = [];
 
   for (const plugin of plugins) {
+    const entryPath = resolvePluginEntryPath(plugin.path, cwd);
     const specifier = plugin.path.startsWith(".")
-      ? resolve(cwd, plugin.path)
+      ? pathToFileURL(entryPath).href
       : plugin.path;
 
     let mod: unknown;
+    let fingerprint: string;
 
     try {
+      fingerprint = await fingerprintPluginEntry(entryPath);
       mod = await import(specifier);
     } catch (err) {
       report(`plugin '${plugin.path}' failed to load: ${errMessage(err)}`);
@@ -117,8 +163,10 @@ export async function loadExternalPacks(
 
     for (const candidate of candidateExports(mod, plugin.packs)) {
       if (isRulePack(candidate)) {
-        out.push(candidate);
-        report(`plugin '${plugin.path}': loaded pack '${candidate.id}'`);
+        const pack = freezeRulePack(candidate);
+
+        out.push({ pack, entryPath, fingerprint });
+        report(`plugin '${plugin.path}': loaded pack '${pack.id}'`);
       } else {
         report(
           `plugin '${plugin.path}': an export is not a valid rule pack — skipped`
@@ -131,20 +179,20 @@ export async function loadExternalPacks(
 }
 
 /**
- * Load every configured plugin, register its packs in the rule-pack registry,
- * and return the registered pack ids (to fold into the active pack list so the
- * gate runs them). Never throws.
+ * Load every configured plugin, register its packs in the rule-pack registry
+ * with a content freeze, and return the registered pack ids (to fold into the
+ * active pack list). Never throws on a bad plugin; load failures are reported.
  */
 export async function loadAndRegisterPlugins(
   plugins: readonly IExternalPlugin[],
   cwd: string,
   report: (message: string) => void
 ): Promise<string[]> {
-  const packs = await loadExternalPacks(plugins, cwd, report);
+  const loaded = await loadExternalPacks(plugins, cwd, report);
   const ids: string[] = [];
 
-  for (const pack of packs) {
-    registerExternalPack(pack);
+  for (const { pack, entryPath, fingerprint } of loaded) {
+    registerExternalPack(pack, { entryPath, fingerprint });
     ids.push(pack.id);
   }
 

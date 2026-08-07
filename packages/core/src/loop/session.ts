@@ -754,6 +754,12 @@ function makeAutoGateRunner(
   const state = { active: true };
   const runner: IGate = {
     async run(cwd, opts) {
+      // F19: external plugins are frozen at session start; a mid-session edit of
+      // a workspace plugin must hard-fail the gate rather than weaken rules.
+      const { assertExternalPacksFrozen } = await import("../rule-packs");
+
+      await assertExternalPacksFrozen();
+
       if (state.active) {
         const r = await resolve();
 

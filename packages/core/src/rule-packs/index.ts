@@ -65,14 +65,64 @@ function isRulePackId(id: unknown): id is IRulePackId {
  *  buildPackEslintConfig. */
 const EXTERNAL_PACKS = new Map<string, IRulePack>();
 
-/** Register an external rule pack so its id resolves in buildPackEslintConfig. */
-export function registerExternalPack(pack: IRulePack): void {
+/** Content fingerprint captured at load for each external pack (audit F19). */
+const EXTERNAL_FINGERPRINTS = new Map<
+  string,
+  { readonly entryPath: string; readonly fingerprint: string }
+>();
+
+/** Metadata required to freeze an external pack against mid-session edits. */
+export interface IExternalPackFreeze {
+  /** Absolute path of the plugin entry module that was loaded. */
+  readonly entryPath: string;
+  /** SHA-256 hex of the entry + relative import graph at load time. */
+  readonly fingerprint: string;
+}
+
+/** Register an external rule pack so its id resolves in buildPackEslintConfig.
+ *  `freeze` pins the on-disk content that produced this pack; without it the
+ *  pack still resolves but drift checks cannot guard it. */
+export function registerExternalPack(
+  pack: IRulePack,
+  freeze?: IExternalPackFreeze
+): void {
   EXTERNAL_PACKS.set(pack.id, pack);
+
+  if (freeze !== undefined) {
+    EXTERNAL_FINGERPRINTS.set(pack.id, freeze);
+  }
 }
 
 /** Drop all registered external packs (used by tests for isolation). */
 export function clearExternalPacks(): void {
   EXTERNAL_PACKS.clear();
+  EXTERNAL_FINGERPRINTS.clear();
+}
+
+/**
+ * Re-hash every registered external plugin entry and throw if any on-disk
+ * content no longer matches the fingerprint captured at load. A workspace
+ * plugin edited mid-session must hard-fail rather than silently weaken rules
+ * under the same pack id.
+ */
+export async function assertExternalPacksFrozen(): Promise<void> {
+  if (EXTERNAL_FINGERPRINTS.size === 0) {
+    return;
+  }
+
+  const { fingerprintPluginEntry } =
+    await import("../config/plugin-fingerprint");
+
+  for (const [id, meta] of EXTERNAL_FINGERPRINTS) {
+    const now = await fingerprintPluginEntry(meta.entryPath);
+
+    if (now !== meta.fingerprint) {
+      throw new Error(
+        `tsforge: external plugin pack '${id}' changed on disk since load (${meta.entryPath}). ` +
+          `Refusing to run with drifted plugin content — restart the session after intentional plugin edits.`
+      );
+    }
+  }
 }
 
 /** Resolve a pack id to its definition, built-ins first, then external packs. */
