@@ -10,7 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import {
   dirname,
   extname,
@@ -38,9 +38,12 @@ const CODE_EXT = new Set([
   ".cts",
 ]);
 
-/** Relative import/require/export-from specs only (`.` or `..`). */
+/** Relative import/require/export-from specs only (`.` or `..`). The bare
+ *  `import "./x"` form binds no names, so it never reaches the `from` branch —
+ *  and a side-effect module is exactly where content that changes rule behavior
+ *  without changing an export can hide. */
 const RELATIVE_SPEC =
-  /(?:from\s+|import\s*\(|require\s*\()\s*['"](\.[^'"]+)['"]/gu;
+  /(?:from\s+|import\s*\(|require\s*\(|import\s+)\s*['"](\.[^'"]+)['"]/gu;
 
 function isUnderRoot(file: string, root: string): boolean {
   const rel = relative(root, file);
@@ -90,7 +93,21 @@ function collectRelativeSpecs(source: string): string[] {
 export async function fingerprintPluginEntry(
   entryPath: string
 ): Promise<string> {
-  const entry = normalize(resolve(entryPath));
+  // realpath, not the lexical path: Node resolves a plugin's relative imports
+  // against the entry's REAL directory, so a symlinked entry walked lexically
+  // finds none of its dependencies and pins the entry file alone. It also makes
+  // an unreadable entry fail HERE — a digest over zero files is a constant, so
+  // every unpinnable plugin would share one and never register drift.
+  const entry = await realpath(normalize(resolve(entryPath))).catch(
+    () => undefined
+  );
+
+  if (entry === undefined) {
+    throw new Error(
+      `tsforge: cannot fingerprint plugin entry '${entryPath}' — refusing to register a plugin whose content cannot be pinned.`
+    );
+  }
+
   const root = dirname(entry);
   const hash = createHash("sha256");
   const queue: string[] = [entry];
@@ -118,8 +135,9 @@ export async function fingerprintPluginEntry(
     try {
       source = await readFile(file, "utf8");
     } catch {
-      // Missing optional resolution candidates are skipped; the entry itself
-      // failing to read surfaces as an empty contribution (load will fail later).
+      // Only extension/index candidates reach here — `candidatePaths` speculates
+      // several spellings per specifier and at most one exists. The entry itself
+      // was proven readable above.
       continue;
     }
 
@@ -139,6 +157,16 @@ export async function fingerprintPluginEntry(
         }
       }
     }
+  }
+
+  // The loop stops on an empty queue OR a cap, so leftovers mean a cap cut the
+  // walk short. Hashing that prefix would leave every file past the cut unpinned
+  // and freely editable under the same digest — fail closed instead of pretending
+  // the graph is frozen.
+  if (queue.length > 0) {
+    throw new Error(
+      `tsforge: plugin '${entry}' exceeds the freeze limit (${String(MAX_FILES)} files / ${String(MAX_BYTES)} bytes) — its content cannot be pinned. Split the plugin or ship it as a package.`
+    );
   }
 
   hash.update(`files:${String(files)}`);

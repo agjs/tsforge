@@ -26,10 +26,20 @@ export function freezeRulePack(pack: IRulePack): IRulePack {
     rulesConfig[name] = severity;
   }
 
+  const rules: Record<string, IRulePack["rules"][string]> = {};
+
+  // Freeze each rule MODULE, not just the key set: a plugin that keeps a
+  // reference to its own exported rule could otherwise replace `create` with a
+  // no-op after registration. The disk never changes, so the content fingerprint
+  // cannot see that one — only the freeze can.
+  for (const [name, rule] of Object.entries(pack.rules)) {
+    rules[name] = Object.freeze(rule);
+  }
+
   return Object.freeze({
     id: pack.id,
     description: pack.description,
-    rules: Object.freeze({ ...pack.rules }),
+    rules: Object.freeze(rules),
     rulesConfig: Object.freeze(rulesConfig),
   });
 }
@@ -151,6 +161,18 @@ export async function loadExternalPacks(
     try {
       fingerprint = await fingerprintPluginEntry(entryPath);
       mod = await import(specifier);
+
+      // Re-hash AFTER the module body ran. Content swapped in that window is
+      // EXECUTED while the stored digest describes bytes that were never loaded —
+      // and a plugin can do the swapping itself, at import. Every later check
+      // would then compare against a phantom, so refuse the plugin outright.
+      if ((await fingerprintPluginEntry(entryPath)) !== fingerprint) {
+        report(
+          `plugin '${plugin.path}' changed while loading — refusing to register it`
+        );
+
+        continue;
+      }
     } catch (err) {
       report(`plugin '${plugin.path}' failed to load: ${errMessage(err)}`);
 

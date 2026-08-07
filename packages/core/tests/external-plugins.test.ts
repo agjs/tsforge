@@ -1,6 +1,6 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   parsePlugins,
@@ -10,13 +10,24 @@ import {
   freezeRulePack,
 } from "../src/config/external-plugins";
 import { fingerprintPluginEntry } from "../src/config/plugin-fingerprint";
+import { createRule } from "../src/rule-packs/create-rule";
 import {
   assertExternalPacksFrozen,
   buildPackEslintConfig,
   clearExternalPacks,
 } from "../src/rule-packs";
+import { ExternalPackDriftError } from "../src/rule-packs/drift-error";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "external-pack.ts");
+
+/** Smallest valid pack — enough to register and fingerprint. */
+const MINIMAL_PACK = `export const pack = {
+  id: "gone-pack",
+  description: "d",
+  rules: {},
+  rulesConfig: {},
+};
+`;
 
 afterEach(() => {
   clearExternalPacks();
@@ -192,6 +203,153 @@ describe("external-plugins: content freeze (F19)", () => {
 
     await expect(assertExternalPacksFrozen()).rejects.toThrow(
       /changed on disk/
+    );
+  });
+
+  test("a plugin deleted mid-session fails the freeze check", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-gone-"));
+    const entry = join(dir, "plugin.ts");
+
+    await writeFile(entry, MINIMAL_PACK);
+    await loadAndRegisterPlugins(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      () => undefined
+    );
+    await rm(entry);
+
+    // Re-verification that cannot be performed is a drift, not a pass: an
+    // unreadable entry must never resolve to "unchanged".
+    await expect(assertExternalPacksFrozen()).rejects.toThrow(
+      ExternalPackDriftError
+    );
+  });
+
+  test("freezeRulePack freezes each rule module so create cannot be swapped", () => {
+    const rule = createRule<[], "noFoo">({
+      name: "no-foo",
+      meta: {
+        type: "problem",
+        docs: { description: "d" },
+        schema: [],
+        messages: { noFoo: "no foo" },
+      },
+      defaultOptions: [],
+      create: () => ({}),
+    });
+    const frozen = freezeRulePack({
+      id: "x",
+      description: "d",
+      rules: { r: rule },
+      rulesConfig: { r: "error" },
+    });
+
+    // A plugin keeping a reference to its own exported rule must not be able to
+    // neuter it after registration — the disk never changes, so the fingerprint
+    // cannot catch this one. Freezing the key set alone leaves `create` writable.
+    expect(Object.isFrozen(frozen.rules.r)).toBe(true);
+    expect(() => {
+      rule.create = () => ({});
+    }).toThrow(TypeError);
+  });
+});
+
+describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
+  test("an unreadable entry throws instead of returning a digest over nothing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-missing-"));
+
+    // Reachable in normal use: a config path without an extension resolves to a
+    // path `import` can load but `readFile` cannot. A digest over zero files is
+    // a constant, so every such plugin would share it and never register drift.
+    await expect(fingerprintPluginEntry(join(dir, "nope.ts"))).rejects.toThrow(
+      /cannot fingerprint/
+    );
+  });
+
+  test("an import graph past the freeze cap throws instead of hashing a prefix", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-huge-"));
+    const deps: string[] = [];
+
+    for (let i = 0; i < 80; i += 1) {
+      const name = `dep${String(i)}`;
+
+      deps.push(name);
+      await writeFile(join(dir, `${name}.ts`), `export const n = 1;\n`);
+    }
+
+    await writeFile(
+      join(dir, "index.ts"),
+      `${deps.map((d) => `export { n as n_${d} } from "./${d}";`).join("\n")}\n`
+    );
+
+    // Silent truncation would fingerprint an arbitrary prefix of the graph, so
+    // every edit past the cut would pass the freeze.
+    await expect(fingerprintPluginEntry(join(dir, "index.ts"))).rejects.toThrow(
+      /exceeds the freeze limit/
+    );
+  });
+
+  test("a side-effect import is part of the frozen graph", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-sidefx-"));
+    const dep = join(dir, "dep.ts");
+    const entry = join(dir, "index.ts");
+
+    await writeFile(dep, "globalThis.installed = 1;\n");
+    // `import "./dep"` binds no names, so a specifier scan keyed on `from` misses
+    // it — yet the file runs, and rule behavior can live entirely inside it.
+    await writeFile(entry, `import "./dep";\nexport const v = 1;\n`);
+
+    const before = await fingerprintPluginEntry(entry);
+
+    await writeFile(dep, "globalThis.installed = 2;\n");
+
+    expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
+  test("a symlinked entry fingerprints the real dependency graph", async () => {
+    const real = await mkdtemp(join(tmpdir(), "tsforge-plugin-real-"));
+    const link = await mkdtemp(join(tmpdir(), "tsforge-plugin-link-"));
+    const dep = join(real, "dep.ts");
+    const entry = join(link, "plugin.ts");
+
+    await writeFile(dep, "export const n = 1;\n");
+    await writeFile(
+      join(real, "plugin.ts"),
+      `import { n } from "./dep";\nexport const v = n;\n`
+    );
+    await symlink(join(real, "plugin.ts"), entry);
+
+    const before = await fingerprintPluginEntry(entry);
+
+    // Node resolves the plugin's relative imports against the REAL directory; a
+    // lexical walk misses the whole graph and silently pins the entry alone.
+    await writeFile(dep, "export const n = 2;\n");
+
+    expect(await fingerprintPluginEntry(entry)).not.toBe(before);
+  });
+
+  test("a plugin that rewrites itself during import is refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-toctou-"));
+    const entry = join(dir, "plugin.ts");
+    const messages: string[] = [];
+
+    // Content swapped between fingerprint and import executes while the stored
+    // digest describes bytes that were never loaded.
+    await writeFile(
+      entry,
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(entry)}, "export const pack = { id: 'toctou', description: 'swapped', rules: {}, rulesConfig: {} };\\n");
+export const pack = { id: "toctou", description: "original", rules: {}, rulesConfig: {} };
+`
+    );
+
+    const packs = await loadExternalPacks([{ path: entry }], dir, (m) =>
+      messages.push(m)
+    );
+
+    expect(packs).toHaveLength(0);
+    expect(messages.some((m) => m.includes("changed while loading"))).toBe(
+      true
     );
   });
 });

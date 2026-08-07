@@ -46,6 +46,17 @@ export function makeFileLinter(
   let engine: ESLint | null = null;
 
   return async (absPath) => {
+    // F19: refuse to lint with external packs whose on-disk content drifted since
+    // load. OUTSIDE the try (the catch below turns any throw into "no findings",
+    // which would report the file clean under rules that are no longer loaded) and
+    // OUTSIDE the engine-construction branch (that runs once; every later write
+    // would skip the check — exactly the mid-session window this guards).
+    if (packIds !== undefined && packIds.length > 0) {
+      const { assertExternalPacksFrozen } = await import("../rule-packs/index");
+
+      await assertExternalPacksFrozen();
+    }
+
     try {
       if (engine === null) {
         interface IEslintOptions {
@@ -82,12 +93,7 @@ export function makeFileLinter(
 
         // Add pack rules if provided
         if (packIds !== undefined && packIds.length > 0) {
-          const { assertExternalPacksFrozen, buildPackEslintConfig } =
-            await import("../rule-packs/index");
-
-          // F19: refuse to lint with external packs whose on-disk content drifted
-          // since load (a workspace plugin must not silently weaken mid-session).
-          await assertExternalPacksFrozen();
+          const { buildPackEslintConfig } = await import("../rule-packs/index");
 
           const { plugin, rules } = buildPackEslintConfig(
             packIds,
