@@ -21,6 +21,9 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
       list.reduce((acc, r) => acc + select(r), 0);
     const scored = list.filter((r) => r.quality !== undefined);
     const sized = list.filter((r) => r.loc !== undefined);
+    // Only runs whose endpoint reported a cache figure. Averaging in the silent
+    // ones as 0 would report a cold prefix for a server that never said.
+    const cached = list.filter((r) => r.cacheHitRate !== undefined);
     // Turns-to-green only counts runs that actually reached green — averaging in
     // failed runs' (capped) turn counts would muddy the loop-efficiency signal.
     const green = list.filter((r) => r.passed);
@@ -53,6 +56,11 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
         sized.length > 0
           ? sized.reduce((acc, r) => acc + (r.loc ?? 0), 0) / sized.length
           : 0,
+      avgCacheHitRate:
+        cached.length > 0
+          ? cached.reduce((acc, r) => acc + (r.cacheHitRate ?? 0), 0) /
+            cached.length
+          : null,
       failureClasses,
     });
   }

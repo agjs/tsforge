@@ -124,11 +124,20 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
     acc.tpsCount += 1;
   }
 
+  // Bounded PER CALL, not just on the final quotient. A call carrying cached
+  // tokens with a zero-token prompt would otherwise add to the numerator and
+  // nothing to the denominator, letting one over-reporting call mask genuine
+  // misses on every other call in the run — the final clamp cannot undo that,
+  // because by then the misses are already gone.
   if (
     event.cachedPromptTokens !== undefined &&
-    event.promptTokens !== undefined
+    event.promptTokens !== undefined &&
+    event.promptTokens > 0
   ) {
-    acc.cachedTokens += event.cachedPromptTokens;
+    acc.cachedTokens += Math.min(
+      Math.max(0, event.cachedPromptTokens),
+      event.promptTokens
+    );
     acc.cachedOfPrompt += event.promptTokens;
   }
 }

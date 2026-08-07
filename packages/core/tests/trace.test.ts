@@ -321,3 +321,27 @@ describe("trace formatter", () => {
     expect(out).toContain("high");
   });
 });
+
+test("the trace summary states prefix-cache reuse, and '—' when unreported", () => {
+  const base: ILoopEvent[] = [
+    { kind: "start", task: "1", message: "", model: "m", contextWindow: 8000 },
+    { kind: "cycle", task: "1", message: "", cycle: 1 },
+  ];
+  const usage = (cached?: number): ILoopEvent => ({
+    kind: "usage",
+    task: "1",
+    message: "",
+    promptTokens: 1000,
+    completionTokens: 10,
+    totalTokens: 1010,
+    ...(cached === undefined ? {} : { cachedPromptTokens: cached }),
+  });
+
+  expect(formatTrace([...base, usage(900)])).toContain("90% of prompt reused");
+  // A server that never reports must not read as a cold prefix: 0% is the
+  // harness having broken its own prompt prefix, which is a bug to go find.
+  const silent = formatTrace([...base, usage()]);
+
+  expect(silent).toContain("prefix cache");
+  expect(silent).not.toContain("0% of prompt reused");
+});

@@ -304,3 +304,21 @@ test("the log line clamps a backend that over-reports its cache", () => {
 
   expect(e.message).toContain("500 cached (100%)");
 });
+
+test("cached tokens against a zero-token prompt is 'unknown', not 0%", () => {
+  // parseUsage defaults a missing prompt_tokens to 0, so a server can report
+  // cached tokens with no prompt. That is incoherent, not cold — and 0% is the
+  // reserved reading for a prefix the harness broke.
+  const e = usageEvent({
+    task: "t",
+    usage: {
+      promptTokens: 0,
+      completionTokens: 5,
+      totalTokens: 5,
+      cachedPromptTokens: 40,
+    },
+  });
+
+  expect(e.message).toContain("share unknown");
+  expect(e.message).not.toContain("(0%)");
+});

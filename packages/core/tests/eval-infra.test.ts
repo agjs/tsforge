@@ -7,6 +7,7 @@ import {
   renderSweepReportMarkdown,
   wilsonInterval,
   twoProportionZ,
+  summarize,
 } from "../src/eval";
 
 function rec(label: string, passed: boolean): IRunRecord {
@@ -196,5 +197,86 @@ describe("eval metrics: cache rate survives a server's bad arithmetic", () => {
   test("a reporting call with a zero-token prompt is not read as silence", () => {
     // Degenerate, but it must not masquerade as "endpoint doesn't report".
     expect(analyzeEvents([usage(0, 0)]).cacheHitRate).toBeNull();
+  });
+});
+
+describe("eval summary: cache hit rate per variant", () => {
+  function run(label: string, cacheHitRate?: number): IRunRecord {
+    return {
+      label,
+      passed: true,
+      cycles: 3,
+      ms: 1000,
+      ...(cacheHitRate === undefined ? {} : { cacheHitRate }),
+    };
+  }
+
+  test("averages only the runs whose endpoint reported a figure", () => {
+    // The silent run must not enter as 0 and halve the variant's rate.
+    const [s] = summarize([run("a", 0.9), run("a")]);
+
+    expect(s?.avgCacheHitRate).toBeCloseTo(0.9, 6);
+  });
+
+  test("is null when no run in the variant reported one", () => {
+    const [s] = summarize([run("a"), run("a")]);
+
+    expect(s?.avgCacheHitRate).toBeNull();
+  });
+});
+
+describe("eval metrics: one bad call cannot mask the rest of the run", () => {
+  test("a cached-but-promptless call neither counts nor hides real misses", () => {
+    // Unclamped, this call added 5000 to the numerator and nothing to the
+    // denominator, so the run reported full reuse while the other call missed
+    // entirely.
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 0,
+        completionTokens: 1,
+        totalTokens: 1,
+        cachedPromptTokens: 5000,
+      },
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 1000,
+        completionTokens: 10,
+        totalTokens: 1010,
+        cachedPromptTokens: 0,
+      },
+    ]);
+
+    expect(m.cacheHitRate).toBe(0);
+  });
+
+  test("a single over-reporting call is capped at its own prompt", () => {
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 100,
+        completionTokens: 1,
+        totalTokens: 101,
+        cachedPromptTokens: 100000,
+      },
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 100,
+        completionTokens: 1,
+        totalTokens: 101,
+        cachedPromptTokens: 0,
+      },
+    ]);
+
+    // Capped per call → 100 of 200, not "everything was a hit".
+    expect(m.cacheHitRate).toBeCloseTo(0.5, 6);
   });
 });

@@ -190,10 +190,17 @@ function cacheSuffix(usage: ITokenUsage): string {
   // reporting more cached tokens than prompt tokens would otherwise print
   // "500%" here while the aggregate quietly capped at 1 — one bad server, two
   // different stories, and the log is where someone goes to check the other.
-  const pct =
-    usage.promptTokens > 0
-      ? Math.round(clampRatio(cached / usage.promptTokens) * 100)
-      : 0;
+  //
+  // A zero-token prompt yields no share at all rather than "0%": 0% is the
+  // reserved "the prefix went cold" reading, and a server that reported cached
+  // tokens against no prompt has told us something incoherent, not something
+  // cold.
+  const share =
+    usage.promptTokens > 0 ? clampRatio(cached / usage.promptTokens) : null;
 
-  return ` · ${String(cached)} cached (${String(pct)}%)`;
+  if (share === null) {
+    return ` · ${String(cached)} cached (share unknown)`;
+  }
+
+  return ` · ${String(cached)} cached (${String(Math.round(share * 100))}%)`;
 }

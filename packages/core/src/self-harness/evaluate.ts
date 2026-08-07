@@ -19,6 +19,7 @@ import { runAccept, parserFor } from "../validate";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
 import {
+  analyzeEvents,
   classifyRun,
   countTaskLoc,
   judge,
@@ -494,6 +495,12 @@ async function runTaskOnce(
       ? runProgress(0, 0, passed)
       : runProgress(startErrors, endErrors, passed);
 
+  // Cost, alongside outcome: an edit can lift `progress` while wrecking prompt
+  // reuse, and that belongs in the same comparison rather than surfacing later
+  // as unexplained wall-clock. Null (endpoint never reported) is omitted, so it
+  // is skipped in the mean rather than read as a cold prefix.
+  const cacheHitRate = analyzeEvents(events).cacheHitRate;
+
   return {
     record: {
       label: taskId,
@@ -503,6 +510,7 @@ async function runTaskOnce(
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
+      ...(cacheHitRate === null ? {} : { cacheHitRate }),
       progress,
     },
     run: {
