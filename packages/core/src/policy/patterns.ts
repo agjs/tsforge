@@ -67,6 +67,13 @@ const STDBUF_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--error",
 ]);
 
+const TIME_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-o",
+  "--output",
+  "-f",
+  "--format",
+]);
+
 const EXEC_VALUE_FLAGS: ReadonlySet<string> = new Set(["-a"]);
 const NO_VALUE_FLAGS: ReadonlySet<string> = new Set();
 
@@ -200,6 +207,8 @@ function wrappedCommandIndex(
     valueFlags = NICE_VALUE_FLAGS;
   } else if (wrapper === "stdbuf") {
     valueFlags = STDBUF_VALUE_FLAGS;
+  } else if (wrapper === "time") {
+    valueFlags = TIME_VALUE_FLAGS;
   } else if (wrapper === "exec") {
     valueFlags = EXEC_VALUE_FLAGS;
   }

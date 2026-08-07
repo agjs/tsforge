@@ -218,6 +218,10 @@ describe("destructive-shell detection", () => {
       "nice --adjustment 5 rm -rf /",
       "stdbuf --output L rm -rf /",
       "timeout --kill-after=1 10 rm -rf /",
+      "/usr/bin/time -o timing.log rm -rf /",
+      "/usr/bin/time --output=timing.log rm -rf /",
+      "time -f '%E' rm -rf /",
+      "timeout 10 time --format '%E' rm -rf /",
       "find . | xargs --max-args=1 rm -rf /",
     ];
 
@@ -235,6 +239,8 @@ describe("destructive-shell detection", () => {
       "nice --adjustment 5 bun test",
       "stdbuf --output L bun test",
       "timeout --kill-after=1 10 bun test",
+      "/usr/bin/time -o timing.log bun test",
+      "time --format '%E' bun test",
       "find . | xargs --max-args=1 grep TODO",
     ];
 
