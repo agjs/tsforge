@@ -169,3 +169,32 @@ describe("eval metrics: prefix-cache hit rate", () => {
     expect(m.cacheHitRate).toBeCloseTo(0.9, 6);
   });
 });
+
+describe("eval metrics: cache rate survives a server's bad arithmetic", () => {
+  function usage(promptTokens: number, cached: number): ILoopEvent {
+    return {
+      kind: "usage",
+      task: "1",
+      message: "",
+      promptTokens,
+      completionTokens: 10,
+      totalTokens: promptTokens + 10,
+      cachedPromptTokens: cached,
+    };
+  }
+
+  test("clamps a backend claiming more cached tokens than prompt tokens", () => {
+    // parseUsage takes any JSON number at face value, so an out-of-range rate
+    // would otherwise reach the self-harness, which compares it as a ratio.
+    expect(analyzeEvents([usage(100, 500)]).cacheHitRate).toBe(1);
+  });
+
+  test("clamps a negative cache count to zero", () => {
+    expect(analyzeEvents([usage(100, -50)]).cacheHitRate).toBe(0);
+  });
+
+  test("a reporting call with a zero-token prompt is not read as silence", () => {
+    // Degenerate, but it must not masquerade as "endpoint doesn't report".
+    expect(analyzeEvents([usage(0, 0)]).cacheHitRate).toBeNull();
+  });
+});

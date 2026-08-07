@@ -1,5 +1,17 @@
 import type { IModelResponse, IProvider } from "../src/inference";
 
+/** A `typeof fetch` that answers every call with a freshly built response.
+ *
+ *  Composed with `Object.assign` rather than cast: Bun's `typeof fetch` also
+ *  carries `preconnect`, so a bare async function does not satisfy it — and the
+ *  house rule forbids the `as unknown as typeof fetch` shortcut. A factory, not
+ *  a value, because a `Response` body can only be consumed once. */
+export function fetchReturning(make: () => Response): typeof fetch {
+  const impl = async (): Promise<Response> => make();
+
+  return Object.assign(impl, { preconnect: globalThis.fetch.preconnect });
+}
+
 /** A provider that replays a scripted sequence of responses, one per turn
  *  (repeating the last once exhausted). For driving the agentic loop in tests. */
 export function scripted(steps: IModelResponse[]): IProvider {

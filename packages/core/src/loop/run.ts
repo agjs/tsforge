@@ -709,7 +709,19 @@ async function runMainLoop(args: {
     // builds — did not, so a build log carried no token record at all and a
     // collapsing prefix-cache ratio had nowhere to show up.
     if (res.usage !== undefined) {
-      args.report(usageEvent({ task: args.taskId, usage: res.usage }));
+      args.report(
+        usageEvent({
+          task: args.taskId,
+          usage: res.usage,
+          // Carried so malformed-tool-call rate stays correlatable with the
+          // thinking mode (analyze-malformed) on the headless path too — the
+          // whole point of one shared builder is that neither loop logs less
+          // than the other.
+          ...(args.enableThinking === undefined
+            ? {}
+            : { thinking: args.enableThinking }),
+        })
+      );
     }
 
     // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)

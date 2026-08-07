@@ -271,3 +271,20 @@ describe("usageEvent (one shape for both loops)", () => {
     expect(usageEvent({ task: "t", usage }).thinking).toBeUndefined();
   });
 });
+
+describe("usageEvent: measured-at-zero is not unmeasured", () => {
+  const usage = {
+    promptTokens: 10,
+    completionTokens: 5,
+    totalTokens: 15,
+  };
+
+  test("a supplied genMs of 0 still reports a rate of 0", () => {
+    // Dropping the field here would silently remove sub-millisecond calls from
+    // the rate metrics; only an UNMEASURED call may omit it.
+    const e = usageEvent({ task: "t", usage, genMs: 0 });
+
+    expect(e.tokensPerSecond).toBe(0);
+    expect(e.message).toContain("0 tok/s");
+  });
+});

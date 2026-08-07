@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { parseResponse, toWire } from "../src/inference/wire";
+import { fetchReturning } from "./stub-provider";
 
 function okResponse(): Response {
   return new Response(
@@ -600,19 +601,22 @@ test("a body with no choices and no error is still an empty response", () => {
   expect(parseResponse({ id: "x" }).content).toBe("");
 });
 
-/** One non-streaming response carrying `usage`, so a test can assert what the
- *  wire made of a server's token accounting. */
+/** A provider whose one non-streaming response carries the given `usage` block,
+ *  so a test can assert what the wire made of a server's token accounting. */
 function providerReporting(usage: Record<string, unknown>) {
-  const f = (async () =>
-    new Response(
-      JSON.stringify({ choices: [{ message: { content: "ok" } }], usage }),
-      { status: 200 }
-    )) as unknown as typeof fetch;
-
   return new OpenAICompatibleProvider({
     baseUrl: "http://x/v1",
     model: "m",
-    fetch: f,
+    fetch: fetchReturning(
+      () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "ok" } }],
+            usage,
+          }),
+          { status: 200 }
+        )
+    ),
   });
 }
 

@@ -134,10 +134,7 @@ export function usageEvent(args: {
   thinking?: boolean;
 }): ILoopEvent {
   const { task, usage, genMs, thinking } = args;
-  const tps =
-    genMs !== undefined && genMs > 0
-      ? Math.round((usage.completionTokens / genMs) * 1000)
-      : undefined;
+  const tps = generationRate(usage.completionTokens, genMs);
   const rate = tps === undefined ? "" : ` · ${String(tps)} tok/s`;
 
   return {
@@ -154,6 +151,26 @@ export function usageEvent(args: {
     ...(genMs === undefined ? {} : { ms: Math.round(genMs) }),
     ...(thinking === undefined ? {} : { thinking }),
   };
+}
+
+/**
+ * Completion tokens per second, or undefined when no generation time was
+ * measured at all.
+ *
+ * An UNMEASURED call and a call measured at zero elapsed are different, and only
+ * the first may drop the field: a caller that supplies a time always gets a
+ * number, so a sub-millisecond call still reports `0 tok/s` rather than
+ * silently losing its rate from the metrics.
+ */
+function generationRate(
+  completionTokens: number,
+  genMs: number | undefined
+): number | undefined {
+  if (genMs === undefined) {
+    return undefined;
+  }
+
+  return genMs > 0 ? Math.round((completionTokens / genMs) * 1000) : 0;
 }
 
 /** ` · 4096 cached (80%)` when the server reported prefix-cache hits, and NOTHING

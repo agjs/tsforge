@@ -105,9 +105,12 @@ interface IAccum {
   tpsSum: number;
   tpsCount: number;
   /** Cache-hit and prompt totals over ONLY the calls that reported a cache
-   *  figure, so silent calls never dilute the ratio. */
+   *  figure, so silent calls never dilute the ratio. `cacheReports` counts those
+   *  calls, so "nobody reported" stays distinct from "reporters all had a
+   *  zero-token prompt" — a zero denominator would otherwise read as silence. */
   cachedTokens: number;
   cachedOfPrompt: number;
+  cacheReports: number;
   wallMs: number;
   created: Set<string>;
 }
@@ -127,6 +130,7 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
     event.cachedPromptTokens !== undefined &&
     event.promptTokens !== undefined
   ) {
+    acc.cacheReports += 1;
     acc.cachedTokens += event.cachedPromptTokens;
     acc.cachedOfPrompt += event.promptTokens;
   }
@@ -180,6 +184,26 @@ function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   }
 }
 
+/**
+ * The run's prefix-cache hit rate, or null when nothing reported one.
+ *
+ * Keyed on whether any call REPORTED, not on the denominator being positive:
+ * those differ when a reporting call carries a zero-token prompt, and reading
+ * that as silence would hide a server we can in fact see.
+ *
+ * Clamped to [0,1] because the inputs are a remote server's self-report, which
+ * `parseUsage` takes at face value (any JSON number). A backend that reports
+ * more cached tokens than prompt tokens — or a negative count — must not put an
+ * out-of-range rate into a comparison the self-harness treats as a ratio.
+ */
+function cacheHitRate(acc: IAccum): number | null {
+  if (acc.cacheReports === 0 || acc.cachedOfPrompt <= 0) {
+    return null;
+  }
+
+  return Math.min(1, Math.max(0, acc.cachedTokens / acc.cachedOfPrompt));
+}
+
 /** Reduce a run's event stream to its behavioral metrics. Pure — feed it the
  *  events from a `--log` JSONL or a captured `onEvent` stream. */
 export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
@@ -191,6 +215,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
     tpsCount: 0,
     cachedTokens: 0,
     cachedOfPrompt: 0,
+    cacheReports: 0,
     wallMs: 0,
     created: new Set(),
   };
@@ -208,9 +233,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
     netAccepted > 0 ? Math.round(m.tokensOut / netAccepted) : 0;
   m.avgTokensPerSecond =
     acc.tpsCount > 0 ? Math.round(acc.tpsSum / acc.tpsCount) : 0;
-  // Null, not 0, when no call reported a cache figure — see IRunMetrics.
-  m.cacheHitRate =
-    acc.cachedOfPrompt > 0 ? acc.cachedTokens / acc.cachedOfPrompt : null;
+  m.cacheHitRate = cacheHitRate(acc);
   m.wallClockSeconds = Math.round(acc.wallMs / 1000);
   m.failureClass = classifyRun(events).failureClass;
 

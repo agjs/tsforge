@@ -166,3 +166,32 @@ test("the build loop logs per-call token usage, including prefix-cache hits", as
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("the build loop's usage record carries this call's thinking mode", async () => {
+  const dir = await tmp();
+
+  try {
+    // The point of one shared usageEvent() is that neither loop logs less than
+    // the other; the headless side originally dropped `thinking`, which is what
+    // analyze-malformed correlates malformed-tool-call rate against.
+    const withUsage = {
+      ...runStep("echo x > fixed.txt"),
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 },
+    };
+    const events: ILoopEvent[] = [];
+
+    await runTask(
+      { id: "1", accept: "test -f fixed.txt", files: [] },
+      dir,
+      scripted([withUsage, STOP]),
+      { onEvent: (e) => events.push(e), enableThinking: true }
+    );
+
+    const usage = events.filter((e) => e.kind === "usage");
+
+    expect(usage.length).toBeGreaterThan(0);
+    expect(usage[0]?.thinking).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
