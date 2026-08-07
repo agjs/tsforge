@@ -129,9 +129,17 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   // nothing to the denominator, letting one over-reporting call mask genuine
   // misses on every other call in the run — the final clamp cannot undo that,
   // because by then the misses are already gone.
+  //
+  // BOTH sides must be finite, not just the cached count. `parseUsage` accepts
+  // any JSON number and `JSON.parse("1e999")` is Infinity, so a single call
+  // reporting a non-finite prompt size would carry the denominator to Infinity
+  // and drive the whole run's rate to 0 — the reading reserved for a prefix the
+  // harness broke. An incoherent call contributes nothing instead.
   if (
     event.cachedPromptTokens !== undefined &&
     event.promptTokens !== undefined &&
+    Number.isFinite(event.promptTokens) &&
+    Number.isFinite(event.cachedPromptTokens) &&
     event.promptTokens > 0
   ) {
     acc.cachedTokens += Math.min(

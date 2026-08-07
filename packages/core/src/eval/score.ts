@@ -23,6 +23,12 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
     const sized = list.filter((r) => r.loc !== undefined);
     // Only runs whose endpoint reported a cache figure. Averaging in the silent
     // ones as 0 would report a cold prefix for a server that never said.
+    //
+    // Each RUN counts once, deliberately — unlike the within-run figure, which is
+    // token-weighted. A variant's cache behaviour is a property of how it builds
+    // prompts, and token-weighting across runs would let its single longest run
+    // decide the number for the whole variant. Same reason `avgQuality` and
+    // `avgLoc` above are per-run means and not size-weighted.
     const cached = list.filter((r) => r.cacheHitRate !== undefined);
     // Turns-to-green only counts runs that actually reached green — averaging in
     // failed runs' (capped) turn counts would muddy the loop-efficiency signal.

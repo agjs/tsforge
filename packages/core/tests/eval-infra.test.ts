@@ -280,3 +280,68 @@ describe("eval metrics: one bad call cannot mask the rest of the run", () => {
     expect(m.cacheHitRate).toBeCloseTo(0.5, 6);
   });
 });
+
+describe("eval metrics: a non-finite prompt size cannot poison the run", () => {
+  test("a call reporting an infinite prompt is dropped, not averaged in", () => {
+    // JSON.parse('1e999') is Infinity and parseUsage accepts any JSON number.
+    // Unguarded, this call carried the denominator to Infinity and drove the
+    // whole run's rate to 0 — the reading reserved for a prefix the harness
+    // broke. The healthy call's 90% must survive it.
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: Number.POSITIVE_INFINITY,
+        completionTokens: 1,
+        totalTokens: 1,
+        cachedPromptTokens: 10,
+      },
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 1000,
+        completionTokens: 10,
+        totalTokens: 1010,
+        cachedPromptTokens: 900,
+      },
+    ]);
+
+    expect(m.cacheHitRate).toBeCloseTo(0.9, 6);
+  });
+
+  test("a call reporting an infinite cache count is dropped too", () => {
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "1",
+        message: "",
+        promptTokens: 1000,
+        completionTokens: 1,
+        totalTokens: 1001,
+        cachedPromptTokens: Number.POSITIVE_INFINITY,
+      },
+    ]);
+
+    // Nothing measurable was reported, so there is no rate — not 100%.
+    expect(m.cacheHitRate).toBeNull();
+  });
+});
+
+describe("sweep report: the cache column", () => {
+  test("renders the variant's cache share, and '—' when unreported", () => {
+    // The figure existed on IVariantSummary but the fixed-column table never
+    // showed it, so a sweep still couldn't see cost beside outcome.
+    const warm = buildSweepReport([
+      { label: "a", passed: true, cycles: 3, ms: 1, cacheHitRate: 0.94 },
+    ]);
+    const silent = buildSweepReport([
+      { label: "a", passed: true, cycles: 3, ms: 1 },
+    ]);
+
+    expect(renderSweepReportMarkdown(warm)).toContain("| Cache |");
+    expect(renderSweepReportMarkdown(warm)).toContain("94%");
+    expect(renderSweepReportMarkdown(silent)).toContain("| Cache |");
+  });
+});
