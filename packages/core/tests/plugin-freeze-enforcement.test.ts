@@ -122,6 +122,51 @@ describe("F19 enforcement: write guard", () => {
   });
 });
 
+describe("F19 enforcement: the write path end to end", () => {
+  test("a drift during a write stops the send instead of feeding it back", async () => {
+    const { cwd, drift } = await workspaceWithPlugin();
+    const events: ILoopEvent[] = [];
+
+    await writeFile(
+      join(cwd, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { strict: true },
+        include: ["**/*.ts"],
+      })
+    );
+
+    const session = await Session.create({
+      provider: scriptedModel([
+        {
+          toolCalls: [
+            call("create", { path: "b.ts", content: "export {};\n" }),
+          ],
+        },
+      ]),
+      cwd,
+      files: ["**/*.ts"],
+      accept: "true",
+      lintFile: makeFileLinter("core", cwd, ["freeze-pack"]),
+      report: (event) => events.push(event),
+    });
+
+    await drift();
+
+    // `runWriteGuard` rethrowing only matters if its callers pass it on. They
+    // are not in this diff, so the guarantee is theirs to prove: the send has to
+    // END on the drift, not swallow it and carry on writing files under rules
+    // that are no longer the ones that were loaded.
+    const result = await session.send("write b.ts");
+
+    expect(result.status).toBe("stuck");
+    expect(
+      events.some(
+        (e) => e.kind === "stuck" && e.message.includes("changed on disk")
+      )
+    ).toBe(true);
+  });
+});
+
 describe("F19 enforcement: command gate", () => {
   test("fails closed before running the accept command", async () => {
     const { cwd, drift } = await workspaceWithPlugin();

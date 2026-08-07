@@ -1,6 +1,13 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   parsePlugins,
@@ -147,10 +154,53 @@ export const pack = {
       () => undefined
     );
 
-    // ESLint reads `create` when it lints, long after load. That read has to
-    // return the implementation the pack was accepted with, not whatever the
-    // getter feels like answering by then.
-    expect(loaded?.pack.rules["no-foo"]?.create.name).toBe("enforcing");
+    // Read it TWICE. One read cannot tell a pinned value from a getter that
+    // simply had not been called yet — it would pass against the live object as
+    // long as the test happened to be the first reader. ESLint reads `create`
+    // whenever it lints, so what matters is that every read is the same
+    // implementation the pack was accepted with.
+    const rule = loaded?.pack.rules["no-foo"];
+
+    expect(rule?.create.name).toBe("enforcing");
+    expect(rule?.create.name).toBe("enforcing");
+  });
+
+  test("a rule that is a class instance is pinned like any other", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-class-"));
+    const entry = join(dir, "plugin.ts");
+
+    // Passing non-plain objects through untouched keeps their methods intact,
+    // but it also hands back the plugin's live object — and one `class` is all
+    // it takes to put a swapping accessor behind that door.
+    await writeFile(
+      entry,
+      `function enforcing() { return {}; }
+function neutered() { return {}; }
+class Rule {
+  constructor() { this.reads = 0; this.meta = { type: "problem", docs: { description: "d" }, schema: [], messages: { m: "m" } }; }
+  get create() {
+    this.reads += 1;
+    return this.reads === 1 ? enforcing : neutered;
+  }
+}
+export const pack = {
+  id: "class-pack",
+  description: "d",
+  rules: { "no-foo": new Rule() },
+  rulesConfig: { "no-foo": "error" },
+};
+`
+    );
+
+    const [loaded] = await loadExternalPacks(
+      [{ path: entry, packs: ["pack"] }],
+      dir,
+      () => undefined
+    );
+    const rule = loaded?.pack.rules["no-foo"];
+
+    expect(rule?.create.name).toBe("enforcing");
+    expect(rule?.create.name).toBe("enforcing");
   });
 
   test("a declared pack name that the module does not export fails the run", async () => {
@@ -226,6 +276,9 @@ export const pack = {
       () => undefined
     );
 
+    // Twice, for the same reason: a single read proves nothing about a value
+    // that is only unstable on the reads after the first.
+    expect(loaded?.pack.rulesConfig["no-foo"]).toBe("error");
     expect(loaded?.pack.rulesConfig["no-foo"]).toBe("error");
   });
 
@@ -691,7 +744,7 @@ describe("plugin-fingerprint: unpinnable content fails closed (F19)", () => {
     );
 
     expect(loaded?.pack.id).toBe("bare");
-    expect(loaded?.entryPath).toBe(join(pkg, "index.ts"));
+    expect(loaded?.entryPath).toBe(await realpath(join(pkg, "index.ts")));
   });
 
   test("a plugin refused for rewriting itself stays refused after a revert", async () => {
@@ -740,6 +793,34 @@ export const pack = { id: "throwhash", description: "d", rules: {}, rulesConfig:
 
     const messages: string[] = [];
     const loaded = await loadExternalPacks([{ path: entry }], dir, (m) =>
+      messages.push(m)
+    );
+
+    expect(loaded).toHaveLength(0);
+    expect(messages.some((m) => m.includes("restart"))).toBe(true);
+  });
+
+  test("a refusal follows the entry, not the spelling of its path", async () => {
+    const real = await mkdtemp(join(tmpdir(), "tsforge-plugin-spell-real-"));
+    const link = await mkdtemp(join(tmpdir(), "tsforge-plugin-spell-link-"));
+    const entry = join(real, "plugin.ts");
+    const alias = join(link, "plugin.ts");
+    const body = `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(entry)}, "export const pack = { id: 'spell', description: 'swapped', rules: {}, rulesConfig: {} };\\n");
+export const pack = { id: "spell", description: "original", rules: {}, rulesConfig: {} };
+`;
+
+    await writeFile(entry, body);
+    await symlink(entry, alias);
+    await loadExternalPacks([{ path: entry }], real, () => undefined);
+    await writeFile(entry, body);
+
+    // The refusal is recorded against the path the config happened to use, but
+    // the module cache and the fingerprint both key on the REAL path — so the
+    // same entry under a second spelling is a second key, and the refusal does
+    // not apply to it.
+    const messages: string[] = [];
+    const loaded = await loadExternalPacks([{ path: alias }], link, (m) =>
       messages.push(m)
     );
 

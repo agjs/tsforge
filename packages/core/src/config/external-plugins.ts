@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { realpath } from "node:fs/promises";
 import { isRecord } from "../lib/guards";
 import { registerExternalPack } from "../rule-packs";
 import type { IRulePack } from "../rule-packs/rule-packs.types";
@@ -63,11 +64,10 @@ function materialize(value: unknown, seen: Map<object, unknown>): unknown {
   }
 
   // Anything that is not a plain object — a RegExp in a schema, a Map, a Date,
-  // an instance of the plugin's own class — is kept as it is. Rebuilding one
-  // property-by-property does not reproduce it: the prototype goes, and with it
-  // every method, leaving `{}` where ESLint expected a working object. These are
-  // leaves in practice, and a leaf we pass through is a smaller risk than a
-  // silently broken rule.
+  // an instance of some class — passes through as it is. Rebuilding one from its
+  // properties does not reproduce it: internal slots are not properties, so the
+  // copy comes out inert and its methods throw. `meta` is JSON-shaped by
+  // ESLint's own contract, so this is a rare leaf rather than a common one.
   const proto: unknown = Object.getPrototypeOf(value);
 
   if (proto !== Object.prototype && proto !== null) {
@@ -139,7 +139,56 @@ function resolvePluginEntryPath(pluginPath: string, cwd: string): string {
  * says first is what is validated, frozen, and enforced.
  */
 function snapshotPack(value: unknown): unknown {
-  return materialize(value, new Map());
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  // Destructured, so each field is read exactly once.
+  const { id, description, rules, rulesConfig } = value;
+
+  return {
+    id,
+    description,
+    rules: isRecord(rules) ? pinRules(rules) : rules,
+    rulesConfig: materialize(rulesConfig, new Map()),
+  };
+}
+
+/**
+ * Rebuild each rule as the shape ESLint actually consumes.
+ *
+ * Copying the rule's object GRAPH cannot pin it: a rule written as
+ * `class R { get create() {…} }` keeps its getter on the prototype, so a copy —
+ * even one that preserves the prototype — still asks the plugin for `create`
+ * every time ESLint reads it, and the plugin is free to answer differently.
+ * A rule module is `{ meta, create }` and nothing else, so read those once and
+ * build that object. The shape is known; the graph was never the thing.
+ */
+function pinRules(rules: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  for (const [name, rule] of Object.entries(rules)) {
+    if (!isRecord(rule)) {
+      out[name] = rule;
+
+      continue;
+    }
+
+    const create: unknown = Reflect.get(rule, "create");
+    const meta = materialize(Reflect.get(rule, "meta"), new Map());
+    const defaultOptions = materialize(
+      Reflect.get(rule, "defaultOptions"),
+      new Map()
+    );
+
+    out[name] = Object.freeze({
+      create,
+      meta,
+      ...(defaultOptions === undefined ? {} : { defaultOptions }),
+    });
+  }
+
+  return Object.freeze(out);
 }
 
 /** Type guard: a well-formed IRulePack (no `as` — every field is checked). */
@@ -231,10 +280,18 @@ export interface ILoadedExternalPack {
  */
 async function importVerified(
   plugin: IExternalPlugin,
-  entryPath: string,
+  lexicalPath: string,
   report: (message: string) => void
-): Promise<{ mod: unknown; fingerprint: string } | undefined> {
+): Promise<
+  { mod: unknown; fingerprint: string; entryPath: string } | undefined
+> {
   try {
+    // Key the record on the REAL path. Both things it guards already do: the
+    // fingerprint resolves symlinks before hashing, and the module cache is
+    // keyed by resolved URL. Keyed on the spelling the config happened to use, a
+    // second spelling of one entry is a second key — and a refusal recorded
+    // against the first does not cover the second.
+    const entryPath = await realpath(lexicalPath).catch(() => lexicalPath);
     const fingerprint = await fingerprintPluginEntry(entryPath);
     // A second load of an entry whose content changed cannot be honored: the
     // ESM cache is keyed by resolved path and Bun ignores query strings, so
@@ -282,7 +339,7 @@ async function importVerified(
 
     IMPORTED_AT.set(entryPath, fingerprint);
 
-    return { mod, fingerprint };
+    return { mod, fingerprint, entryPath };
   } catch (err) {
     report(`plugin '${plugin.path}' failed to load: ${errMessage(err)}`);
 
@@ -306,14 +363,19 @@ export async function loadExternalPacks(
   const out: ILoadedExternalPack[] = [];
 
   for (const plugin of plugins) {
-    const entryPath = resolvePluginEntryPath(plugin.path, cwd);
-    const verified = await importVerified(plugin, entryPath, report);
+    const verified = await importVerified(
+      plugin,
+      resolvePluginEntryPath(plugin.path, cwd),
+      report
+    );
 
     if (verified === undefined) {
       continue;
     }
 
-    const { mod, fingerprint } = verified;
+    // The REAL path, so the freeze re-verifies the same file the loader ran
+    // regardless of which spelling the config used.
+    const { mod, fingerprint, entryPath } = verified;
 
     if (!isRecord(mod)) {
       continue;
