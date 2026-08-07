@@ -5,6 +5,7 @@
  */
 import { READ_ONLY_TOOL_NAMES, TOOL_NAME } from "../agent";
 import type { ITokenUsage } from "../inference";
+import { clampRatio } from "../lib/ratio";
 import type { ILoopEvent } from "./loop.types";
 
 /** The minimal shape shared by advertised tools and MCP tool schemas. */
@@ -185,9 +186,13 @@ function cacheSuffix(usage: ITokenUsage): string {
     return "";
   }
 
+  // Clamped through the SAME helper the run-level metric uses. A backend
+  // reporting more cached tokens than prompt tokens would otherwise print
+  // "500%" here while the aggregate quietly capped at 1 — one bad server, two
+  // different stories, and the log is where someone goes to check the other.
   const pct =
     usage.promptTokens > 0
-      ? Math.round((cached / usage.promptTokens) * 100)
+      ? Math.round(clampRatio(cached / usage.promptTokens) * 100)
       : 0;
 
   return ` · ${String(cached)} cached (${String(pct)}%)`;

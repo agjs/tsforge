@@ -1,5 +1,6 @@
 import type { ILoopEvent } from "../loop/loop.types";
 import { classifyRun, type FailureClass } from "./failure-class";
+import { clampRatio } from "../lib/ratio";
 
 /** Behavioral metrics distilled from a run's event stream — the signals the
  *  local-model literature says predict outcomes (tokens-to-solution, repair
@@ -105,12 +106,9 @@ interface IAccum {
   tpsSum: number;
   tpsCount: number;
   /** Cache-hit and prompt totals over ONLY the calls that reported a cache
-   *  figure, so silent calls never dilute the ratio. `cacheReports` counts those
-   *  calls, so "nobody reported" stays distinct from "reporters all had a
-   *  zero-token prompt" — a zero denominator would otherwise read as silence. */
+   *  figure, so the calls that stayed silent never dilute the ratio. */
   cachedTokens: number;
   cachedOfPrompt: number;
-  cacheReports: number;
   wallMs: number;
   created: Set<string>;
 }
@@ -130,7 +128,6 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
     event.cachedPromptTokens !== undefined &&
     event.promptTokens !== undefined
   ) {
-    acc.cacheReports += 1;
     acc.cachedTokens += event.cachedPromptTokens;
     acc.cachedOfPrompt += event.promptTokens;
   }
@@ -185,11 +182,12 @@ function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
 }
 
 /**
- * The run's prefix-cache hit rate, or null when nothing reported one.
+ * The run's prefix-cache hit rate, or null when there is no rate to state.
  *
- * Keyed on whether any call REPORTED, not on the denominator being positive:
- * those differ when a reporting call carries a zero-token prompt, and reading
- * that as silence would hide a server we can in fact see.
+ * Null covers two situations that a caller cannot act on differently anyway: no
+ * call reported a cache figure, and every call that did carried a zero-token
+ * prompt. Only calls that reported reach the accumulator, so a silent endpoint
+ * leaves the denominator at zero and lands in the same branch.
  *
  * Clamped to [0,1] because the inputs are a remote server's self-report, which
  * `parseUsage` takes at face value (any JSON number). A backend that reports
@@ -197,11 +195,11 @@ function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
  * out-of-range rate into a comparison the self-harness treats as a ratio.
  */
 function cacheHitRate(acc: IAccum): number | null {
-  if (acc.cacheReports === 0 || acc.cachedOfPrompt <= 0) {
+  if (acc.cachedOfPrompt <= 0) {
     return null;
   }
 
-  return Math.min(1, Math.max(0, acc.cachedTokens / acc.cachedOfPrompt));
+  return clampRatio(acc.cachedTokens / acc.cachedOfPrompt);
 }
 
 /** Reduce a run's event stream to its behavioral metrics. Pure — feed it the
@@ -215,7 +213,6 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
     tpsCount: 0,
     cachedTokens: 0,
     cachedOfPrompt: 0,
-    cacheReports: 0,
     wallMs: 0,
     created: new Set(),
   };

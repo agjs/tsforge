@@ -288,3 +288,19 @@ describe("usageEvent: measured-at-zero is not unmeasured", () => {
     expect(e.message).toContain("0 tok/s");
   });
 });
+
+test("the log line clamps a backend that over-reports its cache", () => {
+  // Must agree with the run-level metric, which clamps too — one bad server
+  // telling two different stories is worse than either number alone.
+  const e = usageEvent({
+    task: "t",
+    usage: {
+      promptTokens: 100,
+      completionTokens: 5,
+      totalTokens: 105,
+      cachedPromptTokens: 500,
+    },
+  });
+
+  expect(e.message).toContain("500 cached (100%)");
+});
