@@ -29,11 +29,15 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   "nohup",
   "setsid",
   "stdbuf",
+  "timeout",
+  "xargs",
+  "exec",
+  "builtin",
 ]);
 
-/** Wrapper flags that consume the FOLLOWING token as their value, so it isn't
- *  mistaken for the head (`sudo -u root rm` → skip `-u root`). */
-const WRAPPER_VALUE_FLAGS: ReadonlySet<string> = new Set([
+/** Wrapper-specific flags that consume the FOLLOWING token. A shared set is
+ *  unsafe: `sudo -p PROMPT` takes a value, while `command -p rm` does not. */
+const SUDO_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "-u",
   "-g",
   "-C",
@@ -42,6 +46,137 @@ const WRAPPER_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--user",
   "--group",
 ]);
+
+const ENV_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-u",
+  "--unset",
+  "-C",
+  "--chdir",
+  "-S",
+  "--split-string",
+]);
+
+const NICE_VALUE_FLAGS: ReadonlySet<string> = new Set(["-n", "--adjustment"]);
+
+const STDBUF_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-i",
+  "--input",
+  "-o",
+  "--output",
+  "-e",
+  "--error",
+]);
+
+const EXEC_VALUE_FLAGS: ReadonlySet<string> = new Set(["-a"]);
+const NO_VALUE_FLAGS: ReadonlySet<string> = new Set();
+
+const TIMEOUT_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-s",
+  "--signal",
+  "-k",
+  "--kill-after",
+]);
+
+const XARGS_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-a",
+  "--arg-file",
+  "-d",
+  "--delimiter",
+  "-E",
+  "--eof",
+  "-I",
+  "--replace",
+  "-L",
+  "--max-lines",
+  "-n",
+  "--max-args",
+  "-P",
+  "--max-procs",
+  "-s",
+  "--max-chars",
+]);
+
+/** Strip one layer of matching shell quotes, including ANSI-C `$'…'`. */
+function unquote(s: string): string {
+  const t = s.trim();
+  const q = t[0];
+
+  if (t.startsWith("$'") && t.length >= 3 && t.endsWith("'")) {
+    return t.slice(2, -1);
+  }
+
+  return (q === "'" || q === '"') && t.length >= 2 && t.endsWith(q)
+    ? t.slice(1, -1)
+    : t;
+}
+
+function bareCommand(token: string): string {
+  const unquoted = unquote(token);
+  const slash = unquoted.lastIndexOf("/");
+
+  return slash >= 0 ? unquoted.slice(slash + 1) : unquoted;
+}
+
+/** Skip a wrapper's leading options, including the value after known
+ *  value-taking flags. `--flag=value` consumes no following token. */
+function skipOptions(
+  tokens: readonly string[],
+  start: number,
+  valueFlags: ReadonlySet<string>
+): number {
+  let i = start;
+
+  while (i < tokens.length) {
+    const token = tokens[i] ?? "";
+
+    if (token === "--") {
+      return i + 1;
+    }
+
+    if (!token.startsWith("-")) {
+      return i;
+    }
+
+    const equals = token.indexOf("=");
+    const flag = equals >= 0 ? token.slice(0, equals) : token;
+
+    i += equals < 0 && valueFlags.has(flag) ? 2 : 1;
+  }
+
+  return i;
+}
+
+function wrappedCommandIndex(
+  tokens: readonly string[],
+  wrapperIndex: number,
+  wrapper: string
+): number {
+  if (wrapper === "timeout") {
+    // timeout [OPTION] DURATION COMMAND — the duration is not the command head.
+    return skipOptions(tokens, wrapperIndex + 1, TIMEOUT_VALUE_FLAGS) + 1;
+  }
+
+  if (wrapper === "xargs") {
+    // xargs [OPTION] COMMAND — no duration/operand precedes the command.
+    return skipOptions(tokens, wrapperIndex + 1, XARGS_VALUE_FLAGS);
+  }
+
+  let valueFlags = NO_VALUE_FLAGS;
+
+  if (wrapper === "sudo") {
+    valueFlags = SUDO_VALUE_FLAGS;
+  } else if (wrapper === "env") {
+    valueFlags = ENV_VALUE_FLAGS;
+  } else if (wrapper === "nice") {
+    valueFlags = NICE_VALUE_FLAGS;
+  } else if (wrapper === "stdbuf") {
+    valueFlags = STDBUF_VALUE_FLAGS;
+  } else if (wrapper === "exec") {
+    valueFlags = EXEC_VALUE_FLAGS;
+  }
+
+  return skipOptions(tokens, wrapperIndex + 1, valueFlags);
+}
 
 /** The head command of one shell segment, with env-assignments, wrapper commands
  *  (`sudo`/`env`/…) and their flags, and any directory prefix removed
@@ -56,28 +191,24 @@ function commandHead(segment: string): string {
 
   while (i < tokens.length) {
     const token = tokens[i] ?? "";
+    const head = bareCommand(token);
 
-    if (
-      /^[A-Za-z_][A-Za-z0-9_]*=/.test(token) ||
-      COMMAND_WRAPPERS.has(token) ||
-      token === "{"
-    ) {
-      // env-assignment, a wrapper command, or a `{` group/function-body opener.
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || token === "{") {
+      // Env assignment or a `{` group/function-body opener.
       // The `{` skip matters: `f() { rm -rf /; }` splits to a ` { rm -rf /`
       // segment whose head would read as `{` (harmless) and hide the `rm` —
       // stepping past the brace surfaces the real destructive head.
       i += 1;
+    } else if (COMMAND_WRAPPERS.has(head)) {
+      i = wrappedCommandIndex(tokens, i, head);
     } else if (token.startsWith("-")) {
-      i += WRAPPER_VALUE_FLAGS.has(token) ? 2 : 1; // a wrapper flag (+ its value)
+      i += 1;
     } else {
       break; // the real head
     }
   }
 
-  const head = tokens[i] ?? "";
-  const slash = head.lastIndexOf("/");
-
-  return slash >= 0 ? head.slice(slash + 1) : head;
+  return bareCommand(tokens[i] ?? "");
 }
 
 /** Bare shell interpreters — a head we never let a pipeline feed (`… | sh`). */
@@ -89,16 +220,6 @@ const SHELL_INTERPRETERS: ReadonlySet<string> = new Set([
   "ash",
   "ksh",
 ]);
-
-/** Strip one layer of matching surrounding quotes (`'rm -rf /'` → `rm -rf /`). */
-function unquote(s: string): string {
-  const t = s.trim();
-  const q = t[0];
-
-  return (q === "'" || q === '"') && t.length >= 2 && t.endsWith(q)
-    ? t.slice(1, -1)
-    : t;
-}
 
 /** Decompose a command into every sub-command whose HEAD must be head-checked.
  *  Beyond separator-splitting (`&&`/`||`/`|`/`;`/`&`/newline), it also breaks on
@@ -131,6 +252,41 @@ function shellSegments(command: string): string[] {
 
     if (dashCArg !== undefined) {
       out.push(dashCArg); // the string handed to the interpreter (already unquoted)
+    }
+
+    // `eval` reparses its argument as shell source. Lift the visible body into
+    // the same segment scan as interpreter `-c`, without denying benign evals.
+    const evalCall = /\beval\s+(?:\$?'([^']*)'|"([^"]*)"|(.+))$/u.exec(seg);
+    const evalArg = evalCall?.[1] ?? evalCall?.[2] ?? evalCall?.[3];
+
+    if (evalArg !== undefined) {
+      out.push(evalArg);
+    }
+
+    // `env -S/--split-string` reparses one argument into argv, so inspect that
+    // visible string just like an eval/interpreter body. The ordinary env
+    // option walker still handles `-u NAME`, `-C DIR`, and their long forms.
+    const envSplit =
+      /\benv\b[^|;&]*?\s(?:-S|--split-string)\s+(?:\$?'([^']*)'|"([^"]*)"|(\S+))/u.exec(
+        seg
+      );
+    const envSplitArg = envSplit?.[1] ?? envSplit?.[2] ?? envSplit?.[3];
+
+    if (envSplitArg !== undefined) {
+      out.push(envSplitArg);
+    }
+
+    // A here-string handed to an interpreter is also shell source. Inspect its
+    // body for destructive heads; unlike a remote pipeline, a benign literal
+    // body remains allowed because all of its source is visible here.
+    const hereString =
+      /\b(?:sh|bash|zsh|dash|ash|ksh)\b[^<]*<<<\s+(?:\$?'([^']*)'|"([^"]*)"|(\S+))/u.exec(
+        seg
+      );
+    const hereArg = hereString?.[1] ?? hereString?.[2] ?? hereString?.[3];
+
+    if (hereArg !== undefined) {
+      out.push(hereArg);
     }
   }
 

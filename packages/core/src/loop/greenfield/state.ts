@@ -17,9 +17,9 @@ export function greenfieldDir(cwd: string): string {
  * trusted as a path component.
  */
 export function isFeatureId(id: string): boolean {
-  // Alphanumeric at BOTH ends (or a single char) with internal hyphens only:
-  // true kebab-case, so `a`/`a-b` pass but `a-`/`-a`/`a--`-with-trailing don't.
-  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(id);
+  // One or more alphanumeric segments separated by single hyphens: true
+  // kebab-case, so `a`/`a-b` pass but `a-`/`-a`/`a--b` do not.
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(id);
 }
 
 /** Validate and extract the handoff from a parsed JSON value. Returns null if invalid. */

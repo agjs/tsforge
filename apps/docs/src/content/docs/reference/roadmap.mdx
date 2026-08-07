@@ -1,14 +1,14 @@
 ---
 title: Roadmap
-description: What's shipped through 0.27, the path to 1.0, and candidate work.
+description: What's shipped through 0.37, the path to 1.0, and candidate work.
 ---
 
 TypeScript coding harness for web projects: `packages/core` for the loop and gate, [tsforge.dev](https://tsforge.dev) for docs.
 
-## Shipped through 0.27
+## Shipped through 0.37
 
 **Strictness & the gate**
-- Stack detection → **21 ESLint rule packs (122 rules)** + a **31-rule meta-rule engine** (config, CI, supply chain, container, testing, structure). See [Rule packs](/guardrails/rule-packs/) · [Meta-rules](/guardrails/meta-rules/).
+- Stack detection → **21 ESLint rule packs (117 rules)** + a **31-rule meta-rule engine** (config, CI, supply chain, container, testing, structure). See [Rule packs](/guardrails/rule-packs/) · [Meta-rules](/guardrails/meta-rules/).
 - **4 profiles** (recommended → strict / security / opinionated); a type-aware ESLint overlay; progress-based loop termination (no blunt turn cap). See [When the gate fails](/loop/validation/).
 - **Tests by default**: `test-sibling-required` is an error on changed logic files. **Opt-in gate oracles** (coverage, boot smoke, property tests). See [Tests by default](/quality/tests/) · [the gate](/loop/gate-floor/).
 
@@ -27,7 +27,15 @@ TypeScript coding harness for web projects: `packages/core` for the loop and gat
 - **MCP servers** as read-only context/tools. See [MCP servers](/integrations/mcp/).
 - Live tok/s + `/metrics` + a `--log` JSONL analyzer. See [Token metrics](/observability/metrics/).
 
-**Reliability internals**: tool-call repair ladder (L0–L3), hashline `edit_lines` with snapshot recovery, TTSR stream-interrupting rules, instant per-write type diagnostics, A/B eval support.
+**Reliability internals**: tool-call repair ladder (L0–L3), hashline `edit_lines` with snapshot recovery, TTSR stream-interrupting rules, instant per-write type diagnostics, statistical A/B reports, graded self-harness progress, real wall-time records, failure classification, and prompt-cache visibility.
+
+**Architecture & independent review**: a generated, drift-checked map of all 30 harness subsystems (including dependency witnesses, entry points, and adapter seams); read-only model-driven subagents; and an independent reviewer panel with identity de-duplication, quorum enforcement, and explicit dropout causes. See [Subsystems](/internals/subsystems/) · [Delegation](/agent/delegation/).
+
+### Highlights since 0.27
+
+- **0.28–0.31:** the multiline TUI and `/config` hub, incremental gate caching, recipe-level profiles/procedure cards, image capabilities, and read-only parallel subagents.
+- **0.32–0.35:** BoringStack gate-parity and browser-acceptance hardening, live OpenAPI/DB boundary checks, the core↔adapter seam, modern layout intent, strict greenfield re-detection, and strictness-preserving resume.
+- **0.36–0.37:** the core audit fixes (fail-loud packs/flags/profile floors and normalized writable paths), declarative reasoning profiles, graded self-harness evaluation, reviewer independence/diagnostics, prompt-cache metrics, and the generated architecture map.
 
 **Sequencing rule:** Measured wins first. No feature defaults change and no 1.0 tag until A/B numbers against the reference model exist.
 

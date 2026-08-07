@@ -437,6 +437,19 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
       "echo $(rm -rf x)",
       "find . -exec rm {} +",
       "sh -c 'rm -rf /'",
+      "timeout 10 rm -rf /",
+      "timeout --signal KILL 10 rm -rf /",
+      "eval 'rm -rf /'",
+      "$'rm' -rf /",
+      "find . | xargs rm -rf /",
+      "find . | xargs -0 -n 1 rm -rf /",
+      "exec rm -rf /",
+      "exec -a cleanup rm -rf /",
+      "builtin rm -rf /",
+      "command -p rm -rf /",
+      "env -S 'rm -rf /'",
+      "/usr/bin/timeout 10 /bin/rm -rf /",
+      "sh <<< 'rm -rf /'",
     ];
 
     for (const command of disguises) {
@@ -446,6 +459,45 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
         expect(v.decision).toBe("deny");
         expect(v.risk).toBe("critical");
       }
+    }
+  });
+
+  test("shell-wrapper detection preserves benign wrapped commands", () => {
+    const commands = [
+      "timeout 10 bun test",
+      "timeout --signal KILL 10 bun test",
+      "eval 'echo safe'",
+      "$'echo' safe",
+      "find . | xargs grep TODO",
+      "find . | xargs -0 -n 1 grep TODO",
+      "exec bun test",
+      "exec -a test bun test",
+      "builtin echo safe",
+      "command -p ls",
+      "env -u FOO bun test",
+      "sh <<< 'echo safe'",
+    ];
+
+    for (const command of commands) {
+      expect(
+        evaluatePolicy(action("shell", { command }), ctx("bypassPermissions"))
+          .decision
+      ).toBe("allow");
+    }
+  });
+
+  test("an unknown or prototype-named policy mode denies", () => {
+    for (const mode of ["not-a-mode", "constructor", "toString"]) {
+      // defineProperty changes the runtime value without lying to TypeScript
+      // about IPolicyContext — this is the malformed JS/config boundary the
+      // evaluator must fail closed against even though typed callers validate.
+      const invalid = Object.defineProperty(ctx("default"), "mode", {
+        value: mode,
+      });
+      const verdict = evaluatePolicy(action("read_file"), invalid);
+
+      expect(verdict.decision).toBe("deny");
+      expect(verdict.matchedRules).toContain("critical:invalid-policy-mode");
     }
   });
 

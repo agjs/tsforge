@@ -409,6 +409,7 @@ async function runTaskOnce(
   runDir: string,
   opts: IEvaluateOptions
 ): Promise<ITaskRunOutput> {
+  const startedAt = performance.now();
   const seedDir = join(opts.corpusDir, taskId);
 
   await setupRunDir(runDir, seedDir);
@@ -508,7 +509,7 @@ async function runTaskOnce(
       label: taskId,
       passed,
       cycles,
-      ms: 0,
+      ms: performance.now() - startedAt,
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
@@ -635,6 +636,8 @@ async function runOneSpec(
   opts: IEvaluateOptions,
   sink: IRunSink
 ): Promise<void> {
+  const startedAt = performance.now();
+
   try {
     const { record, run } = await runTaskOnce(taskId, runDir, opts);
 
@@ -643,7 +646,12 @@ async function runOneSpec(
     sink.log(verdictLine(taskId, attempt, record));
   } catch (err) {
     sink.erroredCount += 1;
-    sink.records.push({ label: taskId, passed: false, cycles: 0, ms: 0 });
+    sink.records.push({
+      label: taskId,
+      passed: false,
+      cycles: 0,
+      ms: performance.now() - startedAt,
+    });
     sink.log(
       `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
     );

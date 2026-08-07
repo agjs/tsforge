@@ -31,6 +31,14 @@ test("genericErrors: empty output → no errors, else one raw error", () => {
   expect(genericErrors("boom")).toHaveLength(1);
 });
 
+test("genericErrors announces truncation past the cap", () => {
+  const message = genericErrors("x".repeat(700))[0]?.message;
+
+  expect(message?.startsWith("x".repeat(500))).toBe(true);
+  expect(message).toContain("… (output truncated)");
+  expect(message?.length).toBeLessThan(550);
+});
+
 test("parseEslintJson extracts errors, including custom plugin rule ids", () => {
   const out = JSON.stringify([
     {
