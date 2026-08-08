@@ -1,5 +1,14 @@
 import { test, expect, describe } from "bun:test";
-import { renderMessage, userBubble, agentCardTop } from "../src/render";
+import {
+  renderMessage,
+  userBubble,
+  agentCardTop,
+  agentCardBottom,
+  agentCardPadRow,
+  agentCardRow,
+  roleCardCols,
+} from "../src/render";
+import { planHint } from "../src/cli/banner";
 import { displayWidth } from "../src/render/width";
 
 const ESC = String.fromCharCode(27);
@@ -9,7 +18,7 @@ function stripAnsi(s: string): string {
 }
 
 describe("renderMessage — hybrid bubbles", () => {
-  test("a user message renders a full rounded bubble", () => {
+  test("a user message renders a closed USER card (AGENT twin, cyan)", () => {
     const out = stripAnsi(
       renderMessage(
         { role: "user", content: "hey there" },
@@ -17,12 +26,17 @@ describe("renderMessage — hybrid bubbles", () => {
       )
     );
 
-    expect(out).toContain("╭─ you ");
-    expect(out).toContain("│ hey there");
-    expect(out).toContain("╯"); // bottom-right corner closes the bubble
+    expect(out).toContain(" USER ");
+    expect(out).toContain("┐");
+    expect(out).toContain("└");
+    expect(out).toContain("┘");
+    expect(out).toMatch(/│  hey there\s+│/);
+    expect(out).not.toContain("▌");
+    expect(out).not.toContain("╭");
+    expect(out).not.toContain("╰");
   });
 
-  test("an assistant message renders a left-accent card with a rail", () => {
+  test("an assistant message renders a closed AGENT card", () => {
     const out = stripAnsi(
       renderMessage(
         { role: "assistant", content: "line one\nline two" },
@@ -30,15 +44,60 @@ describe("renderMessage — hybrid bubbles", () => {
       )
     );
 
-    expect(out).toContain("╭ some-model"); // rounded top cap + model label
-    expect(out).toContain("│ line one");
-    expect(out).toContain("│ line two");
-    expect(out).toContain("╰"); // bottom cap closes the card
+    expect(out).toContain(" AGENT ");
+    expect(out).toContain("┐");
+    expect(out).toContain("└");
+    expect(out).toContain("┘");
+    expect(out).not.toContain("some-model");
+    expect(out).toMatch(/│  line one\s+│/);
+    expect(out).toMatch(/│  line two\s+│/);
+    expect(out).not.toContain("╭");
+    expect(out).not.toContain("╰");
   });
 
   test("system and tool messages render nothing", () => {
     expect(renderMessage({ role: "system", content: "x" })).toBe("");
     expect(renderMessage({ role: "tool", content: "x" })).toBe("");
+  });
+});
+
+describe("role card alignment", () => {
+  test("USER / AGENT / PLAN hug their labels and share the card right edge", () => {
+    const cols = 40;
+    const userTop = stripAnsi(userBubble("hi", false, cols)).split("\n")[0] ?? "";
+    const agentTop = stripAnsi(agentCardTop(false, cols));
+    const planTop = stripAnsi(planHint(false, cols)).split("\n")[0] ?? "";
+    const agentBottom = stripAnsi(agentCardBottom(false, cols));
+    const agentRow = stripAnsi(agentCardRow("hi", false, cols));
+
+    expect(userTop.startsWith(" USER ")).toBe(true);
+    expect(agentTop.startsWith(" AGENT ")).toBe(true);
+    expect(planTop.startsWith(" PLAN ")).toBe(true);
+    // No fixed-width right pad on shorter labels.
+    expect(userTop.startsWith(" USER  ")).toBe(false);
+    expect(planTop.startsWith(" PLAN  ")).toBe(false);
+
+    expect(displayWidth(userTop)).toBe(cols);
+    expect(displayWidth(agentTop)).toBe(cols);
+    expect(displayWidth(planTop)).toBe(cols);
+    expect(displayWidth(agentBottom)).toBe(cols);
+    expect(displayWidth(agentRow)).toBe(cols);
+
+    expect(userTop.endsWith("┐")).toBe(true);
+    expect(agentTop.endsWith("┐")).toBe(true);
+    expect(agentBottom.endsWith("┘")).toBe(true);
+    expect(agentRow.endsWith("│")).toBe(true);
+
+    const userBottom =
+      stripAnsi(userBubble("hi", false, cols)).split("\n").at(-1) ?? "";
+
+    expect(userBottom.startsWith("└")).toBe(true);
+    expect(userBottom.endsWith("┘")).toBe(true);
+    expect(displayWidth(userBottom)).toBe(cols);
+  });
+
+  test("roleCardCols floors at the badge+cap minimum", () => {
+    expect(roleCardCols(1)).toBeGreaterThanOrEqual(9);
   });
 });
 
@@ -53,16 +112,66 @@ describe("userBubble", () => {
       expect(displayWidth(row)).toBeLessThanOrEqual(columns);
     }
   });
+
+  test("filled badge and rails use cyan when color is on", () => {
+    const out = userBubble("hi", true, 40);
+
+    expect(out).toContain("[48;2;34;211;238m");
+    expect(out).toContain("[38;2;34;211;238m");
+    expect(stripAnsi(out)).toMatch(/│  hi\s+│/);
+    expect(stripAnsi(out)).not.toContain("▌");
+  });
+
+  test("closed card: pad row under hairline, body, pad, bottom", () => {
+    const rows = stripAnsi(userBubble("hi", false, 40)).split("\n");
+
+    expect(rows[0]?.startsWith(" USER ")).toBe(true);
+    expect(rows[0]?.endsWith("┐")).toBe(true);
+    expect(rows[1]?.startsWith("│")).toBe(true);
+    expect(rows[1]?.endsWith("│")).toBe(true);
+    expect(/^│\s+│$/.test(rows[1] ?? "")).toBe(true);
+    expect(rows[2]).toMatch(/│  hi\s+│/);
+    expect(rows.at(-1)?.startsWith("└")).toBe(true);
+    expect(rows.at(-1)?.endsWith("┘")).toBe(true);
+  });
+});
+
+describe("agentCardPadRow", () => {
+  test("empty pad keeps both rails in one SGR span (no mid-line RESET)", () => {
+    const row = agentCardPadRow(true, 40);
+    const first = row.indexOf("│");
+    const last = row.lastIndexOf("│");
+    const between = row.slice(first + 1, last);
+
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(last).toBeGreaterThan(first);
+    // A RESET between the rails was the iTerm bright-fleck bug on empty rows.
+    expect(between.includes("\x1b[0m")).toBe(false);
+    expect(row).toContain("[38;2;82;82;91m");
+    expect(displayWidth(stripAnsi(row))).toBe(40);
+  });
 });
 
 describe("agentCardTop", () => {
-  test("labels the card with a rounded cap + model name", () => {
-    expect(stripAnsi(agentCardTop("qwen3", false))).toBe("╭ qwen3");
+  test("labels the card with a filled AGENT badge + closed top rule", () => {
+    const out = stripAnsi(agentCardTop(false, 40));
+
+    expect(out.startsWith(" AGENT ")).toBe(true);
+    expect(out).toContain("┐");
+    expect(out).not.toContain("│");
+    expect(displayWidth(out)).toBe(40);
+  });
+
+  test("filled badge uses chrome background when color is on", () => {
+    const out = agentCardTop(true, 40);
+
+    expect(out).toContain("[48;2;244;244;245m");
+    expect(stripAnsi(out)).toContain(" AGENT ");
   });
 });
 
 describe("agent card replay wrapping (--continue path)", () => {
-  test("a long replayed line wraps INSIDE the rail — every row keeps │ and fits", () => {
+  test("a long replayed line wraps INSIDE the rails — every row keeps │ and fits", () => {
     const columns = 40;
     const long =
       "The quick brown fox jumps over the lazy dog again and again and " +
@@ -74,13 +183,19 @@ describe("agent card replay wrapping (--continue path)", () => {
       )
     );
     const rows = out.split("\n").filter((r) => r.length > 0);
-    // Drop the top/bottom caps; every BODY row must carry the rail and fit.
-    const body = rows.filter((r) => r.startsWith("│"));
+    const body = rows.filter(
+      (r) =>
+        r.startsWith("│") &&
+        r.endsWith("│") &&
+        !r.includes(" AGENT ") &&
+        !/^│\s+│$/.test(r)
+    );
 
-    expect(body.length).toBeGreaterThan(1); // it actually wrapped
+    expect(body.length).toBeGreaterThan(1);
 
     for (const row of body) {
       expect(displayWidth(row)).toBeLessThanOrEqual(columns);
+      expect(row.endsWith("│")).toBe(true);
     }
   });
 

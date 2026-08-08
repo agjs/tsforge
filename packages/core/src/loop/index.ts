@@ -20,12 +20,25 @@ export {
   judgeFeature,
   parseFeatureVerdict,
   loadState,
+  hasState,
   saveState,
   writeSpec,
   writeProgress,
   renderProgress,
   greenfieldDir,
 } from "./greenfield";
+export {
+  parseWorklist,
+  resolveWorklistPath,
+  itemsToFeatures,
+  acceptMapOf,
+  WORKLIST_STATE,
+  prepareWorklistState,
+  runWorklist,
+  tickWorklistFile,
+  formatWorklistLines,
+} from "./worklist";
+export type { IWorklistItem, IPrepareWorklistOptions } from "./worklist";
 export type {
   IFeature,
   IGreenfieldState,

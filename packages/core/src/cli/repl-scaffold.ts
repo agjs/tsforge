@@ -1,5 +1,5 @@
 import { runWizard } from "../render/wizard";
-import type { IWizardStep } from "../render/wizard.types";
+import type { IWizardStep, IWizardView } from "../render/wizard.types";
 import {
   buildScaffoldSteps,
   stateToAnswers,
@@ -16,6 +16,8 @@ export interface IReplScaffoldDeps {
   readonly suspend: () => void;
   readonly resume: () => void;
   readonly out: (s: string) => void;
+  /** Pane / status overlay — when set, scaffold wizards skip nested alt-screen. */
+  readonly view?: IWizardView;
 }
 
 /** Free-text step: the folder name for the new project (created under cwd). */
@@ -169,12 +171,19 @@ export async function openScaffoldInRepl(
     const color = process.stdout.isTTY;
     const manifest = loadBundledManifest();
 
-    // Step 1: Run archetype selection wizard
-    const archetypeState = await runWizard([archetypeStep()], color, {
+    const wizardOpts = {
       title: "tsforge scaffold",
       manageInput: false,
       out: deps.out,
-    });
+      ...(deps.view === undefined ? {} : { view: deps.view }),
+    };
+
+    // Step 1: Run archetype selection wizard
+    const archetypeState = await runWizard(
+      [archetypeStep()],
+      color,
+      wizardOpts
+    );
 
     if (archetypeState.status !== "apply") {
       deps.out("scaffold: cancelled — nothing was created.\n");
@@ -199,11 +208,7 @@ export async function openScaffoldInRepl(
     const configState = await runWizard(
       [projectDirStep(), ...superuserSteps, ...configSteps],
       color,
-      {
-        title: "tsforge scaffold",
-        manageInput: false,
-        out: deps.out,
-      }
+      wizardOpts
     );
 
     if (configState.status !== "apply") {

@@ -8,9 +8,19 @@ import {
   runGreenfield,
   prepareState,
   planFeatures,
+  hasState,
+  prepareWorklistState,
+  runWorklist,
+  acceptMapOf,
+  parseWorklist,
+  resolveWorklistPath,
+  tickWorklistFile,
+  WORKLIST_STATE,
   type IGreenfieldDeps,
   type Reporter,
 } from "./loop";
+import { createWorklistDeps } from "./cli/worklist-deps";
+import { readFile } from "node:fs/promises";
 import { modelAgent, AgentRunner, type IAgentResult } from "./agent";
 import { AgentScheduler } from "./agent/agent-scheduler";
 import { loadAgentSpecs, findAgentSpec } from "./config/agent-specs";
@@ -715,6 +725,113 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
 }
 
 /**
+ * `tsforge --work [PLAN.md] --accept "<gate>"`: drive a human-written checklist
+ * to completion (or park leftovers after one revisit). Resumes `.tsforge/worklist/`
+ * when present.
+ */
+async function worklistMode(args: ICliArgs): Promise<number> {
+  if (args.accept.length === 0) {
+    process.stdout.write(
+      "worklist needs a build gate — pass --accept '<cmd>' or set `gate` in the recipe\n"
+    );
+
+    return 1;
+  }
+
+  const pathHint = args.task.length > 0 ? args.task : undefined;
+  let sourcePath =
+    pathHint !== undefined
+      ? await resolveWorklistPath(args.dir, pathHint)
+      : await resolveWorklistPath(args.dir);
+
+  if (!(await hasState(args.dir, WORKLIST_STATE)) && sourcePath === null) {
+    process.stdout.write(
+      "no worklist found — pass a path (tsforge --work PLAN.md) or add PLAN.md / TASKS.md\n"
+    );
+
+    return 1;
+  }
+
+  const state = await prepareWorklistState(args.dir, {
+    goal: "worklist",
+    ...(sourcePath !== null ? { path: sourcePath } : {}),
+  });
+
+  if (state === null) {
+    process.stdout.write("worklist is empty — nothing to build\n");
+
+    return 1;
+  }
+
+  // On resume the source path may still be discoverable for --tick / accepts.
+  sourcePath ??= await resolveWorklistPath(args.dir, pathHint);
+
+  let accepts = new Map<string, string>();
+
+  if (sourcePath !== null) {
+    try {
+      accepts = acceptMapOf(
+        parseWorklist(await readFile(sourcePath, "utf8"), {
+          includeDone: true,
+        })
+      );
+    } catch {
+      accepts = new Map();
+    }
+  }
+
+  const roleName = (specific: string): string =>
+    specific.length > 0 ? specific : args.model;
+  const work = makeProvider(
+    (await resolveModelByName(roleName(args.workModel))).entry
+  );
+  const evaluator = makeProvider(
+    (await resolveModelByName(roleName(args.evaluatorModel))).entry
+  );
+  const report = makeReporter(resolveLogPath("worklist", args.log), "worklist");
+  const thinkingTokenBudget =
+    args.thinkingBudget > 0
+      ? args.thinkingBudget
+      : envNumber("TSFORGE_THINKING_BUDGET");
+
+  const deps = createWorklistDeps({
+    cwd: args.dir,
+    accept: args.accept,
+    accepts,
+    scope: scopeOf(args),
+    work,
+    evaluator,
+    report,
+    ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+    ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+  });
+
+  const result = await runWorklist(args.dir, state, deps, { onEvent: report });
+
+  if (args.tick && sourcePath !== null) {
+    await tickWorklistFile(sourcePath, result.features);
+  }
+
+  const done = result.features.filter((f) => f.passes).length;
+  const statusMsg =
+    result.status === "done"
+      ? "✓ all worklist items verified"
+      : result.status === "needs-infra"
+        ? `✗ infrastructure unavailable: ${result.infra ?? "?"}`
+        : `✗ stuck on '${result.stuckFeature ?? "?"}'`;
+
+  process.stdout.write(`\n${statusMsg} (${done}/${result.features.length})\n`);
+
+  await runNotify(
+    args.dir,
+    args.notify,
+    `worklist ${result.status} ${done}/${result.features.length}`
+  );
+
+  return result.status === "done" ? 0 : 1;
+}
+
+/**
  * `tsforge scaffold …` — greenfield wizard that stands up boringstack (or its
  * Astro static site). Delegates the remaining argv to the scaffold command's own
  * parser (--archetype/--stack/--dest/--set/--multi/--ref/--no-boot), so its
@@ -853,6 +970,10 @@ export async function main(): Promise<number> {
 
   if (args.greenfield) {
     return greenfieldMode(args);
+  }
+
+  if (args.work) {
+    return worklistMode(args);
   }
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.

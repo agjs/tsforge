@@ -6,6 +6,7 @@ import type {
   IWizardOption,
   IWizardState,
   IWizardStep,
+  IWizardView,
 } from "./wizard.types";
 
 const ESC = String.fromCharCode(27);
@@ -442,8 +443,8 @@ function optionRow(
   marker: string,
   color: boolean
 ): string {
-  const gutter = active ? paint("›", STYLE.brand, color) : " ";
-  const label = paint(opt.label, active ? STYLE.brand : STYLE.bold, color);
+  const gutter = active ? paint("›", STYLE.cyan, color) : " ";
+  const label = paint(opt.label, active ? STYLE.cyan : STYLE.bold, color);
   const rec =
     opt.recommended === true
       ? `  ${paint("recommended", STYLE.dim, color)}`
@@ -500,7 +501,7 @@ function textFieldRows(
       : step.mask === true
         ? "•".repeat(raw.length)
         : raw;
-  const field = `${shown}${paint("▏", STYLE.brand, color)}`;
+  const field = `${shown}${paint("▏", STYLE.cyan, color)}`;
   const error = step.validate === undefined ? null : step.validate(raw);
   const errorLine =
     error === null ? [] : ["", paint(error, STYLE.yellow, color)];
@@ -699,6 +700,10 @@ export interface IRunWizardOpts {
   readonly extra?: (state: IWizardState) => string;
   /** Output sink (default process.stdout.write). */
   readonly out?: (s: string) => void;
+  /** When set, paint into the host chrome (main pane / status overlay) instead of
+   *  opening a nested alt-screen. Required under the pane console so setup/scaffold
+   *  do not fight PaneScreen. */
+  readonly view?: IWizardView;
 }
 
 /**
@@ -734,6 +739,7 @@ export function runWizard(
 
   return new Promise((resolve) => {
     let state = initWizard(steps);
+    const view = opts.view;
 
     emitKeypressEvents(stdin);
 
@@ -763,9 +769,13 @@ export function runWizard(
     }
 
     const draw = (): void => {
-      out(
-        `${CLEAR_HOME}${renderFrame(state, steps, color, extra(state), title)}`
-      );
+      const frame = renderFrame(state, steps, color, extra(state), title);
+
+      if (view !== undefined) {
+        view.render(frame.split("\n"));
+      } else {
+        out(`${CLEAR_HOME}${frame}`);
+      }
     };
 
     const finish = (): void => {
@@ -783,7 +793,11 @@ export function runWizard(
       // wedging the terminal (dead keypress, hung Promise) on exit. The terminal
       // is already gone in that case, so there's nothing to restore on it.
       try {
-        out(`${SHOW_CURSOR}${EXIT_ALT}`);
+        if (view !== undefined) {
+          view.close();
+        } else {
+          out(`${SHOW_CURSOR}${EXIT_ALT}`);
+        }
       } catch {
         // swallow — the stream is closed; cleanup below still runs
       }
@@ -841,7 +855,11 @@ export function runWizard(
     };
 
     stdin.on("keypress", onKey);
-    out(`${ENTER_ALT}${HIDE_CURSOR}`);
+
+    if (view === undefined) {
+      out(`${ENTER_ALT}${HIDE_CURSOR}`);
+    }
+
     draw();
   });
 }

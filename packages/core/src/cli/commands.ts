@@ -34,6 +34,17 @@ export const COMMANDS: readonly ICommandSpec[] = [
       "toggle plan mode (on by default: explore → clarify → plan; 'approve' implements)",
   },
   {
+    name: "/work",
+    arg: "[file|goal]",
+    summary:
+      "drive a checklist (PLAN.md / file) to completion, or plan one from a goal",
+  },
+  {
+    name: "/copy",
+    summary:
+      "leave the pane TUI (if active) and dump the transcript for selection",
+  },
+  {
     name: "/gate",
     arg: "<cmd>",
     summary: "set the gate command (empty to clear)",

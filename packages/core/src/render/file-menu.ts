@@ -99,10 +99,10 @@ export function formatCompletionRows(
 
   return items.map((path, i) => {
     const active = i === selected;
-    const gutter = active ? paint("›", STYLE.brand, color) : " ";
+    const gutter = active ? paint("›", STYLE.cyan, color) : " ";
     const text = truncatePath(path, Math.max(0, columns - 2));
 
-    return `${gutter} ${paint(text, active ? STYLE.brand : STYLE.dim, color)}`;
+    return `${gutter} ${paint(text, active ? STYLE.cyan : STYLE.dim, color)}`;
   });
 }
 

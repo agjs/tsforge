@@ -4,22 +4,60 @@ export { graphemes } from "../editor/segments";
 
 /**
  * Terminal display-width helpers. A monospace cell is one column, but a CJK
- * ideograph, a fullwidth form, or an emoji occupies TWO, and combining /
- * zero-width marks occupy NONE. Everywhere we size a box, pad a table cell, fit
- * status segments, or wrap an editor line we previously counted `.length`
- * (UTF-16 code units) or grapheme count — both wrong for wide text, which then
- * overflowed or mis-aligned. These functions count *columns*, building on the
- * existing grapheme segmenter so a cluster is measured as one unit.
+ * ideograph, a fullwidth form, or a *terminal-wide* emoji occupies TWO, and
+ * combining / zero-width marks occupy NONE. Everywhere we size a box, pad a
+ * table cell, fit status segments, or wrap an editor line we previously counted
+ * `.length` (UTF-16 code units) or grapheme count — both wrong for wide text,
+ * which then overflowed or mis-aligned. These functions count *columns*,
+ * building on the existing grapheme segmenter so a cluster is measured as one
+ * unit.
+ *
+ * Widths follow what common terminals (iTerm2, Terminal.app, VTE) advance for
+ * the cursor — roughly macOS/glibc `wcwidth`, *not* Unicode's ideal "every
+ * emoji presentation is 2". Neutral emoji like 🛋️ (U+1F6CB) advance one cell
+ * even when the glyph is double-wide; counting them as 2 under-pads closed
+ * cards and zig-zags the right rail.
  */
 
 /** Half-open `[start, end)` code-point ranges, kept sorted for a binary search. */
 type Range = readonly [start: number, end: number];
 
-/** Code points that render two columns wide: East Asian Wide/Fullwidth plus the
- *  emoji blocks that terminals draw double-width. Sorted ascending. */
+/**
+ * Code points that advance two columns. CJK / fullwidth plus the emoji and
+ * symbol scalars that terminals actually treat as wide (`wcwidth == 2`).
+ * Neutral emoji (🛋️, 🖥️, …) are intentionally absent.
+ */
 const WIDE: readonly Range[] = [
   [0x1100, 0x1160], // Hangul Jamo
+  [0x231a, 0x231c], // watch / hourglass
   [0x2329, 0x232b], // angle brackets
+  [0x2614, 0x2616], // umbrella / coffee
+  [0x2648, 0x2654], // zodiac
+  [0x267f, 0x2680], // wheelchair
+  [0x2693, 0x2694], // anchor
+  [0x26a1, 0x26a2], // high voltage
+  [0x26aa, 0x26ac], // circles
+  [0x26bd, 0x26bf], // soccer / baseball
+  [0x26c4, 0x26c6], // snowman
+  [0x26ce, 0x26cf], // Ophiuchus
+  [0x26d4, 0x26d5], // no entry
+  [0x26ea, 0x26eb], // church
+  [0x26f2, 0x26f4], // fountain
+  [0x26f5, 0x26f6], // sailboat
+  [0x26fa, 0x26fb], // tent
+  [0x26fd, 0x26fe], // fuel pump
+  [0x2705, 0x2706], // check mark
+  [0x270a, 0x270c], // fist / hand
+  [0x2728, 0x2729], // sparkles
+  [0x274c, 0x274d], // cross mark
+  [0x274e, 0x274f], // cross mark box
+  [0x2753, 0x2756], // question marks
+  [0x2757, 0x2758], // exclamation
+  [0x2795, 0x2798], // plus / minus
+  [0x27b0, 0x27b1], // curly loop
+  [0x27bf, 0x27c0], // double curly loop
+  [0x2b50, 0x2b51], // star
+  [0x2b55, 0x2b56], // heavy large circle
   [0x2e80, 0x303f], // CJK radicals … Kangxi
   [0x3041, 0x33ff], // Hiragana … CJK compatibility
   [0x3400, 0x4dc0], // CJK Extension A
@@ -31,10 +69,52 @@ const WIDE: readonly Range[] = [
   [0xfe30, 0xfe70], // CJK compatibility / small forms
   [0xff00, 0xff61], // Fullwidth forms
   [0xffe0, 0xffe7], // Fullwidth signs
-  [0x1f1e6, 0x1f200], // Regional indicators (flags)
-  [0x1f300, 0x1f650], // Misc symbols, emoticons
-  [0x1f680, 0x1f700], // Transport & map
-  [0x1f900, 0x1fa00], // Supplemental symbols & pictographs
+  [0x1f004, 0x1f005],
+  [0x1f0cf, 0x1f0d0],
+  [0x1f18e, 0x1f18f],
+  [0x1f191, 0x1f19b],
+  [0x1f200, 0x1f203],
+  [0x1f210, 0x1f23c],
+  [0x1f240, 0x1f249],
+  [0x1f250, 0x1f252],
+  [0x1f260, 0x1f266],
+  [0x1f300, 0x1f321],
+  [0x1f32d, 0x1f336],
+  [0x1f337, 0x1f37d],
+  [0x1f37e, 0x1f394],
+  [0x1f3a0, 0x1f3cb],
+  [0x1f3cf, 0x1f3d4],
+  [0x1f3e0, 0x1f3f1],
+  [0x1f3f4, 0x1f3f5],
+  [0x1f3f8, 0x1f43f],
+  [0x1f440, 0x1f441],
+  [0x1f442, 0x1f4fd],
+  [0x1f4ff, 0x1f53e],
+  [0x1f54b, 0x1f54f],
+  [0x1f550, 0x1f568],
+  [0x1f57a, 0x1f57b],
+  [0x1f595, 0x1f597],
+  [0x1f5a4, 0x1f5a5], // black heart suite — not U+1F5A5 desktop
+  [0x1f5fb, 0x1f650], // smileys through gesture
+  [0x1f680, 0x1f6c6], // transport (stops before couch U+1F6CB)
+  [0x1f6cc, 0x1f6cd],
+  [0x1f6d0, 0x1f6d3],
+  [0x1f6d5, 0x1f6d8],
+  [0x1f6dc, 0x1f6e0],
+  [0x1f6eb, 0x1f6ed],
+  [0x1f6f4, 0x1f6fd],
+  [0x1f7e0, 0x1f7ec],
+  [0x1f7f0, 0x1f7f1],
+  [0x1f90c, 0x1f93b],
+  [0x1f93c, 0x1f946],
+  [0x1f947, 0x1fa00],
+  [0x1fa70, 0x1fa7d],
+  [0x1fa80, 0x1fa89],
+  [0x1fa90, 0x1fabe],
+  [0x1fabf, 0x1fac6],
+  [0x1face, 0x1fadc],
+  [0x1fae0, 0x1fae9],
+  [0x1faf0, 0x1faf9],
   [0x20000, 0x3fffe], // CJK Extension B and beyond
 ];
 
@@ -56,14 +136,12 @@ const ZERO: readonly Range[] = [
   [0x202a, 0x202f], // Bidi embedding/override
   [0x2060, 0x2065], // Word joiner, invisibles
   [0x20d0, 0x2100], // Combining marks for symbols
-  [0xfe00, 0xfe10], // Variation selectors (see VS16 note below)
+  [0xfe00, 0xfe10], // Variation selectors (VS16 = U+FE0F is zero-width)
   [0xfe20, 0xfe30], // Combining half marks
 ];
 
-/** Variation Selector-16 forces emoji (wide) presentation of the preceding
- *  base character, so a cluster containing it is two columns regardless of the
- *  base's own width (e.g. `#️`, `❤️`). */
-const VS16 = 0xfe0f;
+const RI_START = 0x1f1e6;
+const RI_END = 0x1f200;
 
 /** True if `cp` falls in any of the sorted half-open ranges (binary search). */
 function inRanges(cp: number, ranges: readonly Range[]): boolean {
@@ -92,8 +170,12 @@ function inRanges(cp: number, ranges: readonly Range[]): boolean {
   return false;
 }
 
+function isRegionalIndicator(cp: number): boolean {
+  return cp >= RI_START && cp < RI_END;
+}
+
 /** The column width of a single code point: 0 (combining / zero-width / C0–C1
- *  control), 2 (wide / fullwidth / emoji), or 1 (everything else). */
+ *  control), 2 (wide / fullwidth / terminal-wide emoji), or 1 (everything else). */
 export function codePointWidth(cp: number): 0 | 1 | 2 {
   // C0 controls, DEL, and C1 controls render nothing meaningful here.
   if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) {
@@ -111,26 +193,33 @@ export function codePointWidth(cp: number): 0 | 1 | 2 {
   return 1;
 }
 
-/** The column width of one grapheme cluster: zero-width if its base is, two if
- *  it carries VS16 or any wide code point, else the base width. Combining marks
- *  contribute nothing, so `e` + accent is still one column. */
+/** The column width of one grapheme cluster. Combining marks and VS16
+ *  contribute nothing — iTerm/Terminal.app do not widen a Neutral base when
+ *  VS16 requests emoji presentation. ZWJ sequences take the widest scalar
+ *  (typically 2). Flag pairs are special-cased to 2. */
 function clusterWidth(cluster: string): number {
   let width = 0;
-  let hasVs16 = false;
+  let riCount = 0;
+  let hasNonRi = false;
 
   for (const ch of cluster) {
     const cp = ch.codePointAt(0) ?? 0;
 
-    if (cp === VS16) {
-      hasVs16 = true;
+    if (isRegionalIndicator(cp)) {
+      riCount += 1;
+    } else if (codePointWidth(cp) > 0) {
+      hasNonRi = true;
     }
 
-    // The cluster's width is the widest of its code points: a base (1 or 2)
-    // dominates its trailing combining marks (0).
     width = Math.max(width, codePointWidth(cp));
   }
 
-  return hasVs16 ? 2 : width;
+  // 🇯🇵 — one grapheme, two regional indicators, two terminal columns.
+  if (!hasNonRi && riCount === 2) {
+    return 2;
+  }
+
+  return width;
 }
 
 /** Total terminal columns `str` occupies, measured per grapheme cluster. */

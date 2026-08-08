@@ -80,6 +80,8 @@ export interface IConfigDeps {
   readonly setEnv: (name: string, value: string | undefined) => void;
   /** The inline menu view (statusBar overlay + close). */
   readonly view?: IConfigMenuView;
+  /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
+  readonly columns?: number;
 }
 
 const NON_EMPTY = (label: string) => (v: string) =>
@@ -324,7 +326,12 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
 
   const settings = buildSettings(deps);
   let editState: IEditState | null = null;
-  const columns = process.stdout.columns > 0 ? process.stdout.columns : 80;
+  const columns =
+    deps.columns !== undefined && deps.columns > 0
+      ? deps.columns
+      : process.stdout.columns > 0
+        ? process.stdout.columns
+        : 80;
 
   const drawEdit = (): void => {
     if (editState === null) {
@@ -341,7 +348,7 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
       `${paint(editState.setting.label, STYLE.bold, deps.color)} · field ${editState.fieldIndex + 1} of ${total}`,
       "─".repeat(columns),
       field.label,
-      `  ${shown}${paint("▏", STYLE.brand, deps.color)}`,
+      `  ${shown}${paint("▏", STYLE.cyan, deps.color)}`,
       ...(error === null ? [] : ["", paint(error, STYLE.yellow, deps.color)]),
       "",
       paint("type   enter next   esc cancel", STYLE.dim, deps.color),
@@ -423,6 +430,7 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
         close: () => {
           view.close();
         },
+        columns,
       }).then((selected) => {
         if (!running) {
           return;

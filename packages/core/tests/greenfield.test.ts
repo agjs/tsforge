@@ -106,6 +106,23 @@ describe("greenfield state", () => {
     expect(md).toContain("- [ ] b");
   });
 
+  test("optional stateName writes under .tsforge/<name>/ without touching greenfield/", async () => {
+    const s = state("a");
+
+    await saveState(dir, s, "worklist");
+
+    expect(await hasState(dir, "worklist")).toBe(true);
+    expect(await hasState(dir)).toBe(false);
+    expect(greenfieldDir(dir, "worklist")).toBe(
+      join(dir, ".tsforge", "worklist")
+    );
+
+    const loaded = await loadState(dir, "worklist");
+
+    expect(loaded?.features.map((f) => f.id)).toEqual(["a"]);
+    expect(await loadState(dir)).toBeNull();
+  });
+
   test("saveState → loadState round-trips lastError when present", async () => {
     const s = state("a");
 

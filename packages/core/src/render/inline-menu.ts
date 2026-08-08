@@ -36,9 +36,9 @@ function clip(text: string, max: number): string {
 }
 
 /** One menu row: `› label            hint`. The SELECTED row is the only styled
- *  line (brand + bold); every other row is plain default text so it stays fully
- *  legible. Composed as raw text and fitted to width BEFORE coloring, so clipping
- *  can never cut an ANSI escape. */
+ *  line (cyan + bold — matches console interactive accent); every other row is
+ *  plain default text so it stays fully legible. Composed as raw text and fitted
+ *  to width BEFORE coloring, so clipping can never cut an ANSI escape. */
 function formatRow(
   row: IMenuRowData,
   active: boolean,
@@ -65,7 +65,7 @@ function formatRow(
 
   const raw = `${active ? "›" : " "} ${body}`;
 
-  return active ? paint(raw, `${STYLE.brand}${STYLE.bold}`, color) : raw;
+  return active ? paint(raw, `${STYLE.cyan}${STYLE.bold}`, color) : raw;
 }
 
 /** Menu row data — flat list, no groups (cursor index == row index). */
@@ -112,8 +112,7 @@ export function formatMenuRows(
   const width = Math.max(20, columns);
   const lines: string[] = [];
 
-  // Title: a crisp bold header at the TOP (default color — NOT blue; only the
-  // selected row is blue).
+  // Title: bold header at the TOP (default ink — only the selected row is cyan).
   lines.push(paint(clip(title, width), STYLE.bold, color));
 
   if (rows.length === 0) {
@@ -177,6 +176,8 @@ export interface IInlineMenuDeps {
   readonly title: string;
   readonly render: (lines: readonly string[]) => void;
   readonly close: () => void;
+  /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
+  readonly columns?: number;
 }
 
 /**
@@ -199,7 +200,12 @@ export function runInlineMenu(
 
   return new Promise((resolve) => {
     let cursor = 0;
-    const columns = process.stdout.columns > 0 ? process.stdout.columns : 80;
+    const columns =
+      deps.columns !== undefined && deps.columns > 0
+        ? deps.columns
+        : process.stdout.columns > 0
+          ? process.stdout.columns
+          : 80;
     const color = process.stdout.isTTY;
 
     emitKeypressEvents(stdin);

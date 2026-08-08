@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
 import { cliUsage, valueFlagError } from "../src/cli/args";
+import { paneConsoleRejectReason } from "../src/cli/repl";
+import { PANE_MIN_ROWS } from "../src/render";
 import { PROFILE_IDS } from "../src/config/profiles";
 import type { ITaskRecipe } from "../src/config/recipes";
 
@@ -493,6 +495,51 @@ test("cliUsage documents the print-and-exit flags it is reached by", () => {
   expect(usage).toContain("--help");
   expect(usage).toContain("--accept");
   expect(usage).toContain("tsforge review");
+  expect(usage).not.toContain("--tui-panes");
+  expect(usage).not.toContain("--no-tui-panes");
+});
+
+test("removed --tui-panes / --no-tui-panes are ignored (not swallowed into the task)", () => {
+  expect(parseArgs(["--tui-panes"]).task).toBe("");
+  expect(parseArgs(["--no-tui-panes"]).task).toBe("");
+  expect(parseArgs(["--tui-panes", "ship", "it"]).task).toBe("ship it");
+});
+
+test("paneConsoleRejectReason: tiny interactive TTY fails closed; pipes do not", () => {
+  expect(
+    paneConsoleRejectReason({
+      stdinTty: true,
+      stdoutTty: true,
+      rows: PANE_MIN_ROWS - 1,
+    })
+  ).toContain(String(PANE_MIN_ROWS));
+
+  expect(
+    paneConsoleRejectReason({
+      stdinTty: true,
+      stdoutTty: true,
+      rows: PANE_MIN_ROWS,
+    })
+  ).toBeNull();
+
+  // Non-TTY uses the plain path — not an error, and never the classic StatusBar.
+  expect(
+    paneConsoleRejectReason({
+      stdinTty: false,
+      stdoutTty: false,
+      rows: 4,
+    })
+  ).toBeNull();
+});
+
+test("repl product path never constructs or installs StatusBar", async () => {
+  const src = await Bun.file(
+    new URL("../src/cli/repl.ts", import.meta.url)
+  ).text();
+
+  expect(src).not.toContain("new StatusBar");
+  expect(src).not.toContain("statusBar.install");
+  expect(src).not.toMatch(/import\s*\{[^}]*\bStatusBar\b/);
 });
 
 test("agents subcommand: list mode, ids+task mode, recipe fill", () => {

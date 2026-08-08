@@ -19,9 +19,10 @@ import type {
 export async function prepareState(
   cwd: string,
   goal: string,
-  plan: (goal: string) => Promise<IPlan | null>
+  plan: (goal: string) => Promise<IPlan | null>,
+  stateName = "greenfield"
 ): Promise<IGreenfieldState | null> {
-  const existing = await loadState(cwd);
+  const existing = await loadState(cwd, stateName);
 
   if (existing !== null && existing.features.length > 0) {
     return existing;
@@ -33,11 +34,11 @@ export async function prepareState(
     return null;
   }
 
-  await writeSpec(cwd, planned.spec);
+  await writeSpec(cwd, planned.spec, stateName);
 
   const state: IGreenfieldState = { goal, features: planned.features };
 
-  await saveState(cwd, state);
+  await saveState(cwd, state, stateName);
 
   return state;
 }
@@ -59,13 +60,14 @@ export async function runGreenfield(
   opts: IGreenfieldOptions = {}
 ): Promise<IGreenfieldResult> {
   const report: Reporter = opts.onEvent ?? ((): void => undefined);
+  const stateName = opts.stateName ?? "greenfield";
 
   const say = (message: string): void => {
     report({ kind: "fix", task: "greenfield", message });
   };
 
-  await saveState(cwd, state);
-  await writeProgress(cwd, state);
+  await saveState(cwd, state, stateName);
+  await writeProgress(cwd, state, stateName);
 
   // Main pass: drive all unpassed, unparked features.
   for (;;) {
@@ -77,7 +79,14 @@ export async function runGreenfield(
       break;
     }
 
-    const infraError = await attemptFeature(cwd, state, feature, deps, say);
+    const infraError = await attemptFeature(
+      cwd,
+      state,
+      feature,
+      deps,
+      say,
+      stateName
+    );
 
     if (infraError !== undefined) {
       return {
@@ -111,6 +120,7 @@ export async function runGreenfield(
         feature,
         deps,
         say,
+        stateName,
         seed
       );
 
@@ -180,6 +190,7 @@ async function attemptFeature(
   feature: IFeature,
   deps: IGreenfieldDeps,
   say: (message: string) => void,
+  stateName: string,
   seed?: { triedLevers: EscalationRung[] }
 ): Promise<string | undefined> {
   feature.attempts += 1;
@@ -251,7 +262,7 @@ async function attemptFeature(
 
     return undefined;
   } finally {
-    await saveState(cwd, state);
-    await writeProgress(cwd, state);
+    await saveState(cwd, state, stateName);
+    await writeProgress(cwd, state, stateName);
   }
 }

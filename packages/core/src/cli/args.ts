@@ -54,6 +54,11 @@ export interface ICliArgs {
   /** Run the greenfield feature-checklist outer loop (`--greenfield`, or a recipe
    *  with `mode: "greenfield"`). `task` carries the one-line build goal. */
   greenfield: boolean;
+  /** Run a human-written worklist (`--work`). `task` is an optional list path;
+   *  when empty, looks up PLAN.md → TASKS.md → .specs/next.md. */
+  work: boolean;
+  /** Opt-in rewrite of the human checklist file as items pass (`--tick`). */
+  tick: boolean;
   /** Shell command to run on completion of an unattended run (`--notify <cmd>`),
    *  with the outcome in $TSFORGE_STATUS. "" = no notification. */
   notify: string;
@@ -113,6 +118,8 @@ const BOOL_FLAGS: Record<
   | "withReview"
   | "scout"
   | "greenfield"
+  | "work"
+  | "tick"
   | "setupYes"
   | "version"
   | "help"
@@ -129,6 +136,8 @@ const BOOL_FLAGS: Record<
   "--with-review": "withReview",
   "--scout": "scout",
   "--greenfield": "greenfield",
+  "--work": "work",
+  "--tick": "tick",
   "--yes": "setupYes",
   "--version": "version",
   "-V": "version",
@@ -152,7 +161,13 @@ const VALUE_FLAGS = new Set([
 
 /** True for any token the parser recognises as a flag, boolean or value-taking. */
 function isKnownFlag(token: string): boolean {
-  return Object.hasOwn(BOOL_FLAGS, token) || VALUE_FLAGS.has(token);
+  return (
+    Object.hasOwn(BOOL_FLAGS, token) ||
+    VALUE_FLAGS.has(token) ||
+    // Removed flags — still recognized so old aliases/scripts do not become task text.
+    token === "--tui-panes" ||
+    token === "--no-tui-panes"
+  );
 }
 
 /**
@@ -217,6 +232,8 @@ export function cliUsage(): string {
     "  --policy-mode <m>   plan|default|acceptEdits|ci|dontAsk|bypassPermissions",
     `  --profile <id>      strictness: ${PROFILE_IDS.join("|")}`,
     "  --notify <cmd>      run a command when an unattended run finishes",
+    "  --work [path]       drive a checklist (PLAN.md / TASKS.md / path)",
+    "  --tick              rewrite the human checklist as items pass",
     "  --version, -V       print the version and exit",
     "  --help, -h          this help",
     "",
@@ -249,6 +266,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     withReview: false,
     scout: false,
     greenfield: false,
+    work: false,
+    tick: false,
     notify: "",
     base: "",
     map: false,
@@ -274,6 +293,11 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     const arg = argv[i];
 
     if (arg === undefined) {
+      continue;
+    }
+
+    // Pane console is the only interactive UI — old opt-in/out flags are no-ops.
+    if (arg === "--tui-panes" || arg === "--no-tui-panes") {
       continue;
     }
 
