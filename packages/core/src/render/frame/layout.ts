@@ -10,8 +10,28 @@ export const PANE_MIN_ROWS = 16;
 /** Minimum total columns to keep a side panel. */
 export const PANE_SPLIT_MIN_COLS = 72;
 
-/** Side panel width when split. */
-export const PANEL_WIDTH = 28;
+/** Minimum main-column width when the Tasks rail is open. */
+export const PANEL_MAIN_MIN_COLS = 24;
+
+/**
+ * Adaptive Tasks rail width: readable checklists without starving the main pane.
+ * `cols` is content width inside the outer frame (terminal − 4 chrome).
+ * Maps to ≈32 / 36 / 40 for terminals under 100 / 100–139 / 140+.
+ */
+export function panelWidthFor(cols: number): number {
+  if (cols >= 136) {
+    return 40;
+  }
+
+  if (cols >= 96) {
+    return 36;
+  }
+
+  return 32;
+}
+
+/** Default mid-size rail width — prefer {@link panelWidthFor} for live layout. */
+export const PANEL_WIDTH = 36;
 
 /**
  * Console chrome (inside the floating outer window):
@@ -167,10 +187,11 @@ export function computeLayout(opts: IComputeLayoutOpts): ILayoutRects {
   const footerRows = Math.min(BOTTOM_PAD_ROWS, Math.max(0, bottom - inputRows));
   const bodyRows = Math.max(1, opts.rows - topRows - inputRows - footerRows);
   const wantPanel = opts.showPanel !== false;
+  const panelCols = panelWidthFor(opts.cols);
   const split =
     wantPanel &&
     opts.cols >= PANE_SPLIT_MIN_COLS &&
-    opts.cols - PANEL_WIDTH >= 24;
+    opts.cols - panelCols >= PANEL_MAIN_MIN_COLS;
   // Gutter spine runs through main + input + bottom pad.
   const spineRows = bodyRows + inputRows + footerRows;
 
@@ -203,7 +224,7 @@ export function computeLayout(opts: IComputeLayoutOpts): ILayoutRects {
     };
   }
 
-  const mainCols = opts.cols - PANEL_WIDTH - 1; // 1-col gutter
+  const mainCols = opts.cols - panelCols - 1; // 1-col gutter
 
   return {
     top,
@@ -212,7 +233,7 @@ export function computeLayout(opts: IComputeLayoutOpts): ILayoutRects {
       row: topRows,
       col: mainCols + 1,
       rows: spineRows,
-      cols: PANEL_WIDTH,
+      cols: panelCols,
     },
     input,
     footer,

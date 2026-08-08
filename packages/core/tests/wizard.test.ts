@@ -149,7 +149,7 @@ describe("wizard render (no color)", () => {
 
     expect(frame).toContain("Step 1 of 2 · Naming");
     expect(frame).toContain("312 interfaces scanned");
-    expect(frame).toContain("› bare PascalCase");
+    expect(frame).toContain("▸ bare PascalCase");
     expect(frame).toContain("recommended");
     expect(frame).toContain("enter select");
   });
@@ -278,7 +278,7 @@ describe("runWizard interactive teardown", () => {
       });
 
       expect(renders.length).toBe(1);
-      expect(renders[0]?.some((l) => l.includes("› bare PascalCase"))).toBe(
+      expect(renders[0]?.some((l) => l.includes("▸ bare PascalCase"))).toBe(
         true
       );
       // Nested alt-screen would fight PaneScreen — view mode must stay on host chrome.
@@ -286,7 +286,7 @@ describe("runWizard interactive teardown", () => {
 
       fake.emit("keypress", undefined, { name: "down" });
       expect(renders.length).toBe(2);
-      expect(renders[1]?.some((l) => l.includes("› I-prefix"))).toBe(true);
+      expect(renders[1]?.some((l) => l.includes("▸ I-prefix"))).toBe(true);
 
       fake.emit("keypress", undefined, { name: "escape" });
       const state = await done;

@@ -1,3 +1,5 @@
+import { CONSOLE } from "../render/frame/chrome";
+import { formatOverlayShell, menuClip, menuRule } from "../render/menu-chrome";
 import { STYLE, paint } from "../render/style";
 import { runInlineMenu } from "../render/inline-menu";
 import type { IMenuRowData } from "../render/inline-menu";
@@ -78,10 +80,12 @@ export interface IConfigDeps {
    *  effect for subsequent turns this session). */
   readonly getEnv: (name: string) => string | undefined;
   readonly setEnv: (name: string, value: string | undefined) => void;
-  /** The inline menu view (statusBar overlay + close). */
+  /** The inline menu view (pane overlay + close). */
   readonly view?: IConfigMenuView;
   /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
   readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 const NON_EMPTY = (label: string) => (v: string) =>
@@ -309,6 +313,38 @@ function buildMenuRows(settings: ISetting[]): IMenuRowData[] {
   }));
 }
 
+/** Pure edit-screen lines — shared overlay shell (title / rule / footer). */
+export function formatConfigEditLines(opts: {
+  readonly settingLabel: string;
+  readonly fieldIndex: number;
+  readonly fieldTotal: number;
+  readonly fieldLabel: string;
+  readonly valueShown: string;
+  readonly error: string | null;
+  readonly columns: number;
+  readonly color: boolean;
+}): string[] {
+  const width = Math.max(20, opts.columns);
+  const title = `${opts.settingLabel} · field ${String(opts.fieldIndex + 1)} of ${String(opts.fieldTotal)}`;
+  const caret = paint("▏", CONSOLE.bright, opts.color);
+  const bodyLines = [
+    menuRule(width, opts.color),
+    menuClip(opts.fieldLabel, width),
+    `  ${opts.valueShown}${caret}`,
+    ...(opts.error === null
+      ? []
+      : ["", paint(opts.error, STYLE.yellow, opts.color)]),
+  ];
+
+  return formatOverlayShell({
+    title,
+    bodyLines,
+    footer: "type · enter next · esc cancel",
+    columns: width,
+    color: opts.color,
+  });
+}
+
 // ── the driver ───────────────────────────────────────────────────────────────
 
 /**
@@ -344,17 +380,18 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
     const error = fieldError(editState);
     const total = editState.setting.fields?.length ?? 1;
 
-    const lines: string[] = [
-      `${paint(editState.setting.label, STYLE.bold, deps.color)} · field ${editState.fieldIndex + 1} of ${total}`,
-      "─".repeat(columns),
-      field.label,
-      `  ${shown}${paint("▏", STYLE.cyan, deps.color)}`,
-      ...(error === null ? [] : ["", paint(error, STYLE.yellow, deps.color)]),
-      "",
-      paint("type   enter next   esc cancel", STYLE.dim, deps.color),
-    ];
-
-    view.render(lines);
+    view.render(
+      formatConfigEditLines({
+        settingLabel: editState.setting.label,
+        fieldIndex: editState.fieldIndex,
+        fieldTotal: total,
+        fieldLabel: field.label,
+        valueShown: shown,
+        error,
+        columns,
+        color: deps.color,
+      })
+    );
   };
 
   const handleEditKey = (str: string | undefined, key: IKeyInfo): boolean => {
@@ -431,6 +468,7 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
           view.close();
         },
         columns,
+        viewportRows: deps.viewportRows,
       }).then((selected) => {
         if (!running) {
           return;

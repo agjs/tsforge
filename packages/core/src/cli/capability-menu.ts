@@ -17,6 +17,8 @@ export interface ICapabilityMenuDeps {
   readonly close: () => void;
   /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
   readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 /**
@@ -72,6 +74,7 @@ export function runCapabilityMenu(deps: ICapabilityMenuDeps): Promise<void> {
     render: deps.render,
     close: deps.close,
     columns: deps.columns,
+    viewportRows: deps.viewportRows,
   }).then((selected) => {
     if (selected === null) {
       return Promise.resolve();

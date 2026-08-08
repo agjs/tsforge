@@ -1,6 +1,7 @@
 import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
 import { clampIndex } from "./command-menu";
+import { formatMenuRow } from "./menu-chrome";
 import { displayWidth, graphemes } from "./width";
 
 /** Rows shown in the popup at once — a tight dropdown above the prompt, never a
@@ -83,9 +84,10 @@ export function truncatePath(path: string, max: number): string {
 
 /**
  * The popup rows for the inline file dropdown — one painted line per visible file,
- * each truncated to `columns` (no wrapping), the selected row gutter-highlighted.
- * Pure/width-aware so it can be asserted without a terminal. Empty list ⇒ a single
- * "no matching file" row so the dropdown never silently vanishes mid-type.
+ * each truncated to `columns` (no wrapping), the selected row gutter-highlighted
+ * with the shared menu dialect (`▸` + CONSOLE.bright). Pure/width-aware so it can
+ * be asserted without a terminal. Empty list ⇒ a single "no matching file" row so
+ * the dropdown never silently vanishes mid-type.
  */
 export function formatCompletionRows(
   items: readonly string[],
@@ -99,10 +101,19 @@ export function formatCompletionRows(
 
   return items.map((path, i) => {
     const active = i === selected;
-    const gutter = active ? paint("›", STYLE.cyan, color) : " ";
     const text = truncatePath(path, Math.max(0, columns - 2));
 
-    return `${gutter} ${paint(text, active ? STYLE.cyan : STYLE.dim, color)}`;
+    if (active) {
+      return formatMenuRow({
+        label: text,
+        active: true,
+        columns,
+        color,
+      });
+    }
+
+    // Inactive: shared gutter width, dim path (quiet under the input).
+    return `  ${paint(text, STYLE.dim, color)}`;
   });
 }
 

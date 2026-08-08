@@ -48,6 +48,8 @@ export interface IPaletteView {
   close(): void;
   /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
   readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 /**
@@ -87,7 +89,12 @@ export function pickCommand(view: IPaletteView): Promise<ICommandSpec | null> {
           : process.stdout.columns > 0
             ? process.stdout.columns
             : 80;
-      const viewportRows = process.stdout.rows > 0 ? process.stdout.rows : 24;
+      const viewportRows =
+        view.viewportRows !== undefined && view.viewportRows > 0
+          ? view.viewportRows
+          : process.stdout.rows > 0
+            ? process.stdout.rows
+            : 24;
       // The live query IS the title (e.g. "/co"), so it shows via the overlay even
       // while the editor is suspended (setInput wouldn't repaint in editor mode).
       const title = query.length > 0 ? `/${query}` : "commands";

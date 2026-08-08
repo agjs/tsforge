@@ -1,6 +1,13 @@
 import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
-import { displayWidth, sliceToWidth } from "./width";
+import {
+  MENU_FOOTER_NAV,
+  formatMenuRow,
+  formatOverlayShell,
+  menuBodyBudget,
+  menuScrollCue,
+  menuWindow,
+} from "./menu-chrome";
 
 /** Keep `selected` within `[0, count)` (wraps), so ↑/↓ never points off-list.
  *  Lives here (the menu core); `command-menu` re-exports it for its importers. */
@@ -17,56 +24,6 @@ export function clampIndex(selected: number, count: number): number {
  * whole-tree dump. Matches the @file picker's MAX_VISIBLE.
  */
 const MAX_VISIBLE = 8;
-
-/** Terminal rows the status bar consumes BELOW the overlay (input row + bar
- *  border + bar + one row of margin). The overlay must fit in what remains, or
- *  the status bar's relative-redraw can't clear a region taller than the screen
- *  and the menu stacks as you scroll. */
-const REGION_CHROME_ROWS = 4;
-
-/** Non-row overlay lines: title + divider + describe + footer, plus up to two
- *  scroll indicators. Budgeted so the whole region fits the terminal height. */
-const OVERLAY_OVERHEAD = 6;
-
-const FOOTER = "↑/↓ move   enter select   esc close";
-
-/** Clip to a display-column budget, grapheme-safe (never splits a wide cell). */
-function clip(text: string, max: number): string {
-  return sliceToWidth(text, max).text;
-}
-
-/** One menu row: `› label            hint`. The SELECTED row is the only styled
- *  line (cyan + bold — matches console interactive accent); every other row is
- *  plain default text so it stays fully legible. Composed as raw text and fitted
- *  to width BEFORE coloring, so clipping can never cut an ANSI escape. */
-function formatRow(
-  row: IMenuRowData,
-  active: boolean,
-  columns: number,
-  color: boolean
-): string {
-  const avail = Math.max(0, columns - 2); // "› " / "  " gutter
-  const hint = row.hint ?? "";
-  let body: string;
-
-  if (hint.length > 0) {
-    const shownHint = clip(hint, Math.floor(avail / 2));
-    const labelMax = Math.max(0, avail - displayWidth(shownHint) - 1);
-    const shownLabel = clip(row.label, labelMax);
-    const gap = Math.max(
-      1,
-      avail - displayWidth(shownLabel) - displayWidth(shownHint)
-    );
-
-    body = `${shownLabel}${" ".repeat(gap)}${shownHint}`;
-  } else {
-    body = clip(row.label, avail);
-  }
-
-  const raw = `${active ? "›" : " "} ${body}`;
-
-  return active ? paint(raw, `${STYLE.cyan}${STYLE.bold}`, color) : raw;
-}
 
 /** Menu row data — flat list, no groups (cursor index == row index). */
 export interface IMenuRowData {
@@ -99,7 +56,7 @@ interface IKeyInfo {
  * and a footer hint. Pure/width-aware so it can be asserted without a terminal.
  * Empty list ⇒ a single "no rows" line so the dropdown never silently vanishes.
  *
- * Returns an array of formatted lines ready to paint via `statusBar.setOverlay()`.
+ * Returns lines ready for {@link PaneScreen.setOverlay}.
  */
 export function formatMenuRows(
   rows: readonly IMenuRowData[],
@@ -110,33 +67,26 @@ export function formatMenuRows(
   title: string
 ): string[] {
   const width = Math.max(20, columns);
-  const lines: string[] = [];
-
-  // Title: bold header at the TOP (default ink — only the selected row is cyan).
-  lines.push(paint(clip(title, width), STYLE.bold, color));
 
   if (rows.length === 0) {
-    lines.push(`  ${paint("(no items)", STYLE.dim, color)}`);
-    lines.push(paint(clip(FOOTER, width), STYLE.dim, color));
-
-    return lines;
+    return formatOverlayShell({
+      title,
+      bodyLines: [`  ${paint("(no items)", STYLE.dim, color)}`],
+      footer: MENU_FOOTER_NAV,
+      columns: width,
+      color,
+    });
   }
 
-  // Cap visible rows so the WHOLE region (overlay + input + bar) fits the
-  // terminal height — otherwise the status bar can't clear it and it stacks.
-  const budget = viewportRows > 0 ? viewportRows : 24;
-  const visible = Math.max(
-    1,
-    Math.min(MAX_VISIBLE, budget - REGION_CHROME_ROWS - OVERLAY_OVERHEAD)
+  const bodyCap = Math.min(
+    MAX_VISIBLE,
+    menuBodyBudget(viewportRows, { hasDescribe: true })
   );
-
-  // Scroll window: keep the cursor visible (flat list ⇒ cursor is a direct index).
-  const windowTop = Math.max(0, cursor - Math.floor(visible / 2));
-  const end = Math.min(rows.length, windowTop + visible);
-  const start = Math.max(0, end - visible);
+  const { start, end } = menuWindow(rows.length, cursor, bodyCap);
+  const bodyLines: string[] = [];
 
   if (start > 0) {
-    lines.push(`  ${paint(`↑ ${start} more`, STYLE.dim, color)}`);
+    bodyLines.push(menuScrollCue("up", start, color));
   }
 
   for (let i = start; i < end; i += 1) {
@@ -146,26 +96,31 @@ export function formatMenuRows(
       break;
     }
 
-    lines.push(formatRow(row, i === cursor, width, color));
+    bodyLines.push(
+      formatMenuRow({
+        label: row.label,
+        hint: row.hint,
+        active: i === cursor,
+        columns: width,
+        color,
+      })
+    );
   }
 
   if (end < rows.length) {
-    lines.push(`  ${paint(`↓ ${rows.length - end} more`, STYLE.dim, color)}`);
+    bodyLines.push(menuScrollCue("down", rows.length - end, color));
   }
-
-  // Divider + the selected row's full description (default color — legible) at the
-  // BOTTOM, then the footer hint.
-  lines.push(paint("─".repeat(width), STYLE.dim, color));
 
   const selected = rows[cursor];
 
-  if (selected !== undefined) {
-    lines.push(clip(selected.describe, width));
-  }
-
-  lines.push(paint(clip(FOOTER, width), STYLE.dim, color));
-
-  return lines;
+  return formatOverlayShell({
+    title,
+    bodyLines,
+    describe: selected?.describe ?? "",
+    footer: MENU_FOOTER_NAV,
+    columns: width,
+    color,
+  });
 }
 
 /**
@@ -178,6 +133,11 @@ export interface IInlineMenuDeps {
   readonly close: () => void;
   /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
   readonly columns?: number;
+  /**
+   * Max overlay rows (pane chrome budget). Prefer
+   * {@link PaneScreen.overlayBudgetRows} when panes are live.
+   */
+  readonly viewportRows?: number;
 }
 
 /**
@@ -216,7 +176,12 @@ export function runInlineMenu(
 
     const draw = (): void => {
       cursor = clampIndex(cursor, rows.length);
-      const viewportRows = process.stdout.rows > 0 ? process.stdout.rows : 24;
+      const viewportRows =
+        deps.viewportRows !== undefined && deps.viewportRows > 0
+          ? deps.viewportRows
+          : process.stdout.rows > 0
+            ? process.stdout.rows
+            : 24;
       const lines = formatMenuRows(
         rows,
         cursor,

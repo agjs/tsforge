@@ -16,8 +16,12 @@ export interface IReplScaffoldDeps {
   readonly suspend: () => void;
   readonly resume: () => void;
   readonly out: (s: string) => void;
-  /** Pane / status overlay — when set, scaffold wizards skip nested alt-screen. */
+  /** Pane overlay — when set, scaffold wizards skip nested alt-screen. */
   readonly view?: IWizardView;
+  /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
+  readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 /** Free-text step: the folder name for the new project (created under cwd). */
@@ -176,6 +180,10 @@ export async function openScaffoldInRepl(
       manageInput: false,
       out: deps.out,
       ...(deps.view === undefined ? {} : { view: deps.view }),
+      ...(deps.columns === undefined ? {} : { columns: deps.columns }),
+      ...(deps.viewportRows === undefined
+        ? {}
+        : { viewportRows: deps.viewportRows }),
     };
 
     // Step 1: Run archetype selection wizard

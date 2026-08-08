@@ -2,7 +2,7 @@
 """Drive the REAL tsforge /help capability browser in a pty under the pane console
 and assert the overlay renders and runs commands:
   1. /help opens (title + footer visible in the byte stream).
-  2. Selection styling still uses brand+bold after scroll.
+  2. Selection uses pane CONSOLE.bright (green ▸).
   3. Selecting a command runs it (no // double-slash regression).
 
 Uses readline input (TSFORGE_BASIC_INPUT) so `/help` submits as a slash command
@@ -23,8 +23,8 @@ from ptyharness import (  # noqa: E402
     wait_for,
 )
 
-# The selected-row style: brand truecolor THEN bold (see render/inline-menu formatRow).
-BRAND_BOLD = "\x1b[38;2;59;130;246m\x1b[1m"
+# Selected-row style: CONSOLE.bright green (74,222,128) — see menu-chrome formatMenuRow.
+SELECT_GREEN = "\x1b[38;2;74;222;128m"
 
 
 def main():
@@ -57,8 +57,8 @@ def main():
 
     t.check("footer stays visible after scroll", "esc close" in buf)
     t.check(
-        "selected row uses brand+bold styling",
-        buf.count(BRAND_BOLD) >= 1,
+        "selected row uses CONSOLE.bright (green)",
+        buf.count(SELECT_GREEN) >= 1 and "▸" in buf,
     )
 
     os.write(m, b"\x1b")  # close /help

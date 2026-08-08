@@ -49,7 +49,7 @@ import { Scrollback } from "./scrollback";
 import { stripSgr } from "./ansi-plain";
 import { handleFocusKey, handleMouseKey, handleScrollKey } from "./pane-keys";
 import type { PaneKeyResult } from "./pane-keys";
-import { STYLE, paint } from "../style";
+import { paint } from "../style";
 import { displayWidth } from "../width";
 import { formatScrollbarColumn, overlayScrollbarCol } from "./scrollbar";
 import { frameContentRow, outerInsets, wrapOuterFrame } from "./outer-frame";
@@ -74,7 +74,8 @@ export const FORGE_EDITOR_GUTTER = INPUT_EDITOR_GUTTER;
 const FORGE_PLACEHOLDER = "describe a task, or /help";
 
 const GUTTER = "│";
-const EMPTY_PANEL_LINES = ["—", "/work"] as const;
+/** Fallback when no worklist lines are set — mirrors formatWorklistLines empty. */
+const EMPTY_PANEL_LINES = ["/work PLAN.md", "or /work <goal>"] as const;
 
 /**
  * Interactive console TUI: dense top strip, hairlines, scroll + rail, caret input.
@@ -773,6 +774,39 @@ export class PaneScreen {
     return insetInnerCols(layout.main.cols);
   }
 
+  /**
+   * Wrap budget for Tasks-rail body lines (0 when collapsed).
+   * Matches {@link fitPanelCell}'s insetX — full panel.cols over-wraps and
+   * mid-word clips (and strips SGR) when painted.
+   */
+  panelInnerCols(): number {
+    const layout = computeLayout(this.layoutOpts());
+
+    if (layout.panel === null) {
+      return 0;
+    }
+
+    return insetInnerCols(layout.panel.cols);
+  }
+
+  /** Rows available for checklist body under the sticky Tasks title. */
+  panelListBudgetRows(): number {
+    return this.panelBodyViewRows();
+  }
+
+  /**
+   * Max rows an overlay may occupy in the main pane body (leaves one transcript
+   * row). Menu formatters should fit this budget so pinOverlayChrome is only a
+   * safety net.
+   */
+  overlayBudgetRows(): number {
+    const layout = computeLayout(this.layoutOpts());
+    const bodyGap = layout.main.rows >= BODY_GAP_ROWS + 2 ? BODY_GAP_ROWS : 0;
+    const scrollBudget = Math.max(0, layout.main.rows - bodyGap);
+
+    return Math.max(1, scrollBudget - 1);
+  }
+
   paint(): void {
     if (!this.entered) {
       return;
@@ -1130,16 +1164,26 @@ export class PaneScreen {
     const view = this.panelBodyViewRows();
     const slice = raw.slice(this.panelOffset, this.panelOffset + view);
 
+    // Checklist lines already carry CONSOLE hierarchy (current bright, done muted).
+    // Do not blanket-dim — that erased the current-item accent.
     if (!this.focus.panelFocused) {
-      return [...title, ...slice.map((l) => paint(l, STYLE.dim, true))];
+      return [...title, ...slice];
     }
 
     const body = slice.map((line, i) => {
       const abs = this.panelOffset + i;
+      const plain = stripSgr(line);
 
-      return abs === this.focus.selection
-        ? paint(`▸ ${stripSgr(line)}`, CONSOLE.bright, true)
-        : `  ${line}`;
+      if (abs !== this.focus.selection) {
+        return line;
+      }
+
+      // Current work item already leads with ▸ — recolor, don't double the gutter.
+      if (plain.startsWith("▸")) {
+        return paint(plain, CONSOLE.bright, true);
+      }
+
+      return paint(`▸ ${plain}`, CONSOLE.bright, true);
     });
 
     return [...title, ...body];

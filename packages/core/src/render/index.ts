@@ -32,6 +32,17 @@ export { box, table, GLYPH } from "./box";
 export { renderMarkdown, formatTables, highlightCode } from "./markdown";
 export { StreamingMarkdown } from "./stream-markdown";
 export { STYLE, RESET, paint } from "./style";
+export {
+  formatOverlayShell,
+  formatMenuRow,
+  menuRule,
+  menuFooter,
+  menuScrollCue,
+  menuWindow,
+  menuBodyBudget,
+  MENU_FOOTER_NAV,
+  MENU_GUTTER_COLS,
+} from "./menu-chrome";
 export { makeAgentRail, type IAgentRail } from "./agent-rail";
 export {
   formatAgentSummary,

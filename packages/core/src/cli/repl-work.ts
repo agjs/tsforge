@@ -37,7 +37,16 @@ export interface IRunWorkCommandOpts {
   args: ICliArgs;
   arg: string;
   echo: (s: string) => void;
+  /**
+   * Classic readline (null when the multiline editor owns stdin). Prefer
+   * {@link askApprove} under the pane console — `rl.question` is unavailable there.
+   */
   rl: Rl;
+  /**
+   * Interactive approve/cancel when `rl` is null (pane editor). Overlay menus,
+   * etc. When both `rl` and this are absent, planning cancels as non-interactive.
+   */
+  askApprove?: () => Promise<"approve" | "cancel">;
   workProvider: OpenAICompatibleProvider;
   activeModelEntry: IModelEntry;
   /** Session gate command (may be empty). */
@@ -77,25 +86,44 @@ async function resolveArgPath(
   return null;
 }
 
-async function approvePlan(
+/** Prompt for plan approval. Exported for unit tests. */
+export async function approvePlan(
   echo: (s: string) => void,
-  rl: Rl,
-  checklist: string
+  checklist: string,
+  ask: (() => Promise<"approve" | "cancel">) | null
 ): Promise<"approve" | "cancel"> {
   echo(`\nProposed worklist:\n${checklist}\n`);
   echo("Approve this list? (approve/cancel)\n");
 
-  if (rl === null) {
+  if (ask === null) {
     echo("(non-interactive — cancelling)\n");
 
     return "cancel";
   }
 
-  const answer = (await rl.question("> ")).trim().toLowerCase();
+  return ask();
+}
 
-  return answer === "approve" || answer === "approved" || answer === "go"
-    ? "approve"
-    : "cancel";
+function approveAskFromOpts(
+  opts: IRunWorkCommandOpts
+): (() => Promise<"approve" | "cancel">) | null {
+  if (opts.askApprove !== undefined) {
+    return opts.askApprove;
+  }
+
+  const { rl } = opts;
+
+  if (rl === null) {
+    return null;
+  }
+
+  return async () => {
+    const answer = (await rl.question("> ")).trim().toLowerCase();
+
+    return answer === "approve" || answer === "approved" || answer === "go"
+      ? "approve"
+      : "cancel";
+  };
 }
 
 /**
@@ -106,7 +134,7 @@ async function planFromGoal(
   opts: IRunWorkCommandOpts,
   goal: string
 ): Promise<IWorklistItem[] | null> {
-  const { echo, rl, activeModelEntry } = opts;
+  const { echo, activeModelEntry } = opts;
 
   echo("▸ planning a worklist from your goal...\n");
 
@@ -125,7 +153,9 @@ async function planFromGoal(
     features: planned.features,
   });
 
-  if ((await approvePlan(echo, rl, preview)) !== "approve") {
+  if (
+    (await approvePlan(echo, preview, approveAskFromOpts(opts))) !== "approve"
+  ) {
     echo("worklist cancelled\n");
 
     return null;
@@ -163,6 +193,36 @@ interface IResolvedWorklist {
   accepts: Map<string, string>;
 }
 
+/** Persist planned items under `.tsforge/worklist/` and return the resolved start. */
+async function persistPlannedItems(
+  opts: IRunWorkCommandOpts,
+  items: IWorklistItem[],
+  sourcePath: string | null,
+  goal: string
+): Promise<IResolvedWorklist | null> {
+  const state = await prepareWorklistState(opts.args.dir, { goal, items });
+
+  return state === null
+    ? null
+    : { state, sourcePath, accepts: acceptMapOf(items) };
+}
+
+/** File had no checklist markers — ask the planner to extract items from prose. */
+async function planFromNarrativeFile(
+  opts: IRunWorkCommandOpts,
+  asPath: string
+): Promise<IResolvedWorklist | null> {
+  const md = (await readFile(asPath, "utf8")).trim();
+  const items = await planFromGoal(
+    opts,
+    md.length > 0 ? md.slice(0, 12_000) : opts.arg
+  );
+
+  return items === null
+    ? null
+    : persistPlannedItems(opts, items, asPath, opts.arg);
+}
+
 async function resolveWorklistStart(
   opts: IRunWorkCommandOpts,
   asPath: string | null,
@@ -184,29 +244,22 @@ async function resolveWorklistStart(
       ...(asPath !== null ? { path: asPath } : {}),
     });
 
-    return state === null
-      ? null
-      : {
-          state,
-          sourcePath: asPath ?? (await resolveWorklistPath(cwd)),
-          accepts: new Map(),
-        };
+    if (state !== null) {
+      return {
+        state,
+        sourcePath: asPath ?? (await resolveWorklistPath(cwd)),
+        accepts: new Map(),
+      };
+    }
+
+    return asPath === null ? null : planFromNarrativeFile(opts, asPath);
   }
 
   const items = await planFromGoal(opts, opts.arg);
 
-  if (items === null) {
-    return null;
-  }
-
-  const state = await prepareWorklistState(cwd, {
-    goal: opts.arg,
-    items,
-  });
-
-  return state === null
+  return items === null
     ? null
-    : { state, sourcePath: null, accepts: acceptMapOf(items) };
+    : persistPlannedItems(opts, items, null, opts.arg);
 }
 
 function stuckMessage(result: Awaited<ReturnType<typeof runWorklist>>): string {

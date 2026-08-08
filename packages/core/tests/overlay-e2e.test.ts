@@ -101,8 +101,8 @@ describe("wizard e2e — rendered screen at each step", () => {
 
     expect(screen.text()).toContain("Step 1 of 2");
     expect(screen.text()).toContain("Naming");
-    // The cursor gutter "›" sits on the first option row (bare PascalCase).
-    const cursorRow = findRow(screen, "›");
+    // The cursor gutter "▸" sits on the first option row (bare PascalCase).
+    const cursorRow = findRow(screen, "▸");
 
     expect(screen.row(cursorRow)).toContain("bare PascalCase");
   });
@@ -113,7 +113,7 @@ describe("wizard e2e — rendered screen at each step", () => {
     state = reduceWizard(state, "down", STEPS);
 
     const screen = screenOf(state);
-    const cursorRow = findRow(screen, "›");
+    const cursorRow = findRow(screen, "▸");
 
     expect(screen.row(cursorRow)).toContain("I-prefix");
   });
@@ -227,8 +227,8 @@ describe("@-file picker e2e — rendered dropdown", () => {
 
     expect(items.every((p) => p.includes("app"))).toBe(true);
     expect(screen.rowsContaining("router.ts")).toBe(0); // filtered out
-    // The first (selected) row carries the active gutter "›".
-    expect(screen.row(1)).toContain("›");
+    // The first (selected) row carries the active gutter "▸".
+    expect(screen.row(1)).toContain("▸");
   });
 
   test("an empty match renders the 'no matching file' hint", () => {

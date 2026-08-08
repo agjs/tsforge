@@ -131,7 +131,13 @@ import {
   runTraceCommand,
 } from "./repl-commands";
 import { runWorkCommand } from "./repl-work";
-import { formatWorklistLines, worklistBadge } from "../loop/worklist";
+import {
+  WORKLIST_STATE,
+  formatWorklistLines,
+  worklistBadge,
+} from "../loop/worklist";
+import { loadState } from "../loop/greenfield";
+import { runInlineMenu } from "../render/inline-menu";
 
 /** A unique-enough id for a new session (time + a little randomness). */
 function newSessionId(): string {
@@ -1252,6 +1258,8 @@ export async function repl(args: ICliArgs): Promise<number> {
                 chrome.clearOverlay();
               },
             },
+            columns: transcriptCols(),
+            viewportRows: overlayBudget(),
           });
         } finally {
           editorControl?.setInputInert(false);
@@ -1398,6 +1406,17 @@ export async function repl(args: ICliArgs): Promise<number> {
     return cols > 0 ? cols : 80;
   };
 
+  /** Max overlay rows — pane chrome budget when live, else tty rows. */
+  const overlayBudget = (): number => {
+    if (paneScreen.active) {
+      return paneScreen.overlayBudgetRows();
+    }
+
+    const rows = process.stdout.rows;
+
+    return rows > 0 ? rows : 24;
+  };
+
   /** True while the alt-screen pane console owns the terminal. */
   const panesLive = (): boolean => paneScreen.active;
 
@@ -1492,14 +1511,78 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
+  /** Paint the Tasks rail from a worklist state (or empty-rail hints). */
+  const syncWorklistPanel = (
+    workState: Awaited<ReturnType<typeof loadState>>
+  ): void => {
+    if (!panesLive()) {
+      return;
+    }
+
+    const cols = Math.max(12, paneScreen.panelInnerCols());
+    const maxPending = Math.max(4, paneScreen.panelListBudgetRows());
+    const state = workState ?? { goal: "worklist", features: [] };
+
+    paneScreen.setPanel(
+      formatWorklistLines(state, {
+        columns: cols,
+        maxPending,
+        color: true,
+      })
+    );
+    paneScreen.setWorklistBadge(
+      state.features.length > 0 ? worklistBadge(state) : ""
+    );
+
+    syncPaneChrome();
+  };
+
   handleWork = async (workArg: string): Promise<void> => {
     await runWorkCommand({
       args,
       arg: workArg,
       echo: (s) => {
-        process.stdout.write(s);
+        streamOut(s);
       },
       rl,
+      // Pane editor leaves `rl` null — approve via the shared overlay menu.
+      askApprove: async () => {
+        editorControl?.suspend();
+        editorControl?.setInputInert(true);
+
+        try {
+          const picked = await runInlineMenu(
+            [
+              {
+                id: "approve",
+                label: "approve",
+                describe: "Save this list and start driving remaining items",
+              },
+              {
+                id: "cancel",
+                label: "cancel",
+                describe: "Discard the proposed worklist",
+              },
+            ],
+            {
+              title: "Approve this worklist?",
+              render: (lines) => {
+                chrome.setOverlay(lines);
+              },
+              close: () => {
+                chrome.clearOverlay();
+              },
+              columns: transcriptCols(),
+              viewportRows: overlayBudget(),
+            }
+          );
+
+          return picked === 0 ? "approve" : "cancel";
+        } finally {
+          editorControl?.setInputInert(false);
+          editorControl?.resume();
+        }
+      },
       workProvider: provider,
       activeModelEntry,
       gate: session.gate,
@@ -1507,21 +1590,12 @@ export async function repl(args: ICliArgs): Promise<number> {
       logFile,
       id,
       onProgress: (workState) => {
-        const lines = formatWorklistLines(workState);
-
-        if (panesLive()) {
-          paneScreen.setPanel(lines);
-          paneScreen.setWorklistBadge(worklistBadge(workState));
-          syncPaneChrome();
-        }
+        syncWorklistPanel(workState);
       },
     });
 
-    if (panesLive()) {
-      paneScreen.clearPanel();
-      paneScreen.setWorklistBadge("");
-      syncPaneChrome();
-    }
+    // Keep the Tasks rail hydrated from disk after /work (do not wipe on exit).
+    syncWorklistPanel(await loadState(args.dir, WORKLIST_STATE));
   };
 
   /** Stream conversation text: main pane when live, else plain stdout (pipes). */
@@ -1802,6 +1876,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           },
         },
         columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       });
     } finally {
       editorControl?.setInputInert(false);
@@ -2149,6 +2224,8 @@ export async function repl(args: ICliArgs): Promise<number> {
                 suspend,
                 resume,
                 out: (s) => process.stdout.write(s),
+                columns: transcriptCols(),
+                viewportRows: overlayBudget(),
               })
             : openRecipePicker({
                 cwd: args.dir,
@@ -2159,6 +2236,7 @@ export async function repl(args: ICliArgs): Promise<number> {
                   chrome.clearOverlay();
                 },
                 columns: transcriptCols(),
+                viewportRows: overlayBudget(),
                 out: (s) => process.stdout.write(s),
                 runRecipe: (recipe) => {
                   if (recipe.gate !== undefined) {
@@ -2182,6 +2260,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           chrome.clearOverlay();
         },
         columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       };
     };
 
@@ -2238,6 +2317,8 @@ export async function repl(args: ICliArgs): Promise<number> {
             chrome.clearOverlay();
           },
         },
+        columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       });
     };
 
@@ -2292,6 +2373,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           chrome.clearOverlay();
         },
         columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       };
 
       try {
@@ -2682,7 +2764,12 @@ export async function repl(args: ICliArgs): Promise<number> {
         }
       }
 
-      // Empty landing otherwise — discovery lives in the input placeholder.
+      // Resume Tasks rail from a prior /work run (`.tsforge/worklist/`).
+      void loadState(args.dir, WORKLIST_STATE).then((workState) => {
+        if (panesLive()) {
+          syncWorklistPanel(workState);
+        }
+      });
     };
 
     if (interactiveTty) {

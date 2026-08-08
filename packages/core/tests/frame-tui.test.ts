@@ -8,6 +8,7 @@ import {
   Scrollback,
   computeLayout,
   canUsePaneTui,
+  panelWidthFor,
   PaneScreen,
   ENTER_ALT,
   EXIT_ALT,
@@ -18,12 +19,15 @@ import {
   BOTTOM_CHROME_ROWS,
   INPUT_BAND_ROWS,
   CHROME_PAD_X,
+  insetInnerCols,
   inputCursorCol,
   outerInsets,
   OUTER_MARGIN,
   TOP_PAD_ROWS,
   BOTTOM_PAD_ROWS,
 } from "../src/render/frame";
+import { formatMenuRows } from "../src/render/inline-menu";
+import { formatWorklistLines } from "../src/loop/worklist/panel";
 import { VirtualScreen } from "./helpers/virtual-screen";
 
 function findPromptRow(feed: string, rows: number, cols: number): number {
@@ -245,11 +249,20 @@ describe("computeLayout", () => {
 
     expect(layout.collapsedPanel).toBe(false);
     expect(layout.panel).not.toBeNull();
+    expect(layout.panel?.cols).toBe(panelWidthFor(100));
     expect(layout.main.cols + 1 + (layout.panel?.cols ?? 0)).toBe(100);
     expect(layout.top.rows).toBe(TOP_PAD_ROWS + 3); // pad + title + pad + rule
     expect(layout.footer.rows).toBe(BOTTOM_PAD_ROWS);
     expect(layout.footer.row + layout.footer.rows).toBe(20);
     expect(layout.input.rows).toBe(INPUT_BAND_ROWS);
+  });
+
+  test("panelWidthFor adapts by content width", () => {
+    // Content cols ≈ term − 4; thresholds match 100- and 140-col terminals.
+    expect(panelWidthFor(80)).toBe(32);
+    expect(panelWidthFor(96)).toBe(36);
+    expect(panelWidthFor(136)).toBe(40);
+    expect(computeLayout({ rows: 20, cols: 160 }).panel?.cols).toBe(40);
   });
 
   test("keeps pinned topbar at PANE_MIN_ROWS content height", () => {
@@ -804,6 +817,56 @@ describe("PaneScreen", () => {
     expect(screen.text()).toContain("item-a");
   });
 
+  test("Tasks rail shows wrapped checklist with adaptive panel width", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    const wrapCols = panes.panelInnerCols();
+
+    panes.setWorklistBadge("0/2");
+    panes.setPanel(
+      formatWorklistLines(
+        {
+          goal: "PLAN.md",
+          features: [
+            {
+              id: "a",
+              desc: "Accept a one-line description via argument or interactive prompt.",
+              passes: false,
+              attempts: 0,
+            },
+            {
+              id: "b",
+              desc: "Create a flat list of independent verifiable features.",
+              passes: false,
+              attempts: 0,
+            },
+          ],
+        },
+        { columns: wrapCols, color: false }
+      )
+    );
+    panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
+
+    const screen = new VirtualScreen(24, 100);
+
+    screen.feed(term.text());
+    const text = screen.text();
+
+    expect(wrapCols).toBe(insetInnerCols(panelWidthFor(100)));
+    expect(wrapCols).toBeLessThan(panelWidthFor(100));
+    expect(text).toContain("Tasks");
+    expect(text).toContain("0/2");
+    expect(text).toContain("PLAN.md");
+    expect(text).toContain("▸");
+    // Word-aware wrap + inset-matched budget — no mid-word clip at the rail edge.
+    expect(text).toContain("independent");
+    expect(text).toContain("via");
+    expect(text).not.toMatch(/independen[^t]/u);
+    expect(text).not.toMatch(/\bvi\b/u);
+  });
+
   test("setOverlay pins the title when the menu exceeds the chrome budget", () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);
@@ -825,6 +888,40 @@ describe("PaneScreen", () => {
     expect(text).toContain("menu-footer-line");
     // Mid-body rows are sacrificed for the title + tail pin.
     expect(text).not.toContain("menu-body-0");
+  });
+
+  test("formatMenuRows overlay keeps title and ▸ cursor on a short pane", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
+
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      id: `r${String(i)}`,
+      label: `cmd-${String(i)}`,
+      describe: `about ${String(i)}`,
+    }));
+    const budget = panes.overlayBudgetRows();
+    const lines = formatMenuRows(
+      rows,
+      12,
+      panes.mainInnerCols(),
+      budget,
+      false,
+      "commands"
+    );
+
+    panes.setOverlay(lines);
+
+    const screen = new VirtualScreen(24, 100);
+
+    screen.feed(term.text());
+    const text = screen.text();
+
+    expect(text).toContain("commands");
+    expect(text).toContain("▸ cmd-12");
+    expect(text).toContain("about 12");
   });
 
   test("setStatus paints live chips on the dense top strip", () => {
