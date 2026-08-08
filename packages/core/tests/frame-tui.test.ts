@@ -506,6 +506,21 @@ describe("PaneScreen", () => {
     expect(screen.row(title + 2)).toContain("┬");
     expect(screen.row(title + 3)).toContain("/help commands");
     expect(screen.row(title + 3)).toContain("│");
+    // Hairline ┬ → gutter │/├ → outer ┴ closes the panel spine.
+    const rule = screen.row(title + 2);
+    const gutterIdx = rule.indexOf("┬");
+    // Sticky rail title under the ┬ hairline: Tasks … 0/0, then under-rule.
+    const railTitle = screen.row(title + 3);
+    const railRule = screen.row(title + 4);
+
+    expect(gutterIdx).toBeGreaterThan(0);
+    expect(railTitle).toContain("Tasks");
+    expect(railTitle).toContain("0/0");
+    expect(railTitle.indexOf("Tasks")).toBeLessThan(railTitle.indexOf("0/0"));
+    expect(railRule).toMatch(/─{4,}/);
+    // Under-rule joins the gutter spine (├) and the outer rail (┤).
+    expect(railRule[gutterIdx]).toBe("├");
+    expect(railRule.trimEnd().endsWith("┤")).toBe(true);
     expect(screen.text()).toContain("/work");
     expect(screen.row(promptBoxTop(24))).toContain("╭");
     expect(screen.row(expectedPromptRow(24))).toContain(">");
@@ -517,17 +532,11 @@ describe("PaneScreen", () => {
     const midPlain = screen.row(expectedPromptRow(24));
     const botPlain = screen.row(promptBoxTop(24) + 2);
     const topRight = topPlain.lastIndexOf("╮");
+    const outerBot = screen.row(outerBottomRow(24));
 
     expect(topRight).toBeGreaterThan(0);
     expect(midPlain[topRight]).toBe("│");
     expect(botPlain[topRight]).toBe("╯");
-
-    // Hairline ┬ → gutter │ → outer ┴ closes the panel spine.
-    const rule = screen.row(title + 2);
-    const gutterIdx = rule.indexOf("┬");
-    const outerBot = screen.row(outerBottomRow(24));
-
-    expect(gutterIdx).toBeGreaterThan(0);
     expect(rule.slice(gutterIdx + 1).includes("─")).toBe(true);
     expect(midPlain[gutterIdx]).toBe("│");
     expect(outerBot[gutterIdx]).toBe("┴");
@@ -721,8 +730,8 @@ describe("PaneScreen", () => {
       }
 
       sawContentRow = true;
-      // Panel gutter column stays a gutter glyph — never a content "W".
-      expect(row[gutterCol]).toBe("│");
+      // Panel gutter column stays a gutter glyph (│ spine or ├ under-rule) — never "W".
+      expect(["│", "├"]).toContain(row[gutterCol]);
       // First panel cell is not overflowing main content.
       expect(row[gutterCol + 1]).not.toBe("W");
     }
@@ -777,19 +786,23 @@ describe("PaneScreen", () => {
 
     for (let r = mainTop; r <= mainBot; r += 1) {
       const row = screen.row(r);
+      const mainSlice = row.slice(0, gutterCol);
 
-      if (!row.includes("─") && !row.includes("/help")) {
+      // Only rows where the overlay painted into the main column.
+      if (!mainSlice.includes("/help") && !mainSlice.includes("─".repeat(20))) {
         continue;
       }
 
       sawOverlay = true;
       expect(row[gutterCol]).toBe("│");
-      // Panel side still shows worklist content, not overlay dashes.
+      // Overlay must not punch through the gutter (panel may have its own short title rule).
       const panelSlice = row.slice(gutterCol + 1);
-      expect(panelSlice.includes("─".repeat(10))).toBe(false);
+
+      expect(panelSlice.includes("─".repeat(40))).toBe(false);
     }
 
     expect(sawOverlay).toBe(true);
+    expect(screen.text()).toContain("Tasks");
     expect(screen.text()).toContain("item-a");
   });
 

@@ -48,8 +48,13 @@ export {
   wrapOuterFrame,
   frameContentRow,
   isFullBleedRule,
+  isPanelRuleRow,
 } from "./outer-frame";
-export type { IOuterInsets, IOuterFrameOpts } from "./outer-frame";
+export type {
+  IOuterInsets,
+  IOuterFrameOpts,
+  IFrameContentRowOpts,
+} from "./outer-frame";
 export {
   computeLayout,
   canUsePaneTui,
@@ -83,6 +88,9 @@ export {
   formatConsoleTitle,
   formatMainHeader,
   formatRailHeader,
+  formatRailTitleRule,
+  formatRailTitleBlock,
+  RAIL_TITLE_ROWS,
   hairline,
   insetX,
   insetInnerCols,

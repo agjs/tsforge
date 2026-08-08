@@ -20,8 +20,10 @@ import {
   CHROME_PAD_X,
   CONSOLE,
   formatConsoleTopbar,
+  formatRailTitleBlock,
   insetInnerCols,
   insetX,
+  RAIL_TITLE_ROWS,
 } from "./chrome";
 import { CursorState } from "./cursor-state";
 import { fitAnsiLine } from "./fit-line";
@@ -290,7 +292,7 @@ export class PaneScreen {
       return false;
     }
 
-    // Live header is `worklist  N/M` (or TASK RAIL counts via badge).
+    // Live header is `worklist  N/M` (Tasks title reads counts via badge).
     return /^worklist\s+\d+\/\d+/.test(head) || /^\d+\/\d+$/.test(head);
   }
 
@@ -571,8 +573,13 @@ export class PaneScreen {
     return this.panelBodyLines().length;
   }
 
+  /** Body rows available under the sticky Tasks title + under-rule. */
+  private panelBodyViewRows(): number {
+    return Math.max(0, this.bodyViewportRows - RAIL_TITLE_ROWS);
+  }
+
   private clampPanelOffset(): void {
-    const max = Math.max(0, this.panelSourceLen() - this.bodyViewportRows);
+    const max = Math.max(0, this.panelSourceLen() - this.panelBodyViewRows());
 
     if (this.panelOffset > max) {
       this.panelOffset = max;
@@ -735,7 +742,9 @@ export class PaneScreen {
     );
     const screen: string[] = new Array<string>(contentRows);
     const mainVisible = this.scrollback.visible();
-    const panelSource = this.panelPaintLines();
+    const panelCols = layout.panel?.cols ?? 0;
+    const panelSource =
+      layout.panel !== null ? this.panelPaintLines(panelCols) : [];
     // Same ink as horizontal hairlines — dim SGR reads as a different grey.
     const gutter = paint(
       GUTTER,
@@ -779,15 +788,25 @@ export class PaneScreen {
         main = overlayScrollbarCol(main, mainCols, thumb);
       }
 
+      const panelCell =
+        layout.panel !== null
+          ? fitPanelCell(panelSource[r] ?? "", layout.panel.cols)
+          : null;
+      // Under-rule under Tasks: `├` joins the gutter spine to the panel ─.
+      const splitGutter =
+        panelCell !== null && isRailUnderRule(panelCell)
+          ? paint(
+              "├",
+              this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
+              true
+            )
+          : gutter;
+
       // Each slot is hard-clamped to its column budget — content must never
       // overwrite the panel gutter or bleed past the main pane.
       screen[idx] =
         layout.panel !== null
-          ? paintSplitRow(
-              main,
-              gutter,
-              insetX(panelSource[r] ?? "", layout.panel.cols)
-            )
+          ? paintSplitRow(main, splitGutter, panelCell)
           : main;
     }
 
@@ -802,7 +821,7 @@ export class PaneScreen {
           ? paintSplitRow(
               insetX(opts.chrome[i] ?? "", layout.main.cols),
               gutter,
-              insetX(panelSource[r] ?? "", layout.panel.cols)
+              fitPanelCell(panelSource[r] ?? "", layout.panel.cols)
             )
           : insetX(opts.chrome[i] ?? "", contentCols);
     }
@@ -822,7 +841,7 @@ export class PaneScreen {
           ? paintSplitRow(
               mainLine,
               gutter,
-              insetX(panelSource[spineBase + i] ?? "", layout.panel.cols)
+              fitPanelCell(panelSource[spineBase + i] ?? "", layout.panel.cols)
             )
           : mainLine;
     }
@@ -836,7 +855,7 @@ export class PaneScreen {
           ? paintSplitRow(
               fitAnsiLine("", layout.main.cols),
               gutter,
-              insetX(panelSource[spineIdx] ?? "", layout.panel.cols)
+              fitPanelCell(panelSource[spineIdx] ?? "", layout.panel.cols)
             )
           : fitAnsiLine("", contentCols);
     }
@@ -909,25 +928,38 @@ export class PaneScreen {
     );
   }
 
-  private panelPaintLines(): string[] {
+  /**
+   * Panel column lines for the body viewport: sticky Tasks title + under-rule,
+   * then the scrolled item list. Title stays put while the body scrolls.
+   */
+  private panelPaintLines(panelCols: number): string[] {
+    const counts = this.railCounts();
+    const title = formatRailTitleBlock({
+      done: counts.done,
+      total: counts.total,
+      cols: panelCols,
+      color: true,
+    });
     const raw = this.panelBodyLines();
-    const view = Math.max(1, this.bodyViewportRows);
+    const view = this.panelBodyViewRows();
     const slice = raw.slice(this.panelOffset, this.panelOffset + view);
 
     if (!this.focus.panelFocused) {
-      return slice.map((l) => paint(l, STYLE.dim, true));
+      return [...title, ...slice.map((l) => paint(l, STYLE.dim, true))];
     }
 
-    return slice.map((line, i) => {
+    const body = slice.map((line, i) => {
       const abs = this.panelOffset + i;
 
       return abs === this.focus.selection
         ? paint(`▸ ${stripSgr(line)}`, CONSOLE.bright, true)
         : `  ${line}`;
     });
+
+    return [...title, ...body];
   }
 
-  /** Rail body lines — skip the legacy `worklist N/M` header (TASK RAIL owns it). */
+  /** Rail body lines — skip the legacy `worklist N/M` header (Tasks title owns it). */
   private panelBodyLines(): string[] {
     if (this.panelLines.length === 0) {
       return [...EMPTY_PANEL_LINES];
@@ -1026,6 +1058,29 @@ function paintSplitRow(
   }
 
   return `${main}${gutter}${panel}`;
+}
+
+/**
+ * Panel cells: sticky title/rule are already sized to `cols` — don't double
+ * inset (that clipped the right-hand count). Body lines still get insetX.
+ */
+function fitPanelCell(line: string, cols: number): string {
+  if (cols <= 0) {
+    return "";
+  }
+
+  if (displayWidth(stripSgr(line)) === cols) {
+    return fitAnsiLine(line, cols);
+  }
+
+  return insetX(line, cols);
+}
+
+/** Sticky Tasks under-rule — full panel width of `─` (joins via `├`/`┤`). */
+function isRailUnderRule(panelCell: string): boolean {
+  const plain = stripSgr(panelCell);
+
+  return plain.length > 0 && /^─+$/u.test(plain);
 }
 
 /**

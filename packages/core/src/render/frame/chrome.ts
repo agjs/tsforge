@@ -221,17 +221,39 @@ export interface IRailHeaderOpts {
   readonly total: number;
   readonly cols: number;
   readonly color?: boolean;
+  /** Left label — default `Tasks`. */
+  readonly title?: string;
 }
 
-/** @deprecated Rail count lives in the top strip as `#n/m`. */
+/** Sticky rail title rows: label row + under-rule (borders the title cell). */
+export const RAIL_TITLE_ROWS = 2;
+
+/**
+ * Side-rail title: muted label left, cyan `done/total` right.
+ * Lives under the ┬ hairline; pair with {@link formatRailTitleRule} for the
+ * bottom border so the cell reads like the screenshot title bar.
+ */
 export function formatRailHeader(opts: IRailHeaderOpts): string {
   const color = opts.color ?? true;
-  const label =
+  const label = (opts.title ?? "Tasks").trim() || "Tasks";
+  const left = paint(label, CONSOLE.muted, color);
+  const countText = `${String(Math.max(0, opts.done))}/${String(Math.max(0, opts.total))}`;
+  const right =
     opts.total > 0
-      ? paint(`#${String(opts.done)}/${String(opts.total)}`, CONSOLE.bright, color)
-      : paint("#0/0", CONSOLE.muted, color);
+      ? paint(countText, STYLE.cyan, color)
+      : paint(countText, CONSOLE.muted, color);
 
-  return insetX(label, opts.cols);
+  return insetX(splitBar(left, right, insetInnerCols(opts.cols)), opts.cols);
+}
+
+/** Full-width under-rule for the rail title cell (panel column only). */
+export function formatRailTitleRule(cols: number, color = true): string {
+  return paint("─".repeat(Math.max(0, cols)), CONSOLE.rule, color);
+}
+
+/** Sticky title block: `[header, under-rule]`. */
+export function formatRailTitleBlock(opts: IRailHeaderOpts): string[] {
+  return [formatRailHeader(opts), formatRailTitleRule(opts.cols, opts.color)];
 }
 
 /** Full-width hairline, optionally with a junction glyph at `splitCol` (0-based). */

@@ -75,7 +75,10 @@ export function wrapOuterFrame(
     }
 
     screen.push(
-      frameContentRow(content[r - originRow] ?? "", termCols, color)
+      frameContentRow(content[r - originRow] ?? "", termCols, {
+        color,
+        splitCol: options.splitCol,
+      })
     );
   }
 
@@ -97,16 +100,55 @@ export function isFullBleedRule(contentLine: string): boolean {
   return /^[─┬┴┼]+$/u.test(plain);
 }
 
+/**
+ * Panel-only under-rule: gutter at `splitCol` is `├`/`│`/`┼` and the panel
+ * cells are all `─`. Needs a right `┤` so the rule does not float.
+ */
+export function isPanelRuleRow(
+  contentLine: string,
+  splitCol: number | undefined
+): boolean {
+  if (splitCol === undefined || splitCol < 0) {
+    return false;
+  }
+
+  const plain = stripSgr(contentLine);
+
+  if (splitCol >= plain.length) {
+    return false;
+  }
+
+  const gutter = plain[splitCol];
+
+  if (gutter !== "├" && gutter !== "│" && gutter !== "┼") {
+    return false;
+  }
+
+  const panel = plain.slice(splitCol + 1);
+
+  return panel.length > 0 && /^─+$/u.test(panel);
+}
+
+export interface IFrameContentRowOpts {
+  readonly color?: boolean;
+  /** 0-based content column of the panel gutter (for panel-only rules). */
+  readonly splitCol?: number;
+}
+
 /** Stamp one content row into a full-width framed terminal line. */
 export function frameContentRow(
   contentLine: string,
   termCols: number,
-  color = true
+  colorOrOpts: boolean | IFrameContentRowOpts = true
 ): string {
+  const opts =
+    typeof colorOrOpts === "boolean" ? { color: colorOrOpts } : colorOrOpts;
+  const color = opts.color !== false;
   const { originCol, contentCols } = outerInsets(OUTER_CHROME * 2 + 1, termCols);
-  const rule = isFullBleedRule(contentLine);
-  const left = paint(rule ? "├" : "│", STYLE.chrome, color);
-  const right = paint(rule ? "┤" : "│", STYLE.chrome, color);
+  const full = isFullBleedRule(contentLine);
+  const panelRule = !full && isPanelRuleRow(contentLine, opts.splitCol);
+  const left = paint(full ? "├" : "│", STYLE.chrome, color);
+  const right = paint(full || panelRule ? "┤" : "│", STYLE.chrome, color);
   const inner = fitAnsiLine(contentLine, contentCols);
   const row =
     " ".repeat(originCol - OUTER_BORDER) +

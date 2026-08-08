@@ -103,4 +103,31 @@ describe("wrapOuterFrame", () => {
     // Interior rows keep plain │ rails.
     expect(stripSgr(framed[OUTER_CHROME] ?? "")[OUTER_MARGIN]).toBe("│");
   });
+
+  test("panel-only under-rule joins with ├ gutter and ┤ outer rail", () => {
+    const termRows = 8;
+    const termCols = 20;
+    const { contentRows, contentCols, originCol } = outerInsets(
+      termRows,
+      termCols
+    );
+    const split = 6;
+    const panelRule =
+      " ".repeat(split) + "├" + "─".repeat(Math.max(0, contentCols - split - 1));
+    const content = Array.from({ length: contentRows }, (_, i) =>
+      i === 1 ? panelRule : "".padEnd(contentCols, " ")
+    );
+    const framed = wrapOuterFrame(content, termRows, termCols, {
+      color: false,
+      splitCol: split,
+    });
+    const plain = stripSgr(framed[OUTER_CHROME + 1] ?? "");
+
+    expect(plain[OUTER_MARGIN]).toBe("│");
+    expect(plain[originCol + split]).toBe("├");
+    expect(plain[termCols - OUTER_MARGIN - 1]).toBe("┤");
+    expect(plain.slice(originCol + split + 1, termCols - OUTER_MARGIN - 1)).toMatch(
+      /^─+$/
+    );
+  });
 });

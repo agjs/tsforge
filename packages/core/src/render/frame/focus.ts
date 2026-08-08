@@ -14,7 +14,7 @@ export type FocusAction = "changed" | "ignored";
 export class PaneFocus {
   panel: PanelVis = "hidden";
   active: ActiveSurface = "prompt";
-  /** Selected row index within the worklist panel (0 = header). */
+  /** Selected row index within the worklist body (0 = first item; title is sticky). */
   selection = 0;
 
   get promptFocused(): boolean {

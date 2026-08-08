@@ -4,12 +4,16 @@ import {
   formatTopStatus,
   formatConsoleTopbar,
   formatConsoleTitle,
+  formatRailHeader,
+  formatRailTitleBlock,
   hairline,
   insetX,
   CHROME_PAD_X,
   CHROME_PAD_Y,
+  RAIL_TITLE_ROWS,
 } from "../src/render/frame/chrome";
 import { STYLE } from "../src/render/style";
+import { stripSgr } from "../src/render/frame/ansi-plain";
 
 describe("formatConsoleTitle", () => {
   test("mode chip: plan is amber pill, normal is quiet chrome pill", () => {
@@ -125,6 +129,45 @@ describe("formatConsoleTopbar", () => {
 
     expect(split).toBe(40);
     expect(rule.slice(split + 1)).toMatch(/^─+$/);
+  });
+});
+
+describe("formatRailHeader", () => {
+  test("Tasks left, cyan done/total right, bordered title block", () => {
+    const header = formatRailHeader({
+      done: 2,
+      total: 6,
+      cols: 28,
+      color: true,
+    });
+    const plain = stripSgr(header);
+    const block = formatRailTitleBlock({
+      done: 2,
+      total: 6,
+      cols: 28,
+      color: false,
+    });
+
+    expect(plain).toContain("Tasks");
+    expect(plain).toContain("2/6");
+    expect(plain.indexOf("Tasks")).toBeLessThan(plain.indexOf("2/6"));
+    expect(header).toContain(STYLE.cyan);
+    expect(RAIL_TITLE_ROWS).toBe(2);
+    expect(block).toHaveLength(2);
+    expect(block[0]).toContain("Tasks");
+    expect(block[1]).toMatch(/^─+$/);
+  });
+
+  test("empty counts stay muted 0/0", () => {
+    const header = formatRailHeader({
+      done: 0,
+      total: 0,
+      cols: 28,
+      color: true,
+    });
+
+    expect(stripSgr(header)).toContain("0/0");
+    expect(header).not.toContain(STYLE.cyan);
   });
 });
 
