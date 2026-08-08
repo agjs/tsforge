@@ -12,6 +12,76 @@ export interface IAgentRail {
   flush(): string;
 }
 
+/** Append an SGR/escape cluster to the in-progress hard-break head or rest. */
+function appendEscCluster(
+  cluster: string,
+  head: string,
+  rest: string
+): { head: string; rest: string } {
+  if (rest.length > 0) {
+    return { head, rest: rest + cluster };
+  }
+
+  return { head: head + cluster, rest };
+}
+
+/** Hard-break `word` at `wrapAt` (grapheme-aware; SGR stays with its host). */
+function takeHardBreak(
+  word: string,
+  wordCol: number,
+  wrapAt: number
+): { head: string; headCol: number; rest: string; restCol: number } {
+  let head = "";
+  let headCol = 0;
+  let rest = "";
+  let restCol = 0;
+  let esc = false;
+
+  // Grapheme-aware so `🖥️` (base + VS16) is one cluster — code-point
+  // iteration used to mis-count width and under-pad the right │.
+  for (const cluster of graphemes(word)) {
+    if (esc) {
+      ({ head, rest } = appendEscCluster(cluster, head, rest));
+
+      if (cluster === "m") {
+        esc = false;
+      }
+
+      continue;
+    }
+
+    if (cluster === "\x1b") {
+      esc = true;
+      ({ head, rest } = appendEscCluster(cluster, head, rest));
+      continue;
+    }
+
+    const w = displayWidth(cluster);
+
+    if (rest.length === 0 && headCol + w <= wrapAt) {
+      head += cluster;
+      headCol += w;
+    } else {
+      rest += cluster;
+      restCol += w;
+    }
+  }
+
+  if (head.length === 0 && word.length > 0) {
+    const first = graphemes(word)[0] ?? "";
+    const w = displayWidth(first);
+
+    return {
+      head: first,
+      headCol: w,
+      rest: word.slice(first.length),
+      restCol: Math.max(0, wordCol - w),
+    };
+  }
+
+  return { head, headCol, rest, restCol };
+}
+
 /** Foreground used by a painted rail (`│` / `│  `). */
 function railFg(painted: string): string {
   if (painted.includes(STYLE.cyan)) {
@@ -97,67 +167,8 @@ export function makeAgentRail(
 
   const takeHard = (
     wrapAt: number
-  ): { head: string; headCol: number; rest: string; restCol: number } => {
-    let head = "";
-    let headCol = 0;
-    let rest = "";
-    let restCol = 0;
-    let esc = false;
-
-    // Grapheme-aware so `🖥️` (base + VS16) is one cluster — code-point
-    // iteration used to mis-count width and under-pad the right │.
-    for (const cluster of graphemes(word)) {
-      if (esc) {
-        if (rest.length > 0) {
-          rest += cluster;
-        } else {
-          head += cluster;
-        }
-
-        if (cluster === "m") {
-          esc = false;
-        }
-
-        continue;
-      }
-
-      if (cluster === "\x1b") {
-        esc = true;
-
-        if (rest.length > 0) {
-          rest += cluster;
-        } else {
-          head += cluster;
-        }
-
-        continue;
-      }
-
-      const w = displayWidth(cluster);
-
-      if (rest.length === 0 && headCol + w <= wrapAt) {
-        head += cluster;
-        headCol += w;
-      } else {
-        rest += cluster;
-        restCol += w;
-      }
-    }
-
-    if (head.length === 0 && word.length > 0) {
-      const first = graphemes(word)[0] ?? "";
-      const w = displayWidth(first);
-
-      return {
-        head: first,
-        headCol: w,
-        rest: word.slice(first.length),
-        restCol: Math.max(0, wordCol - w),
-      };
-    }
-
-    return { head, headCol, rest, restCol };
-  };
+  ): { head: string; headCol: number; rest: string; restCol: number } =>
+    takeHardBreak(word, wordCol, wrapAt);
 
   const flushWord = (out: string, wrapAt: number): string => {
     if (word.length === 0) {
@@ -209,6 +220,41 @@ export function makeAgentRail(
     return result;
   };
 
+  /** Emit a closed blank card row, or fall back to open-rail close. */
+  const blankClosedRow = (out: string, wrapAt: number): string => {
+    if (rightRail.length > 0) {
+      const inner = Math.max(0, displayWidth(stripSgr(rail)) - 1) + wrapAt;
+
+      return `${out}${paint(`│${" ".repeat(inner)}│`, emptyRowFg, true)}\n`;
+    }
+
+    return closeLine(ensureRail(out), wrapAt);
+  };
+
+  /** Finish the current visual line on `\n` (incl. blank closed rows). */
+  const onNewline = (out: string, wrapAt: number): string => {
+    let result = flushWord(out, wrapAt);
+
+    pendingSpace = false;
+
+    if (atStart) {
+      if (seen) {
+        // Blank card row: one SGR span for `│…│`. Splitting left/right
+        // paints with a mid-line RESET made the right rail flash the
+        // default (bright) foreground on empty rows in iTerm.
+        result = blankClosedRow(result, wrapAt);
+        atStart = true;
+      }
+    } else {
+      result = closeLine(result, wrapAt);
+      atStart = true;
+    }
+
+    lineCol = 0;
+
+    return result;
+  };
+
   return {
     feed(text: string): string {
       const wrapAt = Math.max(20, innerWidth());
@@ -229,33 +275,7 @@ export function makeAgentRail(
         }
 
         if (cluster === "\n") {
-          out = flushWord(out, wrapAt);
-          pendingSpace = false;
-
-          if (atStart) {
-            if (seen) {
-              // Blank card row: one SGR span for `│…│`. Splitting left/right
-              // paints with a mid-line RESET made the right rail flash the
-              // default (bright) foreground on empty rows in iTerm.
-              if (rightRail.length > 0) {
-                const inner =
-                  Math.max(0, displayWidth(stripSgr(rail)) - 1) + wrapAt;
-
-                out += `${paint(`│${" ".repeat(inner)}│`, emptyRowFg, true)}\n`;
-              } else {
-                out = ensureRail(out);
-                out = closeLine(out, wrapAt);
-              }
-
-              atStart = true;
-            }
-          } else {
-            out = closeLine(out, wrapAt);
-            atStart = true;
-          }
-
-          lineCol = 0;
-
+          out = onNewline(out, wrapAt);
           continue;
         }
 

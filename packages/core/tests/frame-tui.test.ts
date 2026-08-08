@@ -24,7 +24,6 @@ import {
   TOP_PAD_ROWS,
   BOTTOM_PAD_ROWS,
 } from "../src/render/frame";
-import { formatStatusBarLine } from "../src/render/status-bar";
 import { VirtualScreen } from "./helpers/virtual-screen";
 
 function findPromptRow(feed: string, rows: number, cols: number): number {
@@ -34,10 +33,7 @@ function findPromptRow(feed: string, rows: number, cols: number): number {
 
   // Input box ╭ (not the outer window) — next row holds `> `.
   for (let r = 1; r <= rows; r += 1) {
-    if (
-      screen.row(r).includes("╭") &&
-      screen.row(r + 1).includes(">")
-    ) {
+    if (screen.row(r).includes("╭") && screen.row(r + 1).includes(">")) {
       return r + 1;
     }
   }
@@ -387,7 +383,7 @@ describe("PaneScreen", () => {
       cursorCol: 5,
     });
 
-    let screen = new VirtualScreen(24, 100);
+    const screen = new VirtualScreen(24, 100);
 
     screen.feed(term.text());
     const grownPrompt = findPromptRow(term.text(), 24, 100);
@@ -731,7 +727,9 @@ describe("PaneScreen", () => {
 
       sawContentRow = true;
       // Panel gutter column stays a gutter glyph (│ spine or ├ under-rule) — never "W".
-      expect(["│", "├"]).toContain(row[gutterCol]);
+      const gutter = row[gutterCol] ?? "";
+
+      expect(gutter === "│" || gutter === "├").toBe(true);
       // First panel cell is not overflowing main content.
       expect(row[gutterCol + 1]).not.toBe("W");
     }
@@ -804,6 +802,29 @@ describe("PaneScreen", () => {
     expect(sawOverlay).toBe(true);
     expect(screen.text()).toContain("Tasks");
     expect(screen.text()).toContain("item-a");
+  });
+
+  test("setOverlay pins the title when the menu exceeds the chrome budget", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
+    panes.setOverlay([
+      "menu-title-line",
+      ...Array.from({ length: 40 }, (_, i) => `menu-body-${String(i)}`),
+      "menu-footer-line",
+    ]);
+
+    const screen = new VirtualScreen(24, 100);
+
+    screen.feed(term.text());
+    const text = screen.text();
+
+    expect(text).toContain("menu-title-line");
+    expect(text).toContain("menu-footer-line");
+    // Mid-body rows are sacrificed for the title + tail pin.
+    expect(text).not.toContain("menu-body-0");
   });
 
   test("setStatus paints live chips on the dense top strip", () => {
@@ -894,12 +915,12 @@ describe("PaneScreen", () => {
     expect(screen.row(titleRow(24))).toContain("✓");
   });
 
-  test("setStatus full-repaint clears ghost metrics rows above the input", () => {
+  test("setStatus activity ticks do not rewrite body rows", () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);
 
     panes.enter();
-    panes.appendMain("chat line\n");
+    panes.appendMain("chat line unique-body-marker\n");
     panes.setStatus({
       model: "deepseek",
       contextTokens: 0,
@@ -913,50 +934,94 @@ describe("PaneScreen", () => {
       activity: "⠋ thinking · 0s",
     });
 
-    // Stray absolute writes into empty main rows (relative
-    // redraw fighting the alt screen) — differential paint used to leave them.
-    for (let i = 0; i < 6; i += 1) {
-      const line = formatStatusBarLine(
-        {
-          model: "deepseek",
-          contextTokens: 0,
-          contextWindow: 100,
-          turns: 1,
-          elapsedMs: 1100,
-          status: "working",
-          scope: "entire workspace",
-          mode: "plan",
-          tokensPerSecond: 47,
-          activity: `⠋ thinking · ${String(i)}s`,
-        },
-        100,
-        true
-      );
+    term.writes = [];
 
-      term.write(`\x1b[${String(12 + i)};1H${line}`);
+    for (let i = 1; i <= 8; i += 1) {
+      panes.setStatus({
+        model: "deepseek",
+        contextTokens: 0,
+        contextWindow: 100,
+        turns: 1,
+        elapsedMs: 1100 + i * 100,
+        status: "working",
+        scope: "entire workspace",
+        mode: "plan",
+        tokensPerSecond: 47,
+        activity: `⠋ thinking · ${String(i)}s`,
+      });
     }
 
+    const out = term.writes.join("");
+
+    // Top strip updated; body rows stayed warm (differential paint).
+    expect(out).toContain("thinking");
+    expect(out).not.toContain("unique-body-marker");
+    expect(out.length).toBeLessThan(8 * 24 * 100);
+    // Transcript buffer still holds the body line.
+    expect(panes.dumpTranscript()).toContain("unique-body-marker");
+  });
+
+  test("appendMain while following patches without rewriting the top strip", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
     panes.setStatus({
       model: "deepseek",
       contextTokens: 0,
       contextWindow: 100,
-      turns: 1,
-      elapsedMs: 1100,
-      status: "responded",
-      scope: "entire workspace",
+      turns: 0,
+      elapsedMs: 0,
+      status: "ready",
+      scope: "repo",
       mode: "plan",
-      tokensPerSecond: 44,
     });
+    panes.appendMain("seed\n");
+    term.writes = [];
 
-    const screen = new VirtualScreen(24, 100);
+    for (let i = 0; i < 20; i += 1) {
+      panes.appendMain(`stream-chunk-${String(i)}\n`);
+    }
 
-    screen.feed(term.text());
-    const thinking = screen.text().match(/thinking/g) ?? [];
+    const out = term.writes.join("");
 
-    expect(thinking.length).toBe(0);
-    expect(screen.row(expectedPromptRow(24))).toContain("describe a task");
-    expect(screen.row(titleRow(24))).toContain("✓");
-    expect(screen.text()).toContain("chat line");
+    expect(out).toContain("stream-chunk-19");
+    // Top strip brand should not be repainted on every follow-mode chunk.
+    expect(out).not.toContain("TSFORGE");
+  });
+
+  test("resize with paint:false then setStatus clears once", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    panes.setStatus({
+      model: "m",
+      contextTokens: 0,
+      contextWindow: 100,
+      turns: 0,
+      elapsedMs: 0,
+      status: "ready",
+      scope: "repo",
+    });
+    term.writes = [];
+    panes.resize(40, 120, { paint: false });
+    expect(term.writes).toHaveLength(0);
+
+    panes.setStatus({
+      model: "m",
+      contextTokens: 0,
+      contextWindow: 100,
+      turns: 0,
+      elapsedMs: 0,
+      status: "ready",
+      scope: "repo",
+    });
+    const out = term.writes.join("");
+    const clears = out.split(CLEAR_SCREEN).length - 1;
+
+    expect(clears).toBe(1);
+    expect(out).toContain(CLEAR_SCREEN);
   });
 
   test("Ctrl+G focuses panel; Esc restores prompt focus", () => {

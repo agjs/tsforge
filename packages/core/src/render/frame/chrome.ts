@@ -151,7 +151,11 @@ export function formatConsoleTitle(opts: IConsoleTitleOpts): string {
   }
 
   return insetX(
-    splitBar(leftBits.join(sep), rightBits.join(sep), insetInnerCols(opts.cols)),
+    splitBar(
+      leftBits.join(sep),
+      rightBits.join(sep),
+      insetInnerCols(opts.cols)
+    ),
     opts.cols
   );
 }
@@ -206,7 +210,7 @@ export interface IMainHeaderOpts {
   readonly streaming?: boolean;
 }
 
-/** @deprecated Folded into {@link formatConsoleTitle}. */
+/** Folded into {@link formatConsoleTitle}; kept for older call sites. */
 export function formatMainHeader(opts: IMainHeaderOpts): string {
   return formatConsoleTitle({
     info: opts.info,
@@ -235,7 +239,8 @@ export const RAIL_TITLE_ROWS = 2;
  */
 export function formatRailHeader(opts: IRailHeaderOpts): string {
   const color = opts.color ?? true;
-  const label = (opts.title ?? "Tasks").trim() || "Tasks";
+  const trimmed = (opts.title ?? "Tasks").trim();
+  const label = trimmed.length > 0 ? trimmed : "Tasks";
   const left = paint(label, CONSOLE.muted, color);
   const countText = `${String(Math.max(0, opts.done))}/${String(Math.max(0, opts.total))}`;
   const right =

@@ -24,9 +24,9 @@ describe("needsScrollbar", () => {
     expect(
       needsScrollbar(metrics({ total: 10, viewport: 10, offset: 0 }))
     ).toBe(false);
-    expect(
-      needsScrollbar(metrics({ total: 5, viewport: 10, offset: 0 }))
-    ).toBe(false);
+    expect(needsScrollbar(metrics({ total: 5, viewport: 10, offset: 0 }))).toBe(
+      false
+    );
   });
 
   test("shown when content overflows", () => {
@@ -79,7 +79,9 @@ describe("thumbWindow", () => {
       40
     );
 
-    expect(large!.end - large!.start).toBeGreaterThan(small!.end - small!.start);
+    expect(large!.end - large!.start).toBeGreaterThan(
+      small!.end - small!.start
+    );
   });
 });
 
@@ -94,7 +96,7 @@ describe("formatScrollbarColumn", () => {
     expect(col).not.toBeNull();
     expect(col!.length).toBe(10);
     expect(col![0]).toBe("█");
-    expect(col!.some((c) => c === " ")).toBe(true);
+    expect(col!.includes(" ")).toBe(true);
     expect(col!.filter((c) => c === "█").length).toBeGreaterThan(0);
   });
 

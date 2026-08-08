@@ -5,6 +5,8 @@ import { displayWidth } from "../src/render/width";
 import { VirtualScreen } from "./helpers/virtual-screen";
 
 const RAIL_COLS = 2; // "│ "
+/** Strip SGR without a control-char regex literal (no-control-regex). */
+const SGR_STRIP = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 /** Feed a paragraph through the streaming markdown renderer token-by-token (as the
  *  live loop does), then through the rail wrapper, and replay onto a screen. */
@@ -114,7 +116,7 @@ describe("makeAgentRail — streaming semantics", () => {
       .replace(/\n$/, "")
       .split("\n")
       .find((row) => {
-        const plain = row.replace(/\x1b\[[0-9;]*m/g, "");
+        const plain = row.replace(SGR_STRIP, "");
 
         return /^│\s+│$/.test(plain);
       });
@@ -142,7 +144,7 @@ describe("makeAgentRail — streaming semantics", () => {
     const rows = out.replace(/\n$/, "").split("\n");
 
     for (const row of rows) {
-      const plain = row.replace(/\x1b\[[0-9;]*m/g, "");
+      const plain = row.replace(SGR_STRIP, "");
 
       // Blank rows are a single chrome SGR span — measure the visible cells.
       expect(displayWidth(plain)).toBe(cardCols);

@@ -294,18 +294,13 @@ export function userBubble(
   return [top, padRow, body, padRow, bottom].join("\n");
 }
 
-/** @deprecated Use {@link roleCardCols}. */
-function agentCols(columns?: number): number {
-  return roleCardCols(columns);
-}
-
 /** One closed agent row: `│  content…  │` padded to `cols`. */
 export function agentCardRow(
   content: string,
   color: boolean,
   columns: number
 ): string {
-  const cols = agentCols(columns);
+  const cols = roleCardCols(columns);
   const inner = Math.max(1, cols - 2);
 
   if (stripSgr(content).length === 0) {
@@ -317,7 +312,9 @@ export function agentCardRow(
   const maxText = Math.max(1, inner - ROLE_INNER_PAD * 2);
   const plain = stripSgr(content);
   const text =
-    displayWidth(plain) <= maxText ? content : sliceToWidth(plain, maxText).text;
+    displayWidth(plain) <= maxText
+      ? content
+      : sliceToWidth(plain, maxText).text;
   const body = `${" ".repeat(ROLE_INNER_PAD)}${text}`;
   const pad = Math.max(ROLE_INNER_PAD, inner - displayWidth(stripSgr(body)));
 
@@ -326,7 +323,7 @@ export function agentCardRow(
 
 /** Empty closed row — vertical breathing room under the top rule / above the bottom. */
 export function agentCardPadRow(color: boolean, columns?: number): string {
-  const cols = agentCols(columns);
+  const cols = roleCardCols(columns);
   const inner = Math.max(1, cols - 2);
 
   return paint(`│${" ".repeat(inner)}│`, STYLE.chrome, color);
@@ -338,12 +335,14 @@ export function agentCardTop(color: boolean, columns?: number): string {
   const badge = filledRoleBadge("AGENT", color);
 
   // No leading `┌` — badge starts on the same column as USER / PLAN.
-  return badge + roleHairline(cols, STYLE.chrome, color, "┐", roleBadgeCols(badge));
+  return (
+    badge + roleHairline(cols, STYLE.chrome, color, "┐", roleBadgeCols(badge))
+  );
 }
 
 /** Closed AGENT card bottom rule. */
 export function agentCardBottom(color: boolean, columns?: number): string {
-  const cols = agentCols(columns);
+  const cols = roleCardCols(columns);
 
   return paint(`└${"─".repeat(Math.max(0, cols - 2))}┘`, STYLE.chrome, color);
 }
@@ -360,7 +359,7 @@ export function agentRight(color: boolean): string {
 
 /** Content budget inside `│  …  │` (left gutter + right rail). */
 export function agentRailInnerCols(columns: number): number {
-  return Math.max(20, agentCols(columns) - ROLE_BOX_CHROME_COLS);
+  return Math.max(20, roleCardCols(columns) - ROLE_BOX_CHROME_COLS);
 }
 
 /** Rail-prefix AND soft-wrap a settled agent body (the `--continue` replay
@@ -371,7 +370,7 @@ export function agentCardBody(
   color: boolean,
   columns?: number
 ): string {
-  const cols = agentCols(columns);
+  const cols = roleCardCols(columns);
   const rail = makeAgentRail(
     agentBar(color),
     () => agentRailInnerCols(cols),

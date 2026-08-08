@@ -39,7 +39,6 @@ import { withOpaqueBg } from "./opaque-bg";
 import { PaneFocus } from "./focus";
 import {
   BODY_GAP_ROWS,
-  BODY_HEADER_ROWS,
   canUsePaneTui,
   clampInputInnerRows,
   computeLayout,
@@ -52,15 +51,8 @@ import { handleFocusKey, handleMouseKey, handleScrollKey } from "./pane-keys";
 import type { PaneKeyResult } from "./pane-keys";
 import { STYLE, paint } from "../style";
 import { displayWidth } from "../width";
-import {
-  formatScrollbarColumn,
-  overlayScrollbarCol,
-} from "./scrollbar";
-import {
-  frameContentRow,
-  outerInsets,
-  wrapOuterFrame,
-} from "./outer-frame";
+import { formatScrollbarColumn, overlayScrollbarCol } from "./scrollbar";
+import { frameContentRow, outerInsets, wrapOuterFrame } from "./outer-frame";
 
 export interface IPaneScreenTerminal {
   readonly isTTY?: boolean;
@@ -97,6 +89,8 @@ export class PaneScreen {
   private status: IStatusInfo | null = null;
   private worklistBadge = "";
   private lastTopLine = "";
+  /** Mode/badge/cwd/status-class — full invalidate when this changes, not on ticks. */
+  private lastTopShape = "";
   private flashHeaderPaints = 0;
   private lastBadge = "";
   private cwd = process.cwd();
@@ -195,10 +189,20 @@ export class PaneScreen {
     this.paint();
   }
 
-  resize(rows: number, cols: number): void {
+  /**
+   * Apply a new terminal size. When `paint` is false, only updates geometry —
+   * caller must paint once (e.g. after syncing status) so resize settle is a
+   * single frame, not resize-paint + setStatus-paint.
+   */
+  resize(
+    rows: number,
+    cols: number,
+    opts?: { readonly paint?: boolean }
+  ): void {
     const nextRows = Math.max(1, rows);
     const nextCols = Math.max(1, cols);
     const geomChanged = nextRows !== this.rows || nextCols !== this.cols;
+    const shouldPaint = opts?.paint !== false;
 
     this.rows = nextRows;
     this.cols = nextCols;
@@ -230,15 +234,33 @@ export class PaneScreen {
       this.lastWrapCols = 0;
     }
 
-    this.paint();
+    if (shouldPaint) {
+      this.paint();
+    }
   }
 
   appendMain(text: string): void {
     this.scrollback.append(text);
 
-    if (this.entered) {
-      this.paint();
+    if (!this.entered) {
+      return;
     }
+
+    // Streaming hot path: following + no overlay — patch main viewport only.
+    if (
+      this.prevLines !== null &&
+      !this.geometryDirty &&
+      this.scrollback.following &&
+      this.overlayLines.length === 0 &&
+      this.agentTreeLines.length === 0 &&
+      this.lastWrapCols > 0
+    ) {
+      this.paintMainFollowOnly();
+
+      return;
+    }
+
+    this.paint();
   }
 
   setPanel(lines: readonly string[]): void {
@@ -328,8 +350,15 @@ export class PaneScreen {
       this.flashHeaderPaints = 2;
     }
 
+    const shapeChanged = badge !== this.worklistBadge;
+
     this.lastBadge = badge;
     this.worklistBadge = badge;
+
+    if (shapeChanged) {
+      this.lastTopShape = "";
+      this.prevLines = null;
+    }
 
     if (this.entered) {
       this.paint();
@@ -347,6 +376,7 @@ export class PaneScreen {
   setHeader(opts: { cwd: string; sessionId?: string }): void {
     this.cwd = opts.cwd;
     this.sessionId = opts.sessionId ?? "";
+    this.lastTopShape = "";
 
     if (this.entered) {
       this.prevLines = null;
@@ -354,7 +384,12 @@ export class PaneScreen {
     }
   }
 
-  setStatus(info: IStatusInfo): void {
+  /**
+   * Update the top-strip status. Routine ticks (activity / elapsed) differential-
+   * paint dirty top rows only. Shape changes (mode, badge, cwd, status class)
+   * full-invalidate so chrome width shifts cannot leave ghosts.
+   */
+  setStatus(info: IStatusInfo, opts?: { readonly paint?: boolean }): void {
     this.status = info;
 
     if (!this.entered) {
@@ -366,19 +401,26 @@ export class PaneScreen {
       layout.top.rows > 0
         ? this.topbarLines(layout.top.cols, layout).join("\n")
         : "";
+    const nextShape = this.topStripShape(info);
 
     if (
       nextTop === this.lastTopLine &&
+      nextShape === this.lastTopShape &&
       this.prevLines !== null &&
       this.flashHeaderPaints === 0
     ) {
       return;
     }
 
-    // Status ticks are the moment stray relative writes (absolute CSI, etc.)
-    // most often land in empty main rows. Differential paint would skip those
-    // rows forever — force a full frame so ghosts cannot stack above the input.
-    this.prevLines = null;
+    if (nextShape !== this.lastTopShape) {
+      this.lastTopShape = nextShape;
+      this.prevLines = null;
+    }
+
+    if (opts?.paint === false) {
+      return;
+    }
+
     this.paint();
   }
 
@@ -455,6 +497,25 @@ export class PaneScreen {
     this.paint();
   }
 
+  /**
+   * Stable top-strip shape — mode/badge/cwd/status class, not ticking activity
+   * text. Shape changes full-invalidate; ticks differential-paint.
+   */
+  private topStripShape(info: IStatusInfo): string {
+    const hasActivity =
+      info.activity !== undefined && info.activity.length > 0 ? "a" : "s";
+
+    return [
+      info.mode ?? "",
+      info.status,
+      info.model,
+      info.scope,
+      this.worklistBadge,
+      this.cwd,
+      hasActivity,
+    ].join("\0");
+  }
+
   /** Patch just the input band + caret — skips scrollback wrap/compose. */
   private paintInputOnly(): void {
     const insets = outerInsets(this.rows, this.cols);
@@ -473,8 +534,11 @@ export class PaneScreen {
       this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
       true
     );
-    const panelSource = this.panelPaintLines();
+    const panelCols = layout.panel?.cols ?? 0;
+    const panelSource =
+      layout.panel !== null ? this.panelPaintLines(panelCols) : [];
     const panelStart = layout.main.rows;
+    const splitCol = layout.panel !== null ? layout.main.cols : undefined;
     let dirty = "";
 
     for (let i = 0; i < layout.input.rows; i += 1) {
@@ -487,10 +551,10 @@ export class PaneScreen {
           ? paintSplitRow(
               mainLine,
               gutter,
-              insetX(panelSource[panelStart + i] ?? "", layout.panel.cols)
+              fitPanelCell(panelSource[panelStart + i] ?? "", panelCols)
             )
           : mainLine;
-      const line = frameContentRow(content, this.cols);
+      const line = frameContentRow(content, this.cols, { splitCol });
       const stamped = withOpaqueBg(line, CONSOLE.bg);
 
       if (screen[row] !== stamped) {
@@ -502,10 +566,8 @@ export class PaneScreen {
       }
     }
 
-    const cursorRow =
-      insets.originRow + layout.input.row + band.cursor.row + 1;
-    const cursorCol =
-      insets.originCol + layout.input.col + band.cursor.col + 1;
+    const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
+    const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
     const cursorBytes = this.cursor.move(cursorRow, cursorCol);
@@ -515,6 +577,120 @@ export class PaneScreen {
     } else {
       this.out.write(BEGIN_SYNC + cursorBytes + END_SYNC);
     }
+  }
+
+  /**
+   * Streaming hot path: refresh main viewport (+ scrollbar) while following.
+   * Reuses top/input/panel from prevLines — no full compose/outer-frame rebuild.
+   */
+  private paintMainFollowOnly(): void {
+    const screen = this.prevLines;
+
+    if (screen === null) {
+      this.paint();
+
+      return;
+    }
+
+    const insets = outerInsets(this.rows, this.cols);
+    const layout = computeLayout(this.layoutOpts());
+    const bodyGap = layout.main.rows >= BODY_GAP_ROWS + 2 ? BODY_GAP_ROWS : 0;
+    const mainRows = Math.max(0, layout.main.rows - bodyGap);
+    const wrapCols = insetInnerCols(layout.main.cols);
+
+    if (wrapCols !== this.lastWrapCols || mainRows !== this.bodyViewportRows) {
+      this.paint();
+
+      return;
+    }
+
+    this.scrollback.setViewportRows(mainRows);
+    const band = this.paintInputBand(layout);
+    const dirty = this.patchMainViewportRows(screen, {
+      layout,
+      insets,
+      mainRows,
+      bodyStart: layout.main.row + bodyGap,
+      mainVisible: this.scrollback.visible(),
+      scrollbar: formatScrollbarColumn(
+        this.scrollback.metrics(),
+        mainRows,
+        true
+      ),
+    });
+
+    if (dirty.length === 0) {
+      return;
+    }
+
+    const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
+    const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
+
+    this.cursor.reset();
+    this.out.write(
+      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC
+    );
+  }
+
+  /** Patch main-body terminal rows in `screen`; returns CSI dirty bytes. */
+  private patchMainViewportRows(
+    screen: string[],
+    opts: {
+      readonly layout: ReturnType<typeof computeLayout>;
+      readonly insets: ReturnType<typeof outerInsets>;
+      readonly mainRows: number;
+      readonly bodyStart: number;
+      readonly mainVisible: readonly string[];
+      readonly scrollbar: readonly string[] | null;
+    }
+  ): string {
+    const { layout, insets, mainRows, bodyStart, mainVisible, scrollbar } =
+      opts;
+    const mainCols = layout.panel !== null ? layout.main.cols : layout.top.cols;
+    const gutter = paint(
+      GUTTER,
+      this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
+      true
+    );
+    const panelCols = layout.panel?.cols ?? 0;
+    const panelSource =
+      layout.panel !== null ? this.panelPaintLines(panelCols) : [];
+    const splitCol = layout.panel !== null ? layout.main.cols : undefined;
+    const ruleGutter = paint(
+      "├",
+      this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
+      true
+    );
+    let dirty = "";
+
+    for (let r = 0; r < mainRows; r += 1) {
+      const content = buildMainSplitContent({
+        mainText: mainVisible[r] ?? "",
+        mainCols,
+        thumb: scrollbar?.[r],
+        gutter,
+        ruleGutter,
+        panelCell:
+          layout.panel !== null
+            ? fitPanelCell(panelSource[r] ?? "", panelCols)
+            : null,
+      });
+      const stamped = withOpaqueBg(
+        frameContentRow(content, this.cols, { splitCol }),
+        CONSOLE.bg
+      );
+      const termRow = insets.originRow + bodyStart + r;
+
+      if (screen[termRow] !== stamped) {
+        screen[termRow] = stamped;
+        dirty +=
+          cup(termRow + 1, 1) +
+          lastRowSafe(stamped, termRow, this.rows, this.cols) +
+          EL_EOL;
+      }
+    }
+
+    return dirty;
   }
 
   dumpTranscript(): string {
@@ -612,12 +788,13 @@ export class PaneScreen {
       this.flashHeaderPaints -= 1;
     }
 
-    const bodyHeader = Math.min(BODY_HEADER_ROWS, layout.main.rows);
-    const bodyBudget = Math.max(0, layout.main.rows - bodyHeader);
-    const bodyGap = bodyBudget >= BODY_GAP_ROWS + 2 ? BODY_GAP_ROWS : 0;
+    const bodyGap = layout.main.rows >= BODY_GAP_ROWS + 2 ? BODY_GAP_ROWS : 0;
     const chromeAll = [...this.agentTreeLines, ...this.overlayLines];
-    const scrollBudget = Math.max(0, bodyBudget - bodyGap);
-    const chromeRows = Math.min(chromeAll.length, Math.max(0, scrollBudget - 1));
+    const scrollBudget = Math.max(0, layout.main.rows - bodyGap);
+    const chromeRows = Math.min(
+      chromeAll.length,
+      Math.max(0, scrollBudget - 1)
+    );
     const mainRows = scrollBudget - chromeRows;
     const wrapCols = insetInnerCols(layout.main.cols);
 
@@ -629,11 +806,12 @@ export class PaneScreen {
       layout,
       topLines,
       inputBand,
-      bodyHeader,
       bodyGap,
       mainRows,
       chromeRows,
-      chrome: chromeAll.slice(chromeAll.length - chromeRows),
+      // Pin the first overlay line (menu title) when the menu is taller than
+      // the chrome budget — otherwise /help's title was scrolled off forever.
+      chrome: pinOverlayChrome(chromeAll, chromeRows),
     });
     const insets = outerInsets(this.rows, this.cols);
     const screen = wrapOuterFrame(content, this.rows, this.cols, {
@@ -728,7 +906,6 @@ export class PaneScreen {
       lines: string[];
       cursor: { row: number; col: number };
     };
-    bodyHeader: number;
     bodyGap: number;
     mainRows: number;
     chromeRows: number;
@@ -736,18 +913,19 @@ export class PaneScreen {
   }): string[] {
     const { layout } = opts;
     const contentCols = layout.top.cols;
-    const contentRows = Math.max(
-      1,
-      layout.footer.row + layout.footer.rows
-    );
+    const contentRows = Math.max(1, layout.footer.row + layout.footer.rows);
     const screen: string[] = new Array<string>(contentRows);
     const mainVisible = this.scrollback.visible();
     const panelCols = layout.panel?.cols ?? 0;
     const panelSource =
       layout.panel !== null ? this.panelPaintLines(panelCols) : [];
-    // Same ink as horizontal hairlines — dim SGR reads as a different grey.
     const gutter = paint(
       GUTTER,
+      this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
+      true
+    );
+    const ruleGutter = paint(
+      "├",
       this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
       true
     );
@@ -759,19 +937,18 @@ export class PaneScreen {
       );
     }
 
-    const gapStart = layout.main.row + opts.bodyHeader;
+    const gapStart = layout.main.row;
 
     for (let g = 0; g < opts.bodyGap; g += 1) {
       screen[gapStart + g] = paintSplitRow(
         fitAnsiLine("", layout.panel !== null ? layout.main.cols : contentCols),
         gutter,
-        layout.panel !== null ? fitAnsiLine("", layout.panel.cols) : null
+        layout.panel !== null ? fitAnsiLine("", panelCols) : null
       );
     }
 
     const bodyStart = gapStart + opts.bodyGap;
     const mainCols = layout.panel !== null ? layout.main.cols : contentCols;
-    // Grok-style overflow track in the right inset pad (no wrap-width steal).
     const scrollbar = formatScrollbarColumn(
       this.scrollback.metrics(),
       opts.mainRows,
@@ -779,55 +956,75 @@ export class PaneScreen {
     );
 
     for (let r = 0; r < opts.mainRows; r += 1) {
-      const idx = bodyStart + r;
-      let main = insetX(mainVisible[r] ?? "", mainCols);
-      // Track cells are blank (same as the inset pad) — only stamp the thumb.
-      const thumb = scrollbar?.[r];
-
-      if (thumb !== undefined && thumb !== " ") {
-        main = overlayScrollbarCol(main, mainCols, thumb);
-      }
-
-      const panelCell =
-        layout.panel !== null
-          ? fitPanelCell(panelSource[r] ?? "", layout.panel.cols)
-          : null;
-      // Under-rule under Tasks: `├` joins the gutter spine to the panel ─.
-      const splitGutter =
-        panelCell !== null && isRailUnderRule(panelCell)
-          ? paint(
-              "├",
-              this.focus.panelFocused ? CONSOLE.bright : CONSOLE.rule,
-              true
-            )
-          : gutter;
-
-      // Each slot is hard-clamped to its column budget — content must never
-      // overwrite the panel gutter or bleed past the main pane.
-      screen[idx] =
-        layout.panel !== null
-          ? paintSplitRow(main, splitGutter, panelCell)
-          : main;
+      screen[bodyStart + r] = buildMainSplitContent({
+        mainText: mainVisible[r] ?? "",
+        mainCols,
+        thumb: scrollbar?.[r],
+        gutter,
+        ruleGutter,
+        panelCell:
+          layout.panel !== null
+            ? fitPanelCell(panelSource[r] ?? "", panelCols)
+            : null,
+      });
     }
 
-    // Overlay / agent-tree chrome shares the main column — never full-bleed
-    // across the panel gutter (menus used to punch through the side rail).
+    this.fillSplitChrome(screen, {
+      layout,
+      gutter,
+      panelSource,
+      panelCols,
+      contentCols,
+      bodyStart,
+      mainRows: opts.mainRows,
+      chromeRows: opts.chromeRows,
+      chrome: opts.chrome,
+      inputBand: opts.inputBand,
+    });
+
+    for (let r = 0; r < contentRows; r += 1) {
+      screen[r] ??= fitAnsiLine("", contentCols);
+    }
+
+    return screen;
+  }
+
+  /** Overlay/input/footer rows that share the panel gutter spine. */
+  private fillSplitChrome(
+    screen: string[],
+    opts: {
+      readonly layout: ReturnType<typeof computeLayout>;
+      readonly gutter: string;
+      readonly panelSource: readonly string[];
+      readonly panelCols: number;
+      readonly contentCols: number;
+      readonly bodyStart: number;
+      readonly mainRows: number;
+      readonly chromeRows: number;
+      readonly chrome: readonly string[];
+      readonly inputBand: { readonly lines: readonly string[] };
+    }
+  ): void {
+    const { layout } = opts;
+    const hasPanel = layout.panel !== null;
+
     for (let i = 0; i < opts.chromeRows; i += 1) {
       const r = opts.mainRows + i;
-      const idx = bodyStart + r;
+      const main = insetX(
+        opts.chrome[i] ?? "",
+        hasPanel ? layout.main.cols : opts.contentCols
+      );
 
-      screen[idx] =
-        layout.panel !== null
-          ? paintSplitRow(
-              insetX(opts.chrome[i] ?? "", layout.main.cols),
-              gutter,
-              fitPanelCell(panelSource[r] ?? "", layout.panel.cols)
-            )
-          : insetX(opts.chrome[i] ?? "", contentCols);
+      screen[opts.bodyStart + r] = hasPanel
+        ? paintSplitRow(
+            main,
+            opts.gutter,
+            fitPanelCell(opts.panelSource[r] ?? "", opts.panelCols)
+          )
+        : main;
     }
 
-    // Input + bottom air keep the panel gutter spine (┬ → │ → bottom).
-    const inputMainCols = layout.panel !== null ? layout.main.cols : contentCols;
+    const inputMainCols = hasPanel ? layout.main.cols : opts.contentCols;
     const spineBase = opts.mainRows + opts.chromeRows;
 
     for (let i = 0; i < layout.input.rows; i += 1) {
@@ -836,35 +1033,26 @@ export class PaneScreen {
         inputMainCols
       );
 
-      screen[layout.input.row + i] =
-        layout.panel !== null
-          ? paintSplitRow(
-              mainLine,
-              gutter,
-              fitPanelCell(panelSource[spineBase + i] ?? "", layout.panel.cols)
-            )
-          : mainLine;
+      screen[layout.input.row + i] = hasPanel
+        ? paintSplitRow(
+            mainLine,
+            opts.gutter,
+            fitPanelCell(opts.panelSource[spineBase + i] ?? "", opts.panelCols)
+          )
+        : mainLine;
     }
 
     for (let i = 0; i < layout.footer.rows; i += 1) {
-      const idx = layout.footer.row + i;
       const spineIdx = spineBase + layout.input.rows + i;
 
-      screen[idx] =
-        layout.panel !== null
-          ? paintSplitRow(
-              fitAnsiLine("", layout.main.cols),
-              gutter,
-              fitPanelCell(panelSource[spineIdx] ?? "", layout.panel.cols)
-            )
-          : fitAnsiLine("", contentCols);
+      screen[layout.footer.row + i] = hasPanel
+        ? paintSplitRow(
+            fitAnsiLine("", layout.main.cols),
+            opts.gutter,
+            fitPanelCell(opts.panelSource[spineIdx] ?? "", opts.panelCols)
+          )
+        : fitAnsiLine("", opts.contentCols);
     }
-
-    for (let r = 0; r < contentRows; r += 1) {
-      screen[r] ??= fitAnsiLine("", contentCols);
-    }
-
-    return screen;
   }
 
   private flushScreen(
@@ -917,10 +1105,8 @@ export class PaneScreen {
     const insets = outerInsets(this.rows, this.cols);
     const layout = computeLayout(this.layoutOpts());
     const band = this.paintInputBand(layout);
-    const cursorRow =
-      insets.originRow + layout.input.row + band.cursor.row + 1;
-    const cursorCol =
-      insets.originCol + layout.input.col + band.cursor.col + 1;
+    const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
+    const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
     this.out.write(
@@ -1030,7 +1216,8 @@ export class PaneScreen {
       painted.push(fitAnsiLine("", boxCols));
     }
 
-    const midRow = bandRows >= 3 ? 1 + cursorRow : Math.min(cursorRow, bandRows - 1);
+    const midRow =
+      bandRows >= 3 ? 1 + cursorRow : Math.min(cursorRow, bandRows - 1);
     const left = " ".repeat(pad);
     // Main-column width only — compose stamps the gutter + panel beside us.
     const band = painted.map((row) =>
@@ -1081,6 +1268,55 @@ function isRailUnderRule(panelCell: string): boolean {
   const plain = stripSgr(panelCell);
 
   return plain.length > 0 && /^─+$/u.test(plain);
+}
+
+/**
+ * When an overlay/menu exceeds the chrome budget, keep the first line (title)
+ * and the tail (selection + footer) so the header is never scrolled away.
+ */
+function pinOverlayChrome(lines: readonly string[], budget: number): string[] {
+  if (budget <= 0) {
+    return [];
+  }
+
+  if (lines.length <= budget) {
+    return [...lines];
+  }
+
+  if (budget === 1) {
+    return [lines[0] ?? ""];
+  }
+
+  const head = lines[0] ?? "";
+  const tail = lines.slice(lines.length - (budget - 1));
+
+  return [head, ...tail];
+}
+
+/** One main-pane body row (+ optional panel), with scrollbar thumb overlay. */
+function buildMainSplitContent(opts: {
+  readonly mainText: string;
+  readonly mainCols: number;
+  readonly thumb: string | undefined;
+  readonly gutter: string;
+  readonly ruleGutter: string;
+  readonly panelCell: string | null;
+}): string {
+  let main = insetX(opts.mainText, opts.mainCols);
+
+  if (opts.thumb !== undefined && opts.thumb !== " ") {
+    main = overlayScrollbarCol(main, opts.mainCols, opts.thumb);
+  }
+
+  if (opts.panelCell === null) {
+    return main;
+  }
+
+  const splitGutter = isRailUnderRule(opts.panelCell)
+    ? opts.ruleGutter
+    : opts.gutter;
+
+  return paintSplitRow(main, splitGutter, opts.panelCell);
 }
 
 /**

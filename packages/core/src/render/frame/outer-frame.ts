@@ -144,7 +144,10 @@ export function frameContentRow(
   const opts =
     typeof colorOrOpts === "boolean" ? { color: colorOrOpts } : colorOrOpts;
   const color = opts.color !== false;
-  const { originCol, contentCols } = outerInsets(OUTER_CHROME * 2 + 1, termCols);
+  const { originCol, contentCols } = outerInsets(
+    OUTER_CHROME * 2 + 1,
+    termCols
+  );
   const full = isFullBleedRule(contentLine);
   const panelRule = !full && isPanelRuleRow(contentLine, opts.splitCol);
   const left = paint(full ? "├" : "│", STYLE.chrome, color);
@@ -170,21 +173,15 @@ function frameHorizEdge(
 ): string {
   const splitCol = junction?.splitCol;
   const glyph = junction?.junction ?? "┴";
-  let mid: string;
-
-  if (
+  const mid =
     splitCol !== undefined &&
     splitCol >= 0 &&
     splitCol < contentCols &&
     contentCols > 0
-  ) {
-    mid =
-      "─".repeat(splitCol) +
-      glyph +
-      "─".repeat(Math.max(0, contentCols - splitCol - 1));
-  } else {
-    mid = "─".repeat(Math.max(0, contentCols));
-  }
+      ? "─".repeat(splitCol) +
+        glyph +
+        "─".repeat(Math.max(0, contentCols - splitCol - 1))
+      : "─".repeat(Math.max(0, contentCols));
 
   const bar = paint(`${left}${mid}${right}`, STYLE.chrome, color);
 

@@ -81,7 +81,12 @@ def scenario_plan_lifecycle(port):
             b"Create a new file src/sum.ts exporting a sum(a,b) that returns a+b.\r",
         )
         got, buf = read_until(
-            master, lambda b: "reply to refine" in b or "## Plan" in b, 60, buf
+            master,
+            lambda b: "REPLY TO REFINE" in b
+            or "reply to refine" in b.lower()
+            or "## Plan" in b,
+            60,
+            buf,
         )
         wrote_early = os.path.exists(target)
         print(f"  [{'PASS' if got else 'FAIL'}] model returned a plan in plan mode")
@@ -122,18 +127,18 @@ def scenario_mode_cycle(port):
     ok = True
     pid, master, _ = spawn(port, {})  # editor mode (no BASIC_INPUT)
     try:
-        got, _ = read_until(master, lambda b: "◆ plan" in b, 60)
-        print(f"  [{'PASS' if got else 'FAIL'}] status bar shows the ◆ plan chip (default)")
+        got, _ = read_until(master, lambda b: " PLAN " in b, 60)
+        print(f"  [{'PASS' if got else 'FAIL'}] status bar shows the PLAN chip (default)")
         ok &= got
 
         os.write(master, b"\x1b[Z")  # Shift+Tab
-        got, _ = read_until(master, lambda b: "◆ normal" in b, 15)
-        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> ◆ normal")
+        got, _ = read_until(master, lambda b: " NORMAL " in b, 15)
+        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> NORMAL")
         ok &= got
 
         os.write(master, b"\x1b[Z")  # Shift+Tab again
-        got, _ = read_until(master, lambda b: "◆ plan" in b, 15)
-        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> ◆ plan (cycles back)")
+        got, _ = read_until(master, lambda b: " PLAN " in b, 15)
+        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> PLAN (cycles back)")
         ok &= got
     finally:
         reap(pid, master)

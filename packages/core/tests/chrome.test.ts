@@ -173,7 +173,11 @@ describe("formatRailHeader", () => {
 
 describe("hairline", () => {
   test("inserts junction glyphs at the split", () => {
-    const rule = hairline(10, "─", { splitCol: 4, junction: "┬", color: false });
+    const rule = hairline(10, "─", {
+      splitCol: 4,
+      junction: "┬",
+      color: false,
+    });
 
     expect(rule).toBe("────┬─────");
     expect(hairline(8, "─", { splitCol: 3, junction: "┴", color: false })).toBe(

@@ -30,7 +30,7 @@ describe("renderMessage — hybrid bubbles", () => {
     expect(out).toContain("┐");
     expect(out).toContain("└");
     expect(out).toContain("┘");
-    expect(out).toMatch(/│  hey there\s+│/);
+    expect(out).toMatch(/│ {2}hey there\s+│/);
     expect(out).not.toContain("▌");
     expect(out).not.toContain("╭");
     expect(out).not.toContain("╰");
@@ -49,8 +49,8 @@ describe("renderMessage — hybrid bubbles", () => {
     expect(out).toContain("└");
     expect(out).toContain("┘");
     expect(out).not.toContain("some-model");
-    expect(out).toMatch(/│  line one\s+│/);
-    expect(out).toMatch(/│  line two\s+│/);
+    expect(out).toMatch(/│ {2}line one\s+│/);
+    expect(out).toMatch(/│ {2}line two\s+│/);
     expect(out).not.toContain("╭");
     expect(out).not.toContain("╰");
   });
@@ -64,7 +64,8 @@ describe("renderMessage — hybrid bubbles", () => {
 describe("role card alignment", () => {
   test("USER / AGENT / PLAN hug their labels and share the card right edge", () => {
     const cols = 40;
-    const userTop = stripAnsi(userBubble("hi", false, cols)).split("\n")[0] ?? "";
+    const userTop =
+      stripAnsi(userBubble("hi", false, cols)).split("\n")[0] ?? "";
     const agentTop = stripAnsi(agentCardTop(false, cols));
     const planTop = stripAnsi(planHint(false, cols)).split("\n")[0] ?? "";
     const agentBottom = stripAnsi(agentCardBottom(false, cols));
@@ -89,7 +90,9 @@ describe("role card alignment", () => {
     expect(agentRow.endsWith("│")).toBe(true);
 
     const userBottom =
-      stripAnsi(userBubble("hi", false, cols)).split("\n").at(-1) ?? "";
+      stripAnsi(userBubble("hi", false, cols))
+        .split("\n")
+        .at(-1) ?? "";
 
     expect(userBottom.startsWith("└")).toBe(true);
     expect(userBottom.endsWith("┘")).toBe(true);
@@ -118,7 +121,7 @@ describe("userBubble", () => {
 
     expect(out).toContain("[48;2;34;211;238m");
     expect(out).toContain("[38;2;34;211;238m");
-    expect(stripAnsi(out)).toMatch(/│  hi\s+│/);
+    expect(stripAnsi(out)).toMatch(/│ {2}hi\s+│/);
     expect(stripAnsi(out)).not.toContain("▌");
   });
 
@@ -130,7 +133,7 @@ describe("userBubble", () => {
     expect(rows[1]?.startsWith("│")).toBe(true);
     expect(rows[1]?.endsWith("│")).toBe(true);
     expect(/^│\s+│$/.test(rows[1] ?? "")).toBe(true);
-    expect(rows[2]).toMatch(/│  hi\s+│/);
+    expect(rows[2]).toMatch(/│ {2}hi\s+│/);
     expect(rows.at(-1)?.startsWith("└")).toBe(true);
     expect(rows.at(-1)?.endsWith("┘")).toBe(true);
   });

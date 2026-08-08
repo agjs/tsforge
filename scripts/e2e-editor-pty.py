@@ -8,7 +8,7 @@ had only in-process (VirtualScreen/unit) tests:
      input as ONE paste — no per-line submits — and submits as one message.
   3. The `@` file picker: dropdown renders, typing filters it, Enter inserts
      the picked path into the input, and the path survives to the submit.
-  4. A long line wraps without duplicating the status bar (ghost-row bug).
+  4. A long line wraps without duplicating the mode chip (ghost-row bug).
 
 Deterministic: shared stub model server, no GUI. Run: python3 scripts/e2e-editor-pty.py
 """
@@ -24,22 +24,27 @@ from ptyharness import (  # noqa: E402
     reap,
     spawn_tsforge,
     start_stub_server,
+    visible_text,
 )
 
 t = Checker()
 
-BUBBLE_TOP = "╭─ you"  # userBubble() top cap (render/ansi.ts)
-MODE_CHIP = "◆ plan"  # status-bar mode chip (default mode)
+# Closed USER card top badge (render/ansi.ts userBubble) — not the old `╭─ you`.
+BUBBLE_TOP = " USER "
+MODE_CHIP = " PLAN "  # top-strip mode chip (default mode)
+ROWS, COLS = 40, 120
 
 
 def last_frame(buf):
-    """The content painted after the LAST erase-to-end — i.e. the current frame
-    (the status bar's relative redraw always starts with ESC[0J)."""
-    return buf.split("\x1b[0J")[-1]
+    """Visible cell grid after applying the full pane CUP paint stream."""
+    return visible_text(buf, rows=ROWS, cols=COLS)
 
 
 def boot(port, cwd):
-    pid, m = spawn_tsforge(port, cwd=cwd, home=tempfile.mkdtemp(prefix="tsforge-edhome-"))
+    pid, m = spawn_tsforge(
+        port, cwd=cwd, home=tempfile.mkdtemp(prefix="tsforge-edhome-"),
+        rows=ROWS, cols=COLS,
+    )
     got, buf = read_until(m, lambda b: MODE_CHIP in b, 60)
     return pid, m, got, buf
 

@@ -53,7 +53,7 @@ def main():
     models_path = os.path.join(home, ".tsforge", "models.json")
     pid, m = spawn_tsforge(port, home=home, rows=44, cols=120)
 
-    got, _ = read_until(m, lambda b: "plan mode" in b or "› " in b, 40)
+    got, _ = read_until(m, lambda b: " PLAN " in b or "> " in b or "TSFORGE" in b, 40)
     t.check("REPL boots", got)
 
     # 1) open /config, cancel with Esc → must stay alive.
@@ -93,7 +93,7 @@ def main():
     os.write(m, b"\x1b")  # done
     t.check("tsforge STILL RUNNING after toggle", still_running(pid, 0.8))
     # Wait for the overlay to actually close (not just escape pressed).
-    read_until(m, lambda b: "› " in b, 2)  # Back to editor input prompt
+    read_until(m, lambda b: "> " in b or "› " in b, 2)  # Back to editor input prompt
 
     # 3) reopen, Add a model (index 1) via inline text fields.
     got, _ = open_config(m)
@@ -149,7 +149,7 @@ def main():
     os.write(m, b"\x1b")  # close config → back to the REPL editor
     # Inline rendering doesn't use alt-screen, so no ESC[?1049l to wait for.
     # Just wait for the editor prompt to return.
-    read_until(m, lambda b: "› " in b, 3)
+    read_until(m, lambda b: "> " in b or "› " in b, 3)
     t.check("tsforge STILL RUNNING after double-type check", still_running(pid, 0.6))
 
     # 3c) after /config closes, the editor must work again (inert cleared) and its

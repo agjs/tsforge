@@ -3,7 +3,7 @@ import { displayWidth, sliceToWidth } from "../width";
 import { stripSgr } from "./ansi-plain";
 
 /** Left-rail prefixes that must repeat on every soft-wrapped continuation row. */
-const HANG_PREFIX = /^(│  |│ |▌  |▌ |\|  |\| )/;
+const HANG_PREFIX = /^(│ {2}|│ |▌ {2}|▌ |\| {2}|\| )/;
 
 /**
  * Wrap a (possibly ANSI) line to `cols` columns.
@@ -160,9 +160,7 @@ function extractBoxedBodyAnsi(line: string, leftPlainLen: number): string {
 }
 
 /** Detect a closed card row: `│ … │`. */
-function parseBoxedRow(
-  plain: string
-): {
+function parseBoxedRow(plain: string): {
   left: string;
   right: string;
   leftCols: number;
@@ -191,6 +189,26 @@ function parseBoxedRow(
   };
 }
 
+/** Hard-break one token wider than `width` into `out`; return the leftover. */
+function breakWideToken(word: string, width: number, out: string[]): string {
+  let rest = word;
+
+  while (displayWidth(rest) > width) {
+    const head = sliceToWidth(rest, width);
+
+    if (head.text.length === 0) {
+      out.push(rest.slice(0, 1));
+      rest = rest.slice(1);
+      continue;
+    }
+
+    out.push(head.text);
+    rest = rest.slice(head.text.length);
+  }
+
+  return rest;
+}
+
 /** Word-wrap plain text; hard-break a single token wider than `width`. */
 function wrapPlainWords(text: string, width: number): string[] {
   if (width <= 0) {
@@ -214,22 +232,7 @@ function wrapPlainWords(text: string, width: number): string[] {
         out.push(cur);
       }
 
-      let rest = word;
-
-      while (displayWidth(rest) > width) {
-        const head = sliceToWidth(rest, width);
-
-        if (head.text.length === 0) {
-          out.push(rest.slice(0, 1));
-          rest = rest.slice(1);
-          continue;
-        }
-
-        out.push(head.text);
-        rest = rest.slice(head.text.length);
-      }
-
-      cur = rest;
+      cur = breakWideToken(word, width, out);
     }
 
     out.push(cur);

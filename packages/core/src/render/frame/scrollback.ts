@@ -186,9 +186,7 @@ export class Scrollback {
   }
 
   private wrapped(): string[] {
-    if (this.cachedWrapped === null) {
-      this.cachedWrapped = wrapAnsiLines(this.allLines(), this.wrapCols);
-    }
+    this.cachedWrapped ??= wrapAnsiLines(this.allLines(), this.wrapCols);
 
     return this.cachedWrapped;
   }

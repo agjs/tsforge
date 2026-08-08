@@ -573,6 +573,24 @@ export function resumedProfileArg(
   return cliProfile.length === 0 && isProfileId(saved) ? saved : cliProfile;
 }
 
+/** One-line plan-mode banner for a fresh interactive session. */
+function maybeWritePlanModeIntro(planMode: boolean): void {
+  if (!planMode) {
+    return;
+  }
+
+  const chip = paint("◆ plan mode (default)", STYLE.brand + STYLE.bold, true);
+  const body = paint(
+    "— I'll explore and propose a plan; reply",
+    STYLE.dim,
+    true
+  );
+  const approve = paint("approve", STYLE.green + STYLE.bold, true);
+  const tail = paint("to build", STYLE.dim, true);
+
+  process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -647,11 +665,10 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Landing is seeded into PaneScreen after enter() — never print a banner into
   // the primary buffer (it would flash, then get wiped).
 
-  const interactiveTty =
-    process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const interactiveTty = process.stdin.isTTY && process.stdout.isTTY;
   const rejectPane = paneConsoleRejectReason({
-    stdinTty: process.stdin.isTTY === true,
-    stdoutTty: process.stdout.isTTY === true,
+    stdinTty: process.stdin.isTTY,
+    stdoutTty: process.stdout.isTTY,
     rows: process.stdout.rows > 0 ? process.stdout.rows : 0,
   });
 
@@ -729,19 +746,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   let currentModeId = planMode ? "plan" : "normal";
 
   session.setPlanMode(planMode);
-
-  if (planMode) {
-    const chip = paint("◆ plan mode (default)", STYLE.brand + STYLE.bold, true);
-    const body = paint(
-      "— I'll explore and propose a plan; reply",
-      STYLE.dim,
-      true
-    );
-    const approve = paint("approve", STYLE.green + STYLE.bold, true);
-    const tail = paint("to build", STYLE.dim, true);
-
-    process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
-  }
+  maybeWritePlanModeIntro(planMode);
 
   // Model-driven delegation: the orchestrator can spawn read-only specialist
   // subagents via the `spawn_agent` tool — the user never names an agent.
@@ -1949,7 +1954,11 @@ export async function repl(args: ICliArgs): Promise<number> {
     resizeTimer = setTimeout(() => {
       resizing = false;
       resizeTimer = null;
-      paneScreen.resize(process.stdout.rows, process.stdout.columns);
+      // Geometry first (no paint), then one chrome sync — avoids resize+status
+      // double frames on every SIGWINCH settle.
+      paneScreen.resize(process.stdout.rows, process.stdout.columns, {
+        paint: false,
+      });
       syncPaneChrome();
       // The editor wraps/windows at the dimensions it was created with; without
       // this it keeps using the pre-resize size and can clip the current line.
@@ -2669,9 +2678,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         const speaker = modelInfo(provider.config).model;
 
         for (const message of resumed.messages) {
-          panes.appendMain(
-            renderMessage(message, { color: true, speaker })
-          );
+          panes.appendMain(renderMessage(message, { color: true, speaker }));
         }
       }
 
@@ -2679,7 +2686,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     };
 
     if (interactiveTty) {
-      if (paneScreen.enter() !== true) {
+      if (!paneScreen.enter()) {
         const reason = paneConsoleRejectReason({
           stdinTty: true,
           stdoutTty: true,

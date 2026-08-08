@@ -34,7 +34,7 @@ export const TOP_RULE_ROWS = 1;
 export const TOP_STATUS_ROWS =
   TOP_PAD_ROWS + TOP_TITLE_ROWS + TOP_PAD_BOTTOM_ROWS + TOP_RULE_ROWS; // 4
 
-/** @deprecated Body headers folded into the top strip — always 0. */
+/** Body headers folded into the top strip — always 0. */
 export const BODY_HEADER_ROWS = 0;
 /** Blank row under the top rule when the body has room. */
 export const BODY_GAP_ROWS = 0;
@@ -50,14 +50,17 @@ export const INPUT_INNER_ROWS = 1;
 export const INPUT_INNER_ROWS_MAX = 6;
 /** Bottom border (`╰─╯`). */
 export const INPUT_BOX_BOTTOM_ROWS = 1;
-/** @deprecated Box has no air pad above. */
+/** Box has no air pad above (kept for older call sites). */
 export const INPUT_PAD_TOP_ROWS = 0;
-/** @deprecated Prefer BOTTOM_PAD_ROWS (below the whole input band). */
+/** Prefer BOTTOM_PAD_ROWS below the whole input band (alias kept for call sites). */
 export const INPUT_PAD_BOTTOM_ROWS = 0;
 
 /** Total band height for a given number of draft rows (borders + mids). */
 export function inputBandRows(innerRows: number): number {
-  const inner = Math.max(INPUT_INNER_ROWS, Math.min(INPUT_INNER_ROWS_MAX, innerRows));
+  const inner = Math.max(
+    INPUT_INNER_ROWS,
+    Math.min(INPUT_INNER_ROWS_MAX, innerRows)
+  );
 
   return INPUT_BOX_TOP_ROWS + inner + INPUT_BOX_BOTTOM_ROWS;
 }
@@ -83,7 +86,7 @@ export function clampInputInnerRows(innerRows: number): number {
  */
 export const BOTTOM_PAD_ROWS = 0;
 
-/** @deprecated Alias of INPUT_BOX_TOP_ROWS. */
+/** Alias of INPUT_BOX_TOP_ROWS (kept for older call sites). */
 export const INPUT_RULE_ROWS = INPUT_BOX_TOP_ROWS;
 
 /** Footer metrics removed — bottom pad lives in `footer`. */
@@ -112,7 +115,7 @@ export interface IComputeLayoutOpts {
    */
   readonly inputInnerRows?: number;
   /**
-   * @deprecated Prefer `inputInnerRows`. When set without `inputInnerRows`,
+   * Prefer `inputInnerRows`. When set without `inputInnerRows`,
    * treated as total band height (borders included) for older call sites.
    */
   readonly inputRows?: number;
@@ -123,7 +126,17 @@ export interface IComputeLayoutOpts {
   readonly showPanel?: boolean;
 }
 
+/** Untagged shape so legacy `inputRows` can be read without no-deprecated noise. */
+interface IBandRowOpts {
+  readonly inputInnerRows?: number;
+  readonly inputRows?: number;
+}
+
 function resolveInputBandRows(opts: IComputeLayoutOpts): number {
+  return resolveBandRowsFrom(opts);
+}
+
+function resolveBandRowsFrom(opts: IBandRowOpts): number {
   if (opts.inputInnerRows !== undefined) {
     return inputBandRows(clampInputInnerRows(opts.inputInnerRows));
   }

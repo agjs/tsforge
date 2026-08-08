@@ -87,7 +87,9 @@ describe("wrapOuterFrame", () => {
     const { contentRows, contentCols } = outerInsets(termRows, termCols);
     const split = 6;
     const rule =
-      "─".repeat(split) + "┬" + "─".repeat(Math.max(0, contentCols - split - 1));
+      "─".repeat(split) +
+      "┬" +
+      "─".repeat(Math.max(0, contentCols - split - 1));
     const content = Array.from({ length: contentRows }, (_, i) =>
       i === 1 ? rule : "".padEnd(contentCols, " ")
     );
@@ -113,7 +115,9 @@ describe("wrapOuterFrame", () => {
     );
     const split = 6;
     const panelRule =
-      " ".repeat(split) + "├" + "─".repeat(Math.max(0, contentCols - split - 1));
+      " ".repeat(split) +
+      "├" +
+      "─".repeat(Math.max(0, contentCols - split - 1));
     const content = Array.from({ length: contentRows }, (_, i) =>
       i === 1 ? panelRule : "".padEnd(contentCols, " ")
     );
@@ -126,8 +130,8 @@ describe("wrapOuterFrame", () => {
     expect(plain[OUTER_MARGIN]).toBe("│");
     expect(plain[originCol + split]).toBe("├");
     expect(plain[termCols - OUTER_MARGIN - 1]).toBe("┤");
-    expect(plain.slice(originCol + split + 1, termCols - OUTER_MARGIN - 1)).toMatch(
-      /^─+$/
-    );
+    expect(
+      plain.slice(originCol + split + 1, termCols - OUTER_MARGIN - 1)
+    ).toMatch(/^─+$/);
   });
 });

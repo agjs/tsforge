@@ -90,8 +90,7 @@ describe("wrapAnsiLine", () => {
     const chrome = "\x1b[38;2;82;82;91m";
     const reset = "\x1b[0m";
     // Split-rail blank (the iTerm dark-right-rail shape).
-    const split =
-      `${chrome}│${reset}` + " ".repeat(18) + `${chrome}│${reset}`;
+    const split = `${chrome}│${reset}` + " ".repeat(18) + `${chrome}│${reset}`;
     const [row] = wrapAnsiLine(split, 20);
     const first = row!.indexOf("│");
     const last = row!.lastIndexOf("│");

@@ -61,9 +61,7 @@ export function formatInputBox(opts: IInputBoxOpts): {
   const color = opts.color ?? true;
   const label = opts.label ?? "";
   const rawLines =
-    opts.draftLines !== undefined
-      ? [...opts.draftLines]
-      : [opts.draft ?? ""];
+    opts.draftLines !== undefined ? [...opts.draftLines] : [opts.draft ?? ""];
   const lines = rawLines.length > 0 ? rawLines : [""];
   const empty = lines.length === 1 && (lines[0] ?? "").length === 0;
   const showPh = opts.showPlaceholder !== false && empty;
@@ -82,7 +80,9 @@ export function formatInputBox(opts: IInputBoxOpts): {
       ...mid,
       formatInputBoxBottom(cols, label, color),
     ],
-    cursorCol: inputCursorCol(empty ? 0 : displayWidth(stripSgr(lines[0] ?? ""))),
+    cursorCol: inputCursorCol(
+      empty ? 0 : displayWidth(stripSgr(lines[0] ?? ""))
+    ),
   };
 }
 
@@ -111,7 +111,10 @@ export function formatInputBoxMid(
   const prompt = showPrompt
     ? paint(INPUT_PROMPT, STYLE.chrome, color)
     : " ".repeat(INPUT_PROMPT_COLS);
-  const budget = Math.max(0, inner - INPUT_BOX_SIDE_PAD * 2 - INPUT_PROMPT_COLS);
+  const budget = Math.max(
+    0,
+    inner - INPUT_BOX_SIDE_PAD * 2 - INPUT_PROMPT_COLS
+  );
   const plain = stripSgr(body);
   const fitted =
     displayWidth(plain) <= budget ? body : sliceToWidth(plain, budget).text;
