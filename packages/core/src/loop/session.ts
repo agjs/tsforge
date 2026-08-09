@@ -388,7 +388,7 @@ const PLAN_MODE_NOTE =
   "one. Then ask for the specific missing pieces that matter most. If the user would " +
   "rather not answer, proceed on clearly-stated assumptions — never block.\n" +
   "4. PLAN — once you know enough, call the `present_plan` tool with " +
-  '{ goal, items: [{ title, detail?, files?, verify?, children? }] }. ' +
+  "{ goal, items: [{ title, detail?, files?, verify?, children? }] }. " +
   "Do NOT paste the JSON into chat — the harness renders it for the human. " +
   "Items are concrete work units (e.g. create X, wire Y) — NEVER a checklist " +
   "item for 'run tests / lint / the gate'; the harness gate validates each " +
@@ -948,13 +948,16 @@ export class Session {
 
     this.ctx = ctx;
 
-    // Wire runCheckGate whenever a gate exists OR the callable `check` tool is
-    // offered. Interactive REPL sessions need this for task_complete (gate must
-    // be green before an item can be marked done) even when `check` itself is
-    // not advertised. Reads `this.ctx` LAZILY so a mid-build `setGate` swap is
-    // honored; never `validate(accept)` alone (vacuous-recheck trap).
-    if (offerCheck || this.hasGate) {
+    // `check` tool seam — only when offerCheck (do not enable via hasGate alone).
+    // Reads `this.ctx` LAZILY so a mid-build `setGate` swap is honored.
+    if (offerCheck) {
       this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
+    }
+
+    // Checklist complete seam — separate from `check` so a gate for task_complete
+    // does not advertise/enable the model's on-demand check tool.
+    if (this.hasGate) {
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
     }
 
     if (typeof cfg.activePlanId === "string" && cfg.activePlanId.length > 0) {
@@ -1277,9 +1280,9 @@ export class Session {
       this.hasGate = true;
     }
 
-    // task_complete needs runCheck; wire it when a gate appears mid-session.
-    if (this.hasGate && this.ctx.tool.runCheck === undefined) {
-      this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
+    // task_complete needs runTaskGate; wire it when a gate appears mid-session.
+    if (this.hasGate && this.ctx.tool.runTaskGate === undefined) {
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
     }
 
     this.refreshTaskContract();
@@ -1370,6 +1373,7 @@ export class Session {
   /** Take and clear the pending proposal (approve path). */
   takePendingPlan(): IPlanDocument | null {
     const plan = this.pendingPlan;
+
     this.pendingPlan = null;
 
     return plan;
@@ -1417,9 +1421,7 @@ export class Session {
         ? null
         : findItem(plan.items, plan.activeItemId);
     const active =
-      focused === null
-        ? "(none)"
-        : `${focused.title} (${focused.id})`;
+      focused === null ? "(none)" : `${focused.title} (${focused.id})`;
 
     return [
       CHECKLIST_CONTRACT_MARKER,

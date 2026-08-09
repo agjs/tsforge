@@ -12,9 +12,7 @@ import { reject, str, type IToolContext } from "./tool-context";
 
 function requirePlan(
   ctx: IToolContext
-):
-  | { ok: true; planId: string; cwd: string }
-  | { ok: false; error: string } {
+): { ok: true; planId: string; cwd: string } | { ok: false; error: string } {
   const planId = ctx.activePlanId;
 
   if (typeof planId !== "string" || planId.length === 0) {
@@ -156,7 +154,7 @@ export async function doTaskComplete(
     );
   }
 
-  if (ctx.runCheck === undefined) {
+  if (ctx.runTaskGate === undefined) {
     return reject(
       ctx,
       "task_complete",
@@ -170,7 +168,7 @@ export async function doTaskComplete(
     message: "task_complete: running gate before marking done",
   });
 
-  const gate = await ctx.runCheck();
+  const gate = await ctx.runTaskGate();
 
   if (!gate.passed) {
     const sample = gate.errors

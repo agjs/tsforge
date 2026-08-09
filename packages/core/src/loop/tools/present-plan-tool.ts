@@ -13,7 +13,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  */
 export function presentPlanArgsToRaw(
   args: Record<string, unknown>
-): unknown | null {
+): Record<string, unknown> | null {
   if (isRecord(args.plan)) {
     return args.plan;
   }
@@ -56,6 +56,7 @@ export function doPresentPlan(
   }
 
   const plan: IPlanDocument = normalized.plan;
+
   ctx.onPlanPresented?.(plan);
 
   const open = countOpen(plan.items);

@@ -112,6 +112,7 @@ export function formatPlanProposal(
   const walk = (nodes: readonly IChecklistItem[], depth: number): void => {
     for (const item of nodes) {
       const pad = "  ".repeat(depth);
+
       push(`${pad}○ ${item.title}`);
 
       if (item.detail !== undefined && item.detail.trim().length > 0) {
@@ -229,10 +230,7 @@ function paintBody(part: string, kind: ItemKind, color: boolean): string {
   return paint(part, CONSOLE.muted, true);
 }
 
-function kindOf(
-  item: IChecklistItem,
-  activeItemId: string | null
-): ItemKind {
+function kindOf(item: IChecklistItem, activeItemId: string | null): ItemKind {
   if (item.status === "done") {
     return "done";
   }
@@ -273,9 +271,7 @@ function formatItemLines(
   for (const extra of extras) {
     const clipped = clip(extra, Math.max(4, columns - nest.length - 2));
 
-    lines.push(
-      paint(`${nest}${CONT_INDENT}${clipped}`, CONSOLE.muted, color)
-    );
+    lines.push(paint(`${nest}${CONT_INDENT}${clipped}`, CONSOLE.muted, color));
   }
 
   return lines;
@@ -299,6 +295,72 @@ function applySelection(
 
     return paint(`▸ ${plain}`, CONSOLE.bright, color);
   });
+}
+
+function focusExtras(item: IChecklistItem): string[] {
+  const extras: string[] = [];
+
+  if (item.verify !== undefined && item.verify.trim().length > 0) {
+    extras.push(`verify: ${item.verify.trim()}`);
+  }
+
+  if (
+    item.blockedReason !== undefined &&
+    item.blockedReason.trim().length > 0
+  ) {
+    extras.push(`blocked: ${item.blockedReason.trim()}`);
+  }
+
+  return extras;
+}
+
+function walkChecklist(
+  plan: IPlanDocument,
+  nodes: readonly IChecklistItem[],
+  depth: number,
+  ctx: {
+    readonly maxPending: number;
+    readonly columns: number;
+    readonly color: boolean;
+    readonly pending: { shown: number; hidden: number };
+    readonly out: string[];
+  }
+): void {
+  for (const item of nodes) {
+    const kind = kindOf(item, plan.activeItemId);
+    const isFocus =
+      kind === "current" ||
+      (plan.activeItemId !== null && item.id === plan.activeItemId);
+
+    if (kind === "pending" && !isFocus) {
+      if (ctx.pending.shown >= ctx.maxPending) {
+        ctx.pending.hidden += 1;
+
+        if (item.children !== undefined) {
+          walkChecklist(plan, item.children, depth + 1, ctx);
+        }
+
+        continue;
+      }
+
+      ctx.pending.shown += 1;
+    }
+
+    ctx.out.push(
+      ...formatItemLines(
+        item,
+        kind,
+        ctx.columns,
+        ctx.color,
+        depth,
+        isFocus ? focusExtras(item) : []
+      )
+    );
+
+    if (item.children !== undefined) {
+      walkChecklist(plan, item.children, depth + 1, ctx);
+    }
+  }
 }
 
 /**
@@ -326,60 +388,19 @@ export function formatWorklistLines(
     lines.push(paint(clip(goal, columns), CONSOLE.muted, color));
   }
 
-  let pendingShown = 0;
-  let pendingHidden = 0;
+  const pending = { shown: 0, hidden: 0 };
 
-  const walk = (nodes: readonly IChecklistItem[], depth: number): void => {
-    for (const item of nodes) {
-      const kind = kindOf(item, plan.activeItemId);
-      const isFocus =
-        kind === "current" ||
-        (plan.activeItemId !== null && item.id === plan.activeItemId);
+  walkChecklist(plan, plan.items, 0, {
+    maxPending,
+    columns,
+    color,
+    pending,
+    out: lines,
+  });
 
-      if (kind === "pending" && !isFocus) {
-        if (pendingShown >= maxPending) {
-          pendingHidden += 1;
-
-          if (item.children) {
-            walk(item.children, depth + 1);
-          }
-
-          continue;
-        }
-
-        pendingShown += 1;
-      }
-
-      const extras: string[] = [];
-
-      if (isFocus) {
-        if (item.verify !== undefined && item.verify.trim().length > 0) {
-          extras.push(`verify: ${item.verify.trim()}`);
-        }
-
-        if (
-          item.blockedReason !== undefined &&
-          item.blockedReason.trim().length > 0
-        ) {
-          extras.push(`blocked: ${item.blockedReason.trim()}`);
-        }
-      }
-
-      lines.push(
-        ...formatItemLines(item, kind, columns, color, depth, extras)
-      );
-
-      if (item.children) {
-        walk(item.children, depth + 1);
-      }
-    }
-  };
-
-  walk(plan.items, 0);
-
-  if (pendingHidden > 0) {
+  if (pending.hidden > 0) {
     lines.push(
-      paint(`… +${String(pendingHidden)} more`, CONSOLE.muted, color)
+      paint(`… +${String(pending.hidden)} more`, CONSOLE.muted, color)
     );
   }
 

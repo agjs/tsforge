@@ -4,10 +4,10 @@
  */
 import type {
   IChecklistItem,
+  IChecklistItemDraft,
   IPlanDocument,
   IPlanDraft,
 } from "./checklist.types";
-import type { IChecklistItemDraft } from "./checklist.types";
 import { savePlan } from "./checklist-store";
 
 export type SeedWorklistResult =
@@ -19,7 +19,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Prefer ```json … ```; else any fenced block that parses as a plan draft. */
-export function extractPlanJson(assistantText: string): unknown | null {
+export function extractPlanJson(assistantText: string): unknown {
   const fences = [
     ...assistantText.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/giu),
   ];

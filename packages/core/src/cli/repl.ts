@@ -1017,6 +1017,74 @@ export async function repl(args: ICliArgs): Promise<number> {
       return session.send(`${contextBlock}${composed}`, opts);
     });
 
+  const resolveApprovedPlan = (): IPlanDocument | null => {
+    const pending = session.takePendingPlan();
+
+    if (pending !== null) {
+      return persistPlanDocument(args.dir, pending);
+    }
+
+    const last = session.messages.at(-1);
+    const planText =
+      last?.role === "assistant" && typeof last.content === "string"
+        ? last.content
+        : "";
+    const seeded = seedWorklistFromPlan(
+      args.dir,
+      planText,
+      goalFromMessages(session.messages)
+    );
+
+    if (!seeded.ok) {
+      echo(`  ✗ ${seeded.error}\n`);
+
+      return null;
+    }
+
+    return seeded.plan;
+  };
+
+  const approveBoundPlan = async (): Promise<void> => {
+    const plan = resolveApprovedPlan();
+
+    if (plan === null) {
+      return;
+    }
+
+    session.setActivePlanId(plan.id);
+    syncWorklistPanel(plan);
+    echo(
+      `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
+    );
+    planMode = false;
+    planDiscussed = false;
+    session.setPlanMode(false);
+    await persist();
+    echo("  ✓ plan approved — implementing\n");
+    await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
+  };
+
+  const discussInPlanMode = async (line: string): Promise<void> => {
+    await runSend(line);
+    planDiscussed = true;
+
+    // present_plan already paints the card + approve footer mid-turn. Only
+    // nudge here for the legacy ## Plan heading path (no present_plan call).
+    const last = session.messages.at(-1);
+    const plannedHeading =
+      last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
+
+    if (plannedHeading && session.getPendingPlan() === null) {
+      const cols = panesLive()
+        ? paneScreen.mainInnerCols()
+        : process.stdout.columns > 0
+          ? process.stdout.columns
+          : 80;
+
+      echo(`\n${planHint(true, cols)}\n`);
+    }
+  };
+
   const dispatch = async (line: string): Promise<void> => {
     const route = classifyReplRoute(line, {
       planMode,
@@ -1039,43 +1107,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // GENERAL plan mode, approval: bind present_plan proposal (or fenced JSON
     // fallback), unlock tools, implement. Only an explicit approval word counts.
     if (route === "plan-approval") {
-      const pending = session.takePendingPlan();
-      let plan: IPlanDocument | null = null;
-
-      if (pending !== null) {
-        plan = persistPlanDocument(args.dir, pending);
-      } else {
-        const last = session.messages.at(-1);
-        const planText =
-          last?.role === "assistant" && typeof last.content === "string"
-            ? last.content
-            : "";
-        const seeded = seedWorklistFromPlan(
-          args.dir,
-          planText,
-          goalFromMessages(session.messages)
-        );
-
-        if (!seeded.ok) {
-          echo(`  ✗ ${seeded.error}\n`);
-
-          return;
-        }
-
-        plan = seeded.plan;
-      }
-
-      session.setActivePlanId(plan.id);
-      syncWorklistPanel(plan);
-      echo(
-        `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
-      );
-      planMode = false;
-      planDiscussed = false;
-      session.setPlanMode(false);
-      await persist();
-      echo("  ✓ plan approved — implementing\n");
-      await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
+      await approveBoundPlan();
 
       return;
     }
@@ -1083,24 +1115,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // GENERAL plan mode, discussion: the agent explores read-only, asks its
     // clarifying questions, and proposes/revises a plan. Stays in plan mode.
     if (route === "plan-discuss") {
-      await runSend(line);
-      planDiscussed = true;
-
-      // present_plan already paints the card + approve footer mid-turn. Only
-      // nudge here for the legacy ## Plan heading path (no present_plan call).
-      const last = session.messages.at(-1);
-      const plannedHeading =
-        last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
-
-      if (plannedHeading && session.getPendingPlan() === null) {
-        const cols = panesLive()
-          ? paneScreen.mainInnerCols()
-          : process.stdout.columns > 0
-            ? process.stdout.columns
-            : 80;
-
-        echo(`\n${planHint(true, cols)}\n`);
-      }
+      await discussInPlanMode(line);
 
       return;
     }
@@ -1134,6 +1149,60 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Assigned after the pane console exists (same pattern as handleHelp).
   let handleCopy: () => void = () => undefined;
 
+  const clearConversation = async (): Promise<void> => {
+    // Rebuild the session with the current state (config is not reused;
+    // repl's /clear creates a fresh Session.create call)
+    const profile = resolveCliProfile(args.profile);
+    // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
+    // silently drop the deferred gate: the gate fires on mutation state (`edited`),
+    // not merely a dirty tree, so a fresh session would otherwise never re-validate
+    // the on-disk edit on a conversational send (WS-C).
+    const carryDeferredGate = session.hasDeferredGate;
+    const carryPlanId = session.getActivePlanId();
+
+    session = await Session.create({
+      provider,
+      cwd: args.dir,
+      files: session.scope,
+      accept: session.gate,
+      contextWindow,
+      report: makeReporter(logFile, id, id),
+      enableThinking: false,
+      // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
+      // on the TTY like the init session, so a piped REPL doesn't advertise a pause
+      // nobody can answer.
+      interactive: humanAtKeyboard(),
+      // Keep the SCOPED format janitor on across /clear — else the rebuilt session
+      // silently reverts to no formatting for the rest of the session.
+      coreFormat: true,
+      // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
+      // the last static command and stops picking up new framework packs. Withheld
+      // once a manual /gate has taken over (autoGateActive false), so the rebuild
+      // never silently re-arms the auto gate over the user's command.
+      ...autoGateCarry(autoGate, session.autoGateActive),
+      // Plain boolean (no branch): the constructor only seeds the flag when true.
+      pausedWithEdit: carryDeferredGate,
+      ...(profile === undefined ? {} : { profile }),
+      ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
+    });
+    wireDelegation(); // re-offer spawn_agent on the rebuilt session
+    wireImages(); // re-offer read_image/generate_image + preview on the rebuild
+    wirePlanRail();
+    // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
+    // chips), so their temp files are now orphaned.
+    void discardClipboardImages(pendingImages.splice(0));
+    session.setPlanMode(planMode); // a /clear must not silently drop the mode
+    planDiscussed = false;
+    // /clear rebuilds the Session, so the pending ask_user QUESTION is gone — drop the
+    // answer-routing flag. (The still-unvalidated EDIT behind that pause is not lost:
+    // it's carried into the new session via pausedWithEdit above, so its gate still
+    // fires on the first send.)
+    awaitingUserAnswer = false;
+    await persist();
+    clearScreen(); // wipe the visible terminal + scrollback, not just the state
+    echo("conversation cleared\n");
+  };
+
   // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
   // it can rebuild `session` (e.g. /clear) and reach config/persist.
   const command = async (line: string): Promise<boolean> => {
@@ -1152,60 +1221,9 @@ export async function repl(args: ICliArgs): Promise<number> {
         handleCopy();
         break;
 
-      case "clear": {
-        // Rebuild the session with the current state (config is not reused;
-        // repl's /clear creates a fresh Session.create call)
-        const profile = resolveCliProfile(args.profile);
-        // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
-        // silently drop the deferred gate: the gate fires on mutation state (`edited`),
-        // not merely a dirty tree, so a fresh session would otherwise never re-validate
-        // the on-disk edit on a conversational send (WS-C).
-        const carryDeferredGate = session.hasDeferredGate;
-        const carryPlanId = session.getActivePlanId();
-
-        session = await Session.create({
-          provider,
-          cwd: args.dir,
-          files: session.scope,
-          accept: session.gate,
-          contextWindow,
-          report: makeReporter(logFile, id, id),
-          enableThinking: false,
-          // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
-          // on the TTY like the init session, so a piped REPL doesn't advertise a pause
-          // nobody can answer.
-          interactive: humanAtKeyboard(),
-          // Keep the SCOPED format janitor on across /clear — else the rebuilt session
-          // silently reverts to no formatting for the rest of the session.
-          coreFormat: true,
-          // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
-          // the last static command and stops picking up new framework packs. Withheld
-          // once a manual /gate has taken over (autoGateActive false), so the rebuild
-          // never silently re-arms the auto gate over the user's command.
-          ...autoGateCarry(autoGate, session.autoGateActive),
-          // Plain boolean (no branch): the constructor only seeds the flag when true.
-          pausedWithEdit: carryDeferredGate,
-          ...(profile === undefined ? {} : { profile }),
-          ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
-        });
-        wireDelegation(); // re-offer spawn_agent on the rebuilt session
-        wireImages(); // re-offer read_image/generate_image + preview on the rebuild
-        wirePlanRail();
-        // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
-        // chips), so their temp files are now orphaned.
-        void discardClipboardImages(pendingImages.splice(0));
-        session.setPlanMode(planMode); // a /clear must not silently drop the mode
-        planDiscussed = false;
-        // /clear rebuilds the Session, so the pending ask_user QUESTION is gone — drop the
-        // answer-routing flag. (The still-unvalidated EDIT behind that pause is not lost:
-        // it's carried into the new session via pausedWithEdit above, so its gate still
-        // fires on the first send.)
-        awaitingUserAnswer = false;
-        await persist();
-        clearScreen(); // wipe the visible terminal + scrollback, not just the state
-        echo("conversation cleared\n");
+      case "clear":
+        await clearConversation();
         break;
-      }
 
       case "compact": {
         // Compaction is a full model round-trip (can take many seconds). Drive the
@@ -1581,6 +1599,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           : 80;
 
       echo(`\n${formatPlanProposal(plan, cols, true)}\n`);
+
       // Preview in Tasks rail before approve (pending badge).
       if (panesLive()) {
         paneScreen.setPanel(
@@ -2775,8 +2794,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       // Rehydrate Tasks rail from the session-bound plan (`activePlanId`).
       const planId = session.getActivePlanId();
-      const plan =
-        planId !== null ? loadPlan(args.dir, planId) : null;
+      const plan = planId !== null ? loadPlan(args.dir, planId) : null;
 
       if (panesLive()) {
         syncWorklistPanel(plan);

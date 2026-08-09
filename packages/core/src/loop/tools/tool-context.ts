@@ -162,6 +162,12 @@ export interface IToolContext {
   /** Run the fast acceptance gate on demand for the `check` tool (see {@link RunCheck}).
    *  Wired by the build overlay; absent ⇒ `check` says it isn't available here. */
   runCheck?: RunCheck;
+  /**
+   * Gate runner for `task_complete` — same shape as {@link RunCheck}, but a
+   * separate seam so wiring a gate for checklist completion does not silently
+   * enable the model's `check` tool (`offerCheck` alone owns `runCheck`).
+   */
+  runTaskGate?: RunCheck;
   /** Session-bound plan id under `.tsforge/worklist/plans/<id>.json`. Absent/null
    *  ⇒ task_* tools refuse (no plan approved for this session yet). */
   activePlanId?: string | null;

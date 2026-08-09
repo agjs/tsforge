@@ -454,6 +454,11 @@ const SPECIAL_TOOLS = new Set<string>([
   TOOL_NAME.script,
   TOOL_NAME.generateImage,
   TOOL_NAME.check,
+  // Checklist mutations touch plan JSON under .tsforge/, not gated source —
+  // no scoped edit count / re-gate. task_list + present_plan are read-only.
+  TOOL_NAME.taskFocus,
+  TOOL_NAME.taskComplete,
+  TOOL_NAME.taskUncomplete,
 ]);
 
 test("every registered tool is classified read-only, mutating, or special", () => {

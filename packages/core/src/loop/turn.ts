@@ -238,7 +238,12 @@ export function toolsFor(
   // Session-bound checklist tools — only when a plan was approved for this session
   // (`activePlanId`). Off until then so plan-mode exploration isn't cluttered.
   const taskTools: AdvertisedTool[] = offerTaskTools
-    ? [TASK_LIST_TOOL, TASK_FOCUS_TOOL, TASK_COMPLETE_TOOL, TASK_UNCOMPLETE_TOOL]
+    ? [
+        TASK_LIST_TOOL,
+        TASK_FOCUS_TOOL,
+        TASK_COMPLETE_TOOL,
+        TASK_UNCOMPLETE_TOOL,
+      ]
     : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
@@ -351,6 +356,9 @@ export interface ILoopCtxTool {
    *  demand for the `check` tool. Threaded into the tool context; declared here so
    *  the seam is typed, not accidental. Absent ⇒ `check` isn't offered. */
   runCheck?: IToolContext["runCheck"];
+  /** Gate runner for `task_complete` — separate from `runCheck` so checklist
+   *  completion does not enable the model's on-demand `check` tool. */
+  runTaskGate?: IToolContext["runTaskGate"];
   /** Session-bound plan id — task_* tools read/write this plan. */
   activePlanId?: string | null;
   /** Fired after a task_* tool persists a plan change (Tasks rail refresh). */

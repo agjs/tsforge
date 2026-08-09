@@ -6,9 +6,7 @@ import {
 import type { IToolContext } from "../src/loop/tools/tool-context";
 import type { IPlanDocument } from "../src/loop/worklist/checklist.types";
 
-function ctx(
-  onPlanPresented?: (plan: IPlanDocument) => void
-): IToolContext {
+function ctx(onPlanPresented?: (plan: IPlanDocument) => void): IToolContext {
   return {
     cwd: "/tmp",
     files: ["**/*"],

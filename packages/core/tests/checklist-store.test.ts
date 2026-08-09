@@ -79,6 +79,7 @@ describe("checklist-store", () => {
 
   test("focus + uncomplete persist via tools scoped to activePlanId", async () => {
     const plan = samplePlan("bound");
+
     savePlan(dir, plan);
 
     const reports: string[] = [];
@@ -92,7 +93,7 @@ describe("checklist-store", () => {
       },
       task: "session",
       activePlanId: "bound",
-      runCheck: async () => ({
+      runTaskGate: async () => ({
         passed: true,
         errors: [],
         output: "",
@@ -120,6 +121,7 @@ describe("checklist-store", () => {
 
   test("task_complete refuses when gate is red — item stays open", async () => {
     const plan = samplePlan("red");
+
     savePlan(dir, plan);
 
     const ctx: IToolContext = {
@@ -128,7 +130,7 @@ describe("checklist-store", () => {
       report: () => undefined,
       task: "session",
       activePlanId: "red",
-      runCheck: async () => ({
+      runTaskGate: async () => ({
         passed: false,
         errors: [{ key: "x", message: "TS2304: Cannot find name 'x'" }],
         output: "fail",
@@ -146,6 +148,7 @@ describe("checklist-store", () => {
 
   test("task_complete refuses when no gate is wired", async () => {
     const plan = samplePlan("nogate");
+
     savePlan(dir, plan);
 
     const ctx: IToolContext = {

@@ -145,7 +145,14 @@ describe("formatWorklistLines", () => {
       "Bun CLI with subcommands: add <text>, list, search <query>. Persists notes to .notes.json (id, text, createdAt ISO). Search matches case-insensitive.";
     const card = formatPlanProposal(
       plan(
-        [{ id: "a", title: "Create src/notes.ts CLI", status: "pending", detail }],
+        [
+          {
+            id: "a",
+            title: "Create src/notes.ts CLI",
+            status: "pending",
+            detail,
+          },
+        ],
         "Build a tiny static notes CLI"
       ),
       48,
@@ -160,9 +167,7 @@ describe("formatWorklistLines", () => {
 
   test("pendingPlanBadge marks open count", () => {
     expect(
-      pendingPlanBadge(
-        plan([{ id: "a", title: "A", status: "pending" }])
-      )
+      pendingPlanBadge(plan([{ id: "a", title: "A", status: "pending" }]))
     ).toBe("·1");
   });
 });

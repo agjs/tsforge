@@ -134,7 +134,10 @@ describe("goalFromMessages", () => {
           role: "user",
           content: "fix the Tasks rail\n\n[PLAN MODE — read-only. …]",
         },
-        { role: "assistant", content: "```json\n{\"items\":[{\"title\":\"a\"}]}\n```" },
+        {
+          role: "assistant",
+          content: '```json\n{"items":[{"title":"a"}]}\n```',
+        },
       ])
     ).toBe("fix the Tasks rail");
   });

@@ -226,6 +226,7 @@ export function savePlan(cwd: string, plan: IPlanDocument): void {
     updatedAt: plan.updatedAt,
   };
   const rest = index.plans.filter((p) => p.id !== plan.id);
+
   savePlanIndex(cwd, { plans: [entry, ...rest] });
 }
 
@@ -274,26 +275,24 @@ export function updateItemById(
   id: string,
   updater: (item: IChecklistItem) => IChecklistItem
 ): IChecklistItem[] | null {
-  let found = false;
+  if (findItem(items, id) === null) {
+    return null;
+  }
 
   const walk = (nodes: readonly IChecklistItem[]): IChecklistItem[] =>
     nodes.map((item) => {
       if (item.id === id) {
-        found = true;
-
         return updater(item);
       }
 
-      if (!item.children) {
+      if (item.children === undefined) {
         return item;
       }
 
       return { ...item, children: walk(item.children) };
     });
 
-  const next = walk(items);
-
-  return found ? next : null;
+  return walk(items);
 }
 
 export function countOpen(items: readonly IChecklistItem[]): number {
@@ -493,10 +492,11 @@ export function formatPlanTree(
   const indent = opts.indent ?? "  ";
   const lines: string[] = [`goal: ${plan.goal}`];
 
-  if (plan.activeItemId) {
+  if (plan.activeItemId !== null) {
     const active = findItem(plan.items, plan.activeItemId);
+
     lines.push(
-      `active: ${active ? `${active.title} (${active.id})` : plan.activeItemId}`
+      `active: ${active !== null ? `${active.title} (${active.id})` : plan.activeItemId}`
     );
   } else {
     lines.push("active: (none)");
@@ -522,6 +522,7 @@ export function formatPlanTree(
               ? "[!]"
               : "[ ]";
       const pad = indent.repeat(depth);
+
       lines.push(`${pad}${mark} ${item.title} (${item.id})`);
 
       if (item.children) {
