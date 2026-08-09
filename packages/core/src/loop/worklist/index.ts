@@ -32,6 +32,7 @@ export type { IFormatWorklistLinesOptions } from "./panel";
 export type { IWorklistItem, IParseWorklistOptions } from "./worklist.types";
 export type {
   ChecklistStatus,
+  ChecklistItemKind,
   IChecklistItem,
   IPlanDocument,
   IPlanIndex,
@@ -39,6 +40,7 @@ export type {
   IPlanDraft,
   IChecklistItemDraft,
 } from "./checklist.types";
+export { advisePlanDecomposition } from "./plan-advice";
 export {
   loadPlan,
   savePlan,

@@ -388,11 +388,16 @@ const PLAN_MODE_NOTE =
   "one. Then ask for the specific missing pieces that matter most. If the user would " +
   "rather not answer, proceed on clearly-stated assumptions — never block.\n" +
   "4. PLAN — once you know enough, call the `present_plan` tool with " +
-  "{ goal, items: [{ title, detail?, files?, verify?, children? }] }. " +
+  "{ goal, items: [{ title, detail?, files?, verify?, kind?, children? }] }. " +
   "Do NOT paste the JSON into chat — the harness renders it for the human. " +
-  "Items are concrete work units (e.g. create X, wire Y) — NEVER a checklist " +
-  "item for 'run tests / lint / the gate'; the harness gate validates each " +
-  "task_complete. Nested children allowed; `verify` is a hint only. " +
+  "Decompose for execution: (a) order contracts/types → implementation → " +
+  "sibling tests (nest tests as children when useful); (b) one outcome per item " +
+  "with an actionable title (e.g. Create src/notes.ts — not vague prose); " +
+  "(c) when known, set `files` to 1–3 relative paths and split by module " +
+  "boundary if more; (d) prefer a parent feature + children over one mega-item; " +
+  "(e) NEVER a checklist item for 'run tests / lint / the gate' — the harness " +
+  "gate validates each task_complete; `verify` is an optional hint only; " +
+  "`kind` may be investigate|create|modify|test (advisory). " +
   "The user replies with feedback (call present_plan again with revisions) or " +
   "approves (approve/go/lgtm). On approve, the harness writes plans/<id>.json " +
   "and you implement ONLY after that.";
@@ -405,9 +410,9 @@ export const PLAN_APPROVED_NOTE =
   "task_list / task_focus / task_complete / task_uncomplete are available. " +
   "task_complete RUNS THE GATE and only marks done when green — never invent " +
   "done, never mark an item complete while the gate is red. Finishing requires " +
-  "BOTH gate green AND every checklist item done. Implement now: task_focus " +
-  "the first open item, then emit the tool calls. Do not re-explore or restate " +
-  "the plan.";
+  "BOTH gate green AND every checklist item done. Walk items in plan order " +
+  "(contracts before impl before tests). Implement now: task_focus the first " +
+  "open item, then emit the tool calls. Do not re-explore or restate the plan.";
 
 const CHECKLIST_CONTRACT_MARKER = "## Active plan checklist";
 

@@ -232,6 +232,8 @@ describe("Scrollback", () => {
 
     // Warm the cache once, then hammer visible() — must stay well under a
     // re-wrap-all-lines budget (the old path was tens of ms per call).
+    // Budget is CI-noisy: GitHub runners often land 50–100ms for 200 cached
+    // calls; uncached re-wrap of 2k lines was orders of magnitude slower.
     sb.visible();
     const t0 = performance.now();
 
@@ -239,7 +241,7 @@ describe("Scrollback", () => {
       expect(sb.visible().length).toBe(20);
     }
 
-    expect(performance.now() - t0).toBeLessThan(50);
+    expect(performance.now() - t0).toBeLessThan(250);
   });
 });
 

@@ -44,7 +44,10 @@ describe("seedWorklistFromPlan", () => {
             {
               title: "Add parser",
               detail: "nested ok",
-              children: [{ title: "Wire rail", verify: "bun test" }],
+              kind: "create",
+              children: [
+                { title: "Wire rail", verify: "bun test", kind: "test" },
+              ],
             },
           ],
         }),
@@ -63,8 +66,10 @@ describe("seedWorklistFromPlan", () => {
     expect(result.plan.schemaVersion).toBe(2);
     expect(result.plan.items).toHaveLength(1);
     expect(result.plan.items[0]?.title).toBe("Add parser");
+    expect(result.plan.items[0]?.kind).toBe("create");
     expect(result.plan.items[0]?.children?.[0]?.title).toBe("Wire rail");
     expect(result.plan.items[0]?.children?.[0]?.verify).toBe("bun test");
+    expect(result.plan.items[0]?.children?.[0]?.kind).toBe("test");
     expect(result.plan.items[0]?.id.length).toBeGreaterThan(0);
 
     const onDisk = loadPlan(dir, result.plan.id);
