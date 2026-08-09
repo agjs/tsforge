@@ -34,7 +34,7 @@ type ItemKind = "done" | "current" | "pending" | "blocked";
  * Tree connectors (`├─` / `└─`) show parent → child; color reinforces status.
  */
 const GLYPH: Record<ItemKind, string> = {
-  done: "[x]",
+  done: "[✓]",
   current: "[>]",
   pending: "[ ]",
   blocked: "[!]",
@@ -440,11 +440,11 @@ export function formatWorklistLines(
 
   const lines: string[] = [];
   const goal = plan.goal.trim();
-  const open = countOpen(plan.items);
-  const done = countDone(plan.items);
-  const total = open + done;
 
+  // Section labels breathe: blank under PLAN / TASKS; count lives only in the
+  // sticky Tasks title (avoid a second 4/4 in the body).
   lines.push(paint("PLAN", CONSOLE.bright, color));
+  lines.push("");
 
   if (goal.length > 0) {
     for (const part of wrapWords(goal, columns)) {
@@ -452,13 +452,9 @@ export function formatWorklistLines(
     }
   }
 
-  lines.push(
-    paint(
-      total > 0 ? `TASKS  ${String(done)}/${String(total)}` : "TASKS",
-      CONSOLE.soft,
-      color
-    )
-  );
+  lines.push("");
+  lines.push(paint("TASKS", CONSOLE.soft, color));
+  lines.push("");
 
   const pending = { shown: 0, hidden: 0 };
 
@@ -474,10 +470,6 @@ export function formatWorklistLines(
     lines.push(
       paint(`… +${String(pending.hidden)} more`, CONSOLE.muted, color)
     );
-  }
-
-  if (open === 0) {
-    lines.push(paint("All done.", CONSOLE.bright, color));
   }
 
   if (opts.showSelection === true && opts.selectedIndex !== undefined) {

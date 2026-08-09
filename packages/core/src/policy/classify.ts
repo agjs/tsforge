@@ -42,6 +42,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.taskFocus]: "edit_file",
   [TOOL_NAME.taskComplete]: "edit_file",
   [TOOL_NAME.taskUncomplete]: "edit_file",
+  [TOOL_NAME.taskAdd]: "edit_file",
+  [TOOL_NAME.taskUpdate]: "edit_file",
   [TOOL_NAME.presentPlan]: "read_file",
   // `pull_conventions` is a pure read-only lookup of the injected convention library — it mutates
   // nothing, so it classifies `read_file` (allowed in every mode). Absent here it classified

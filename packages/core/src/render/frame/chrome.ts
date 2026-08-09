@@ -17,8 +17,8 @@ export const CONSOLE = {
   rule: STYLE.chrome,
   warn: STYLE.yellow,
   fail: STYLE.red,
-  /** Status-strip accent only — never body copy (reads as random sky-blue). */
-  meta: truecolor(125, 211, 252),
+  /** Status-strip secondary (model name) — soft zinc, never sky-blue/cyan. */
+  meta: truecolor(161, 161, 170),
   accent: truecolor(251, 191, 36),
   /** Opaque canvas (#141414) — one surface for the whole frame. */
   bg: truecolorBg(20, 20, 20),
@@ -102,7 +102,8 @@ export interface IConsoleTitleOpts {
 /**
  * Single dense status strip — one place for session chrome (no input cutout):
  *   left  → brand · path · scope   (where)
- *   right → model · % · [PLAN]/[NORMAL] · ✓ · Nt · #n/m   (live)
+ *   right → model · % · [PLAN]/[NORMAL] · ✓ · Nt   (live)
+ *   Task counts live in the Tasks rail — not duplicated here.
  */
 export function formatConsoleTitle(opts: IConsoleTitleOpts): string {
   const color = opts.color ?? true;
@@ -145,14 +146,6 @@ export function formatConsoleTitle(opts: IConsoleTitleOpts): string {
         paint(`${String(opts.info.tokensPerSecond)}t`, CONSOLE.muted, color)
       );
     }
-  }
-
-  const badge = opts.worklistBadge?.trim() ?? "";
-
-  if (badge.length > 0) {
-    const bare = badge.startsWith("#") ? badge : `#${badge}`;
-
-    rightBits.push(paint(bare, CONSOLE.accent, color));
   }
 
   return insetX(
@@ -238,7 +231,7 @@ export interface IRailHeaderOpts {
 export const RAIL_TITLE_ROWS = 2;
 
 /**
- * Side-rail title: muted label left, cyan `done/total` right.
+ * Side-rail title: muted label left, bright `done/total` right.
  * Lives under the ┬ hairline; pair with {@link formatRailTitleRule} for the
  * bottom border so the cell reads like the screenshot title bar.
  */
@@ -250,7 +243,7 @@ export function formatRailHeader(opts: IRailHeaderOpts): string {
   const countText = `${String(Math.max(0, opts.done))}/${String(Math.max(0, opts.total))}`;
   const right =
     opts.total > 0
-      ? paint(countText, STYLE.cyan, color)
+      ? paint(countText, CONSOLE.bright, color)
       : paint(countText, CONSOLE.muted, color);
 
   return insetX(splitBar(left, right, insetInnerCols(opts.cols)), opts.cols);

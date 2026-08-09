@@ -146,6 +146,8 @@ test("task_* tools are offered only via offerTaskTools (activePlanId bound)", ()
   expect(offered).toContain("task_focus");
   expect(offered).toContain("task_complete");
   expect(offered).toContain("task_uncomplete");
+  expect(offered).toContain("task_add");
+  expect(offered).toContain("task_update");
 });
 
 test("the script tool is on by default for scratch and existing code", () => {

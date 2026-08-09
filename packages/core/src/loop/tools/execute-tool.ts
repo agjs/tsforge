@@ -16,10 +16,12 @@ import { doReadImage, doGenerateImage } from "./image-tools";
 import { doCheck } from "./check-tool";
 import { doAskUser } from "./ask-user-tool";
 import {
+  doTaskAdd,
   doTaskComplete,
   doTaskFocus,
   doTaskList,
   doTaskUncomplete,
+  doTaskUpdate,
 } from "./task-tools";
 import { doPresentPlan } from "./present-plan-tool";
 import { reject, type IToolContext } from "./tool-context";
@@ -73,6 +75,8 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.taskFocus]: doTaskFocus,
   [TOOL_NAME.taskComplete]: doTaskComplete,
   [TOOL_NAME.taskUncomplete]: doTaskUncomplete,
+  [TOOL_NAME.taskAdd]: doTaskAdd,
+  [TOOL_NAME.taskUpdate]: doTaskUpdate,
   [TOOL_NAME.presentPlan]: doPresentPlan,
 };
 

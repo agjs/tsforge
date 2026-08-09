@@ -888,21 +888,10 @@ export class PaneScreen {
     cols: number,
     layout: ReturnType<typeof computeLayout>
   ): string[] {
-    const counts = this.railCounts();
-    const rawBadge =
-      this.worklistBadge.length > 0
-        ? this.worklistBadge
-        : `${String(counts.done)}/${String(counts.total)}`;
-    const badge =
-      this.flashHeaderPaints > 0
-        ? paint(rawBadge, CONSOLE.bright, true)
-        : rawBadge;
-
     return formatConsoleTopbar({
       info: this.status,
       cwd: this.cwd,
       sessionId: this.sessionId,
-      worklistBadge: badge,
       cols,
       splitCol: layout.panel !== null ? layout.main.cols : undefined,
       padTop: layout.top.rows >= TOP_STATUS_ROWS,

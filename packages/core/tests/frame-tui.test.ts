@@ -432,7 +432,7 @@ describe("PaneScreen", () => {
     expect(screen.row(1).trim()).toBe("");
     expect(screen.row(2)).toContain("╭");
     expect(screen.row(titleRow(24))).toContain("TSFORGE");
-    expect(screen.row(titleRow(24))).toContain("#0/2");
+    expect(screen.row(titleRow(24))).not.toContain("#0/2");
     expect(screen.row(outerBottomRow(24))).toContain("╰");
     expect(screen.text()).toContain("[>] First");
     expect(screen.text()).not.toContain("forge>");
@@ -511,7 +511,7 @@ describe("PaneScreen", () => {
     expect(screen.row(title)).toContain("deepseek");
     expect(screen.row(title)).toContain("PLAN");
     expect(screen.row(title)).toContain("✓");
-    expect(screen.row(title)).toContain("#0/0");
+    expect(screen.row(title)).not.toContain("#0/0");
     expect(screen.row(title)).toContain("repo");
     expect(isFramedAir(screen.row(title + 1))).toBe(true);
     expect(screen.row(title + 2)).toContain("┬");
@@ -864,11 +864,14 @@ describe("PaneScreen", () => {
     expect(text).toContain("Tasks");
     expect(text).toContain("0/2");
     expect(text).toContain("PLAN.md");
+    expect(text).toContain("TASKS");
     expect(text).toContain("[>]");
+    // Sticky title owns the count — body label is just TASKS.
+    expect(text).not.toMatch(/TASKS\s+\d+\/\d+/u);
     // Word-aware wrap + inset-matched budget — no mid-word clip at the rail edge.
-    expect(text).toContain("independent");
+    expect(text).toContain("interactive");
     expect(text).toContain("via");
-    expect(text).not.toMatch(/independen[^t]/u);
+    expect(text).not.toMatch(/interactiv[^e]/u);
     expect(text).not.toMatch(/\bvi\b/u);
   });
 
@@ -957,7 +960,7 @@ describe("PaneScreen", () => {
     expect(screen.row(title)).toContain("test-model");
     expect(screen.row(title)).toContain("12%");
     expect(screen.row(title)).toContain("42t");
-    expect(screen.row(title)).toContain("#2/5");
+    expect(screen.row(title)).not.toContain("#2/5");
     expect(screen.row(title)).toContain("✓");
     expect(screen.row(expectedPromptRow(24))).toContain("describe a task");
     expect(screen.text()).not.toContain("tok/s");
@@ -1243,7 +1246,7 @@ describe("PaneScreen", () => {
     expect(tall.text()).toContain("KEEP_ME");
     expect(tall.text()).toContain("hi");
     expect(tall.row(expectedPromptRow(40, 120))).toContain("hi");
-    expect(tall.row(titleRow(40, 120))).toContain("#0/0");
+    expect(tall.row(titleRow(40, 120))).not.toContain("#0/0");
     expect(tall.text()).not.toContain("forge>");
 
     term.writes = [];
@@ -1316,7 +1319,7 @@ describe("PaneScreen", () => {
     screen.feed(term.text());
     expect(findPromptRow(term.text(), 24, 100)).toBe(expectedPromptRow(24));
     expect(screen.row(expectedPromptRow(24))).toContain("describe a task");
-    expect(screen.row(titleRow(24))).toContain("#0/0");
+    expect(screen.row(titleRow(24))).not.toContain("#0/0");
     expect(screen.text()).not.toContain("forge>");
   });
 

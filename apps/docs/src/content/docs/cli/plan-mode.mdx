@@ -62,6 +62,10 @@ When `activePlanId` is set:
 - `task_list` — nested tree with ids
 - `task_focus` — set the active item
 - `task_complete` / `task_uncomplete` — status changes (**tools only**; not invented in prose)
+- `task_add` — append discovered work (optional `parent_id` to nest)
+- `task_update` — edit an item’s title/detail/files/verify/kind
+
+The checklist is living: if you or the model discover work the approved plan missed, it should go on the list via `task_add` (not only in chat). Drift in an item’s scope → `task_update`; done work that must be redone → `task_uncomplete`.
 
 `task_complete` **runs the acceptance gate** and only marks the item done when green. If the gate is red, the item stays open and the errors are returned — fix, then complete again. Do not put “run tests / lint / the gate” as a checklist item; that is the harness’s job on every complete. A session cannot claim finished while the bound plan still has open items.
 

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  ChecklistItemKind,
   ChecklistStatus,
   IChecklistItem,
   IPlanDocument,
@@ -422,6 +423,226 @@ export function uncompleteItemInPlan(
     updatedAt: now,
     completedAt: undefined,
   }));
+
+  if (items === null) {
+    return { ok: false, error: `unknown item id: ${itemId}` };
+  }
+
+  return {
+    ok: true,
+    plan: {
+      ...plan,
+      items,
+      updatedAt: now,
+    },
+  };
+}
+
+export interface IAddItemFields {
+  readonly title: string;
+  /** When set, append as a child of this item; otherwise as a new root. */
+  readonly parentId?: string;
+  readonly detail?: string;
+  readonly files?: readonly string[];
+  readonly verify?: string;
+  readonly kind?: ChecklistItemKind;
+}
+
+export interface IUpdateItemFields {
+  readonly title?: string;
+  readonly detail?: string;
+  readonly files?: readonly string[];
+  readonly verify?: string;
+  readonly kind?: ChecklistItemKind;
+}
+
+function optionalStrings(
+  values: readonly string[] | undefined
+): readonly string[] | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+
+  const cleaned = values.map((f) => f.trim()).filter((f) => f.length > 0);
+
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
+ * Append a pending item (discovery mid-build). Optional `parentId` nests under
+ * an existing node; adding under a done parent re-opens that parent.
+ */
+export function addItemInPlan(
+  plan: IPlanDocument,
+  fields: IAddItemFields,
+  now: string = new Date().toISOString(),
+  newId: () => string = () => crypto.randomUUID()
+):
+  { ok: true; plan: IPlanDocument; id: string } | { ok: false; error: string } {
+  const title = fields.title.trim();
+
+  if (title.length === 0) {
+    return { ok: false, error: "title is required" };
+  }
+
+  const id = newId();
+  const files = optionalStrings(fields.files);
+  const child: IChecklistItem = {
+    id,
+    title,
+    status: "pending",
+    updatedAt: now,
+    ...(fields.detail !== undefined && fields.detail.trim().length > 0
+      ? { detail: fields.detail.trim() }
+      : {}),
+    ...(files !== undefined ? { files } : {}),
+    ...(fields.verify !== undefined && fields.verify.trim().length > 0
+      ? { verify: fields.verify.trim() }
+      : {}),
+    ...(fields.kind !== undefined ? { kind: fields.kind } : {}),
+  };
+
+  const parentId = fields.parentId?.trim() ?? "";
+
+  if (parentId.length === 0) {
+    return {
+      ok: true,
+      id,
+      plan: {
+        ...plan,
+        items: [...plan.items, child],
+        updatedAt: now,
+      },
+    };
+  }
+
+  if (findItem(plan.items, parentId) === null) {
+    return { ok: false, error: `unknown parent id: ${parentId}` };
+  }
+
+  const items = updateItemById(plan.items, parentId, (parent) => {
+    const kids = [...(parent.children ?? []), child];
+
+    if (parent.status === "done") {
+      return {
+        ...parent,
+        children: kids,
+        status: "pending",
+        completedAt: undefined,
+        updatedAt: now,
+      };
+    }
+
+    return {
+      ...parent,
+      children: kids,
+      updatedAt: now,
+    };
+  });
+
+  if (items === null) {
+    return { ok: false, error: `unknown parent id: ${parentId}` };
+  }
+
+  return {
+    ok: true,
+    id,
+    plan: {
+      ...plan,
+      items,
+      updatedAt: now,
+    },
+  };
+}
+
+function withOptionalField(
+  item: IChecklistItem,
+  key: "detail" | "verify",
+  value: string | undefined
+): IChecklistItem {
+  const trimmed = value?.trim() ?? "";
+
+  if (trimmed.length === 0) {
+    const { [key]: _drop, ...rest } = item;
+
+    void _drop;
+
+    return rest;
+  }
+
+  return { ...item, [key]: trimmed };
+}
+
+/**
+ * Edit title/detail/files/verify/kind on an existing item. Does not change
+ * status — use task_complete / task_uncomplete / task_focus for that.
+ */
+export function updateItemFieldsInPlan(
+  plan: IPlanDocument,
+  itemId: string,
+  fields: IUpdateItemFields,
+  now: string = new Date().toISOString()
+): { ok: true; plan: IPlanDocument } | { ok: false; error: string } {
+  if (findItem(plan.items, itemId) === null) {
+    return { ok: false, error: `unknown item id: ${itemId}` };
+  }
+
+  const titleField = fields.title;
+  const detailField = fields.detail;
+  const filesField = fields.files;
+  const verifyField = fields.verify;
+  const kindField = fields.kind;
+  const hasTitle = titleField !== undefined;
+  const hasDetail = detailField !== undefined;
+  const hasFiles = filesField !== undefined;
+  const hasVerify = verifyField !== undefined;
+  const hasKind = kindField !== undefined;
+
+  if (!hasTitle && !hasDetail && !hasFiles && !hasVerify && !hasKind) {
+    return {
+      ok: false,
+      error: "nothing to update — pass title/detail/files/verify/kind",
+    };
+  }
+
+  if (titleField?.trim().length === 0) {
+    return { ok: false, error: "title cannot be empty" };
+  }
+
+  const items = updateItemById(plan.items, itemId, (item) => {
+    let next: IChecklistItem = { ...item, updatedAt: now };
+
+    if (titleField !== undefined) {
+      next = { ...next, title: titleField.trim() };
+    }
+
+    if (hasDetail) {
+      next = withOptionalField(next, "detail", detailField);
+    }
+
+    if (hasVerify) {
+      next = withOptionalField(next, "verify", verifyField);
+    }
+
+    if (hasFiles) {
+      const files = optionalStrings(filesField);
+
+      if (files === undefined) {
+        const { files: _drop, ...rest } = next;
+
+        void _drop;
+        next = rest;
+      } else {
+        next = { ...next, files };
+      }
+    }
+
+    if (kindField !== undefined) {
+      next = { ...next, kind: kindField };
+    }
+
+    return next;
+  });
 
   if (items === null) {
     return { ok: false, error: `unknown item id: ${itemId}` };

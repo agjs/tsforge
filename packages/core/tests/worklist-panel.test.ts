@@ -50,9 +50,13 @@ describe("formatWorklistLines", () => {
     const text = plain(lines);
 
     expect(text[0]).toBe("PLAN");
+    expect(text[1]).toBe("");
     expect(text).toContain("PLAN.md");
-    expect(text).toContain("TASKS  1/4");
-    expect(text).toContain("├─ [x] First");
+    expect(text).toContain("TASKS");
+    expect(text).not.toContain("TASKS  1/4");
+    expect(text[text.indexOf("TASKS") - 1]).toBe("");
+    expect(text[text.indexOf("TASKS") + 1]).toBe("");
+    expect(text).toContain("├─ [✓] First");
     expect(text).toContain("├─ [>] Second");
     expect(text).toContain("│  └─ [ ] Child");
     expect(text).toContain("└─ [ ] Third");
@@ -83,7 +87,7 @@ describe("formatWorklistLines", () => {
     );
 
     expect(
-      lines.some((l) => l.includes(CONSOLE.green) && l.includes("[x]"))
+      lines.some((l) => l.includes(CONSOLE.green) && l.includes("[✓]"))
     ).toBe(true);
   });
 
@@ -115,17 +119,25 @@ describe("formatWorklistLines", () => {
     ]);
   });
 
-  test("all done copy", () => {
-    expect(
-      plain(
-        formatWorklistLines(plan([{ id: "a", title: "A", status: "done" }]), {
-          color: false,
-        })
-      )
-    ).toContain("All done.");
+  test("completed plan: blanks around sections, count only in sticky header", () => {
+    const text = plain(
+      formatWorklistLines(plan([{ id: "a", title: "A", status: "done" }]), {
+        color: false,
+      })
+    );
+    const tasksIdx = text.indexOf("TASKS");
+
+    expect(text[0]).toBe("PLAN");
+    expect(text[1]).toBe("");
+    expect(tasksIdx).toBeGreaterThan(0);
+    expect(text[tasksIdx - 1]).toBe("");
+    expect(text[tasksIdx + 1]).toBe("");
+    expect(text.some((l) => l.includes("[✓] A"))).toBe(true);
+    expect(text).not.toContain("All done.");
+    expect(text.every((l) => !/\d+\/\d+/u.test(l))).toBe(true);
   });
 
-  test("color mode paints current mark bright and body fg (not meta blue)", () => {
+  test("color mode paints current mark bright and body fg (not cyan)", () => {
     const lines = formatWorklistLines(
       plan([{ id: "a", title: "Now", status: "active" }], "g", "a"),
       { columns: 36, color: true }
@@ -137,7 +149,8 @@ describe("formatWorklistLines", () => {
     expect(lines.some((l) => l.includes(CONSOLE.fg) && l.includes("Now"))).toBe(
       true
     );
-    expect(lines.every((l) => !l.includes(CONSOLE.meta))).toBe(true);
+    expect(lines.every((l) => !l.includes("38;2;125;211;252"))).toBe(true);
+    expect(lines.every((l) => !l.includes("38;2;34;211;238"))).toBe(true);
   });
 
   test("worklistBadge is done/total", () => {
