@@ -59,6 +59,33 @@ describe("renderMessage — hybrid bubbles", () => {
     expect(renderMessage({ role: "system", content: "x" })).toBe("");
     expect(renderMessage({ role: "tool", content: "x" })).toBe("");
   });
+
+  test("cards honor columns — resume must pass pane mainInnerCols, not stdout", () => {
+    const narrow = 40;
+    const wide = 120;
+    const userNarrow = stripAnsi(
+      renderMessage(
+        { role: "user", content: "hey" },
+        { color: false, columns: narrow }
+      )
+    );
+    const userWide = stripAnsi(
+      renderMessage(
+        { role: "user", content: "hey" },
+        { color: false, columns: wide }
+      )
+    );
+    const topNarrow = userNarrow.split("\n").find((l) => l.includes("USER"));
+    const topWide = userWide.split("\n").find((l) => l.includes("USER"));
+
+    expect(topNarrow).toBeDefined();
+    expect(topWide).toBeDefined();
+    expect(displayWidth(topNarrow ?? "")).toBe(roleCardCols(narrow));
+    expect(displayWidth(topWide ?? "")).toBe(roleCardCols(wide));
+    expect(displayWidth(topNarrow ?? "")).toBeLessThan(
+      displayWidth(topWide ?? "")
+    );
+  });
 });
 
 describe("role card alignment", () => {

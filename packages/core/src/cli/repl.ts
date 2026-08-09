@@ -39,6 +39,7 @@ import {
 import {
   Session,
   PLAN_APPROVED_NOTE,
+  isEphemeralUserInject,
   type Reporter,
   type ILoopEvent,
 } from "../loop";
@@ -2780,24 +2781,30 @@ export async function repl(args: ICliArgs): Promise<number> {
       syncPaneChrome();
       panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
 
+      // Tasks rail first — it shrinks mainInnerCols. Replay MUST use that width
+      // (full stdout.columns paints cards that rewrap and shatter box rails).
+      const planId = session.getActivePlanId();
+      const plan = planId !== null ? loadPlan(args.dir, planId) : null;
+
+      syncWorklistPanel(plan);
+
       if (updateNotice !== null) {
         panes.appendMain(`${updateNotice}\n`);
       }
 
       if (resumed !== null) {
         const speaker = modelInfo(provider.config).model;
+        const columns = panes.mainInnerCols();
 
         for (const message of resumed.messages) {
-          panes.appendMain(renderMessage(message, { color: true, speaker }));
+          if (isEphemeralUserInject(message)) {
+            continue;
+          }
+
+          panes.appendMain(
+            renderMessage(message, { color: true, speaker, columns })
+          );
         }
-      }
-
-      // Rehydrate Tasks rail from the session-bound plan (`activePlanId`).
-      const planId = session.getActivePlanId();
-      const plan = planId !== null ? loadPlan(args.dir, planId) : null;
-
-      if (panesLive()) {
-        syncWorklistPanel(plan);
       }
     };
 
