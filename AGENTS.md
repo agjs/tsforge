@@ -5,11 +5,13 @@ Single repository: `packages/core` (harness), `apps/docs` (Starlight site).
 ## Maintainer commands (repo root)
 
 ```bash
-bun run validate                              # merge gate — run before every push
+bun run ci:local                              # full CI mirror — run before every push (rules + arch + validate)
+bun run validate                              # typecheck/lint/format/test/e2e (subset of ci:local)
 bun test packages                             # full test suite (680+ tests)
 tsforge                                       # run harness (after install or bun link)
 bun run tsforge                               # run harness from monorepo checkout
 bun run rules:build                           # regenerate RULES.md
+bun run rules:check                           # fail if RULES.md has drifted
 bun run rules:docs                            # regenerate rule-docs.generated.json
 bun run arch:build                            # regenerate ARCHITECTURE.md (the subsystem map)
 bun run arch:check                            # fail if ARCHITECTURE.md has drifted
@@ -33,7 +35,9 @@ To find the files behind a specific change, use
 [Where do I change X?](https://tsforge.dev/internals/where-to-change/).
 
 CI runs on every PR and push to `main` — see the workflow table in `CONTRIBUTING.md`.
-`bun run validate` is the same gate locally; run it before every push.
+`bun run ci:local` mirrors the core CI job (rules + arch drift + validate); run it
+before every push. `bun run validate` alone is not enough — CI fails on ARCHITECTURE.md
+/ RULES.md drift even when validate is green.
 
 Remote: https://github.com/agjs/tsforge
 

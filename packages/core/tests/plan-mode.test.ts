@@ -169,6 +169,10 @@ test("the plan-mode note asks for prioritized clarifying questions and states th
     expect(note).toContain("the more detail and research");
     // Still ends in the present_plan + approval contract.
     expect(note).toContain("present_plan");
+    // Decomposition heuristics for execution-ready plans.
+    expect(note).toContain("contracts/types");
+    expect(note).toContain("1–3");
+    expect(note).toMatch(/NEVER a checklist item for 'run tests/i);
   });
 });
 

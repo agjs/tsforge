@@ -1,6 +1,6 @@
 # Contributing
 
-Most code here is written by AI agents under a deterministic gate. The conventions exist so `bun run validate` is a reliable signal.
+Most code here is written by AI agents under a deterministic gate. The conventions exist so `bun run ci:local` is a reliable signal.
 
 **New to the codebase?** This file covers process — setup, the merge bar, how to add a rule. For *where things live*, start with [Where do I change X?](https://tsforge.dev/internals/where-to-change/) and the generated subsystem map in [`packages/core/ARCHITECTURE.md`](packages/core/ARCHITECTURE.md).
 
@@ -12,12 +12,18 @@ Most code here is written by AI agents under a deterministic gate. The conventio
 
 ```bash
 bun install
-bun run validate   # must pass before merge
+bun run ci:local   # must pass before merge (rules + arch + validate)
 ```
 
 ## Merge bar
 
-`bun run validate` runs six steps in order:
+`bun run ci:local` mirrors core CI:
+
+1. `bun run rules:check` — RULES.md drift
+2. `bun run arch:check` — ARCHITECTURE.md drift
+3. `bun run validate` — six steps below
+
+`bun run validate` runs:
 
 1. `bun run check:bun` — minimum Bun version
 2. `bun run typecheck` — strict TypeScript
@@ -26,7 +32,7 @@ bun run validate   # must pass before merge
 5. `bun test packages` — 680+ tests
 6. `bun run e2e:pty` — PTY end-to-end scripts
 
-All six must pass. Do not disable ESLint rules inline, do not use `any`, and do not use `as` or `!` to bypass failures.
+All of `ci:local` must pass. Do not disable ESLint rules inline, do not use `any`, and do not use `as` or `!` to bypass failures.
 
 ## House rules agents get wrong
 

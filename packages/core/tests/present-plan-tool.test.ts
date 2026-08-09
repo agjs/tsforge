@@ -66,4 +66,44 @@ describe("doPresentPlan", () => {
 
     expect(result).toMatch(/invalid|empty|items/i);
   });
+
+  test("appends decomposition advice without rejecting", () => {
+    const presented: IPlanDocument[] = [];
+    const result = doPresentPlan(
+      {
+        goal: "ship and polish",
+        items: [
+          {
+            title: "Run the gate",
+            files: ["a.ts", "b.ts", "c.ts", "d.ts"],
+          },
+        ],
+      },
+      ctx((p) => {
+        presented.push(p);
+      })
+    );
+
+    expect(presented).toHaveLength(1);
+    expect(result).toMatch(/presented/i);
+    expect(result).toMatch(/Decomposition advice/i);
+    expect(result).toMatch(/gate chore/i);
+    expect(result).toMatch(/4 files/i);
+  });
+
+  test("persists advisory kind through present_plan", () => {
+    const presented: IPlanDocument[] = [];
+
+    doPresentPlan(
+      {
+        goal: "notes",
+        items: [{ title: "Create src/notes.ts", kind: "create" }],
+      },
+      ctx((p) => {
+        presented.push(p);
+      })
+    );
+
+    expect(presented[0]?.items[0]?.kind).toBe("create");
+  });
 });

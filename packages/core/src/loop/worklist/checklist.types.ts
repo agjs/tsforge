@@ -1,6 +1,9 @@
 /** One node in a session-bound project plan checklist. */
 export type ChecklistStatus = "pending" | "active" | "done" | "blocked";
 
+/** Advisory item kind — guides decomposition; not an execution mode. */
+export type ChecklistItemKind = "investigate" | "create" | "modify" | "test";
+
 export interface IChecklistItem {
   readonly id: string;
   readonly title: string;
@@ -9,6 +12,8 @@ export interface IChecklistItem {
   readonly files?: readonly string[];
   /** Hint only — not executed as a harness gate. */
   readonly verify?: string;
+  /** Advisory classify for planning (investigate/create/modify/test). */
+  readonly kind?: ChecklistItemKind;
   readonly blockedReason?: string;
   readonly updatedAt?: string;
   readonly completedAt?: string;
@@ -43,6 +48,7 @@ export interface IChecklistItemDraft {
   readonly detail?: string;
   readonly files?: readonly string[];
   readonly verify?: string;
+  readonly kind?: ChecklistItemKind;
   readonly blockedReason?: string;
   readonly children?: readonly IChecklistItemDraft[];
 }

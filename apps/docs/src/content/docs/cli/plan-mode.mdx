@@ -29,7 +29,18 @@ There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --pl
 
 ## What gets saved on approve
 
-When the plan is ready, the model calls **`present_plan`** with a structured `{ goal, items }` tree (nested `children`, optional `detail` / `files` / `verify`). The harness validates it, holds it as a **pending proposal**, and renders a PLAN card in the TUI (not a JSON dump in chat). Revise by calling `present_plan` again.
+When the plan is ready, the model calls **`present_plan`** with a structured `{ goal, items }` tree (nested `children`, optional `detail` / `files` / `verify` / `kind`). The harness validates it, holds it as a **pending proposal**, and renders a PLAN card in the TUI (not a JSON dump in chat). Revise by calling `present_plan` again.
+
+### How to structure items
+
+Decomposition rules the planner should follow (soft warnings may appear in the tool result if it strays):
+
+1. **Order** — contracts/types → implementation → sibling tests (nest tests as children when useful)
+2. **One outcome per item** — actionable titles (`Create src/notes.ts`), not vague prose
+3. **File bounds** — when known, set `files` to 1–3 relative paths; split by module boundary if more
+4. **Prefer parent + children** over one mega-item covering the whole feature
+5. **No gate chores** — never an item for “run tests / lint / the gate”; the harness gate validates every `task_complete`
+6. **`verify` / `kind`** — optional hints only (`kind`: `investigate` | `create` | `modify` | `test`); not harness-executed commands
 
 Approve (`approve` / `go` / `lgtm`):
 
