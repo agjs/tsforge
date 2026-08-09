@@ -260,11 +260,11 @@ describe("computeLayout", () => {
   });
 
   test("panelWidthFor adapts by content width", () => {
-    // Content cols ≈ term − 4; thresholds match 100- and 140-col terminals.
-    expect(panelWidthFor(80)).toBe(32);
-    expect(panelWidthFor(96)).toBe(36);
-    expect(panelWidthFor(136)).toBe(40);
-    expect(computeLayout({ rows: 20, cols: 160 }).panel?.cols).toBe(40);
+    // Content cols ≈ term − 4; thresholds match ~100- and ~140-col terminals.
+    expect(panelWidthFor(80)).toBe(42);
+    expect(panelWidthFor(96)).toBe(48);
+    expect(panelWidthFor(128)).toBe(56);
+    expect(computeLayout({ rows: 20, cols: 160 }).panel?.cols).toBe(56);
   });
 
   test("keeps pinned topbar at PANE_MIN_ROWS content height", () => {
