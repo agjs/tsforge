@@ -29,14 +29,21 @@ export interface IFormatWorklistLinesOptions {
 
 type ItemKind = "done" | "current" | "pending" | "blocked";
 
+/**
+ * Bracketed status marks (3 cols) — readable in a narrow pane rail.
+ * Tree connectors (`├─` / `└─`) show parent → child; color reinforces status.
+ */
 const GLYPH: Record<ItemKind, string> = {
-  done: "✓",
-  current: "▸",
-  pending: "○",
-  blocked: "!",
+  done: "[✓]",
+  current: "[>]",
+  pending: "[ ]",
+  blocked: "[!]",
 };
 
-const CONT_INDENT = "  ";
+const CONNECT_MID = "├─ ";
+const CONNECT_END = "└─ ";
+const PIPE = "│  ";
+const GAP = "   ";
 
 /** Compact badge for the top status strip, e.g. `3/7`. */
 export function worklistBadge(plan: IPlanDocument | null): string {
@@ -109,23 +116,29 @@ export function formatPlanProposal(
   push(plan.goal.trim().length > 0 ? plan.goal.trim() : "plan", true);
   pushBlank();
 
-  const walk = (nodes: readonly IChecklistItem[], depth: number): void => {
-    for (const item of nodes) {
-      const pad = "  ".repeat(depth);
+  const walk = (
+    nodes: readonly IChecklistItem[],
+    ancestorsOpen: readonly boolean[]
+  ): void => {
+    nodes.forEach((item, index) => {
+      const isLast = index === nodes.length - 1;
+      const prefix = treePrefix(ancestorsOpen, isLast);
 
-      push(`${pad}○ ${item.title}`);
+      push(`${prefix}${GLYPH.pending} ${item.title}`);
 
       if (item.detail !== undefined && item.detail.trim().length > 0) {
-        push(`${pad}  ${item.detail.trim()}`);
+        const detailLead = `${treeGap(ancestorsOpen, isLast)}    `;
+
+        push(`${detailLead}${item.detail.trim()}`);
       }
 
       if (item.children) {
-        walk(item.children, depth + 1);
+        walk(item.children, [...ancestorsOpen, !isLast]);
       }
-    }
+    });
   };
 
-  walk(plan.items, 0);
+  walk(plan.items, []);
   pushBlank();
   push(`type approve to build · ${String(countOpen(plan.items))} items`);
   lines.push(
@@ -135,8 +148,54 @@ export function formatPlanProposal(
   return lines.join("\n");
 }
 
+function treePrefix(
+  ancestorsOpen: readonly boolean[],
+  isLast: boolean
+): string {
+  let out = "";
+
+  for (const open of ancestorsOpen) {
+    out += open ? PIPE : GAP;
+  }
+
+  out += isLast ? CONNECT_END : CONNECT_MID;
+
+  return out;
+}
+
+/** Indent under a node for wrapped extras (aligns with title text). */
+function treeGap(ancestorsOpen: readonly boolean[], isLast: boolean): string {
+  let out = "";
+
+  for (const open of ancestorsOpen) {
+    out += open ? PIPE : GAP;
+  }
+
+  out += isLast ? GAP : PIPE;
+
+  return out;
+}
+
 function clip(text: string, max: number): string {
   return sliceToWidth(text, max).text;
+}
+
+/** Soft-wrap then keep at most `maxLines`; last kept line ends with … if truncated. */
+function wrapClamped(text: string, budget: number, maxLines: number): string[] {
+  const parts = wrapWords(text, budget);
+
+  if (parts.length <= maxLines) {
+    return parts;
+  }
+
+  const kept = parts.slice(0, maxLines);
+  const last = kept[maxLines - 1] ?? "";
+  const ellipsisBudget = Math.max(1, budget - 1);
+  const head = clip(last, ellipsisBudget).replace(/\s+$/u, "");
+
+  kept[maxLines - 1] = `${head}…`;
+
+  return kept;
 }
 
 function pushHardBroken(word: string, budget: number, lines: string[]): string {
@@ -203,6 +262,10 @@ function paintGlyph(glyph: string, kind: ItemKind, color: boolean): string {
     return glyph;
   }
 
+  if (kind === "done") {
+    return paint(glyph, CONSOLE.green, true);
+  }
+
   if (kind === "current") {
     return paint(glyph, CONSOLE.bright, true);
   }
@@ -211,7 +274,7 @@ function paintGlyph(glyph: string, kind: ItemKind, color: boolean): string {
     return paint(glyph, CONSOLE.warn, true);
   }
 
-  return paint(glyph, CONSOLE.muted, true);
+  return paint(glyph, CONSOLE.soft, true);
 }
 
 function paintBody(part: string, kind: ItemKind, color: boolean): string {
@@ -219,15 +282,19 @@ function paintBody(part: string, kind: ItemKind, color: boolean): string {
     return part;
   }
 
+  if (kind === "done") {
+    return paint(part, CONSOLE.muted, true);
+  }
+
   if (kind === "current") {
     return paint(part, CONSOLE.bright, true);
   }
 
   if (kind === "blocked") {
-    return part;
+    return paint(part, CONSOLE.warn, true);
   }
 
-  return paint(part, CONSOLE.muted, true);
+  return paint(part, CONSOLE.fg, true);
 }
 
 function kindOf(item: IChecklistItem, activeItemId: string | null): ItemKind {
@@ -246,32 +313,39 @@ function kindOf(item: IChecklistItem, activeItemId: string | null): ItemKind {
   return "pending";
 }
 
-/** One item: glyph + wrapped title (continuations indented). */
+/** One item: muted tree connector + status mark + wrapped title. */
 function formatItemLines(
   item: IChecklistItem,
   kind: ItemKind,
   columns: number,
   color: boolean,
-  depth: number,
+  ancestorsOpen: readonly boolean[],
+  isLast: boolean,
   extras: readonly string[]
 ): string[] {
   const glyph = GLYPH[kind];
   const painted = paintGlyph(glyph, kind, color);
-  const nest = CONT_INDENT.repeat(depth);
-  const budget = Math.max(4, columns - displayWidth(`${nest}${glyph} `));
+  const prefix = treePrefix(ancestorsOpen, isLast);
+  const prefixPainted = paint(prefix, CONSOLE.muted, color);
+  const leadPlain = `${prefix}${glyph} `;
+  const leadCols = displayWidth(leadPlain);
+  const budget = Math.max(4, columns - leadCols);
   const parts = wrapWords(item.title.trim(), budget);
   const lines = parts.map((part, i) => {
     const body = paintBody(part, kind, color);
 
     return i === 0
-      ? `${nest}${painted} ${body}`
-      : `${nest}${CONT_INDENT}${body}`;
+      ? `${prefixPainted}${painted} ${body}`
+      : `${" ".repeat(leadCols)}${body}`;
   });
 
-  for (const extra of extras) {
-    const clipped = clip(extra, Math.max(4, columns - nest.length - 2));
+  const extraLead = `${treeGap(ancestorsOpen, isLast)}    `;
+  const extraBudget = Math.max(4, columns - displayWidth(extraLead));
 
-    lines.push(paint(`${nest}${CONT_INDENT}${clipped}`, CONSOLE.muted, color));
+  for (const extra of extras) {
+    for (const part of wrapWords(extra, extraBudget)) {
+      lines.push(paint(`${extraLead}${part}`, CONSOLE.muted, color));
+    }
   }
 
   return lines;
@@ -289,7 +363,7 @@ function applySelection(
 
     const plain = stripSgr(line);
 
-    if (plain.trimStart().startsWith(GLYPH.current)) {
+    if (plain.includes(GLYPH.current)) {
       return line;
     }
 
@@ -317,7 +391,7 @@ function focusExtras(item: IChecklistItem): string[] {
 function walkChecklist(
   plan: IPlanDocument,
   nodes: readonly IChecklistItem[],
-  depth: number,
+  ancestorsOpen: readonly boolean[],
   ctx: {
     readonly maxPending: number;
     readonly columns: number;
@@ -326,7 +400,8 @@ function walkChecklist(
     readonly out: string[];
   }
 ): void {
-  for (const item of nodes) {
+  nodes.forEach((item, index) => {
+    const isLast = index === nodes.length - 1;
     const kind = kindOf(item, plan.activeItemId);
     const isFocus =
       kind === "current" ||
@@ -337,10 +412,10 @@ function walkChecklist(
         ctx.pending.hidden += 1;
 
         if (item.children !== undefined) {
-          walkChecklist(plan, item.children, depth + 1, ctx);
+          walkChecklist(plan, item.children, [...ancestorsOpen, !isLast], ctx);
         }
 
-        continue;
+        return;
       }
 
       ctx.pending.shown += 1;
@@ -352,19 +427,21 @@ function walkChecklist(
         kind,
         ctx.columns,
         ctx.color,
-        depth,
+        ancestorsOpen,
+        isLast,
         isFocus ? focusExtras(item) : []
       )
     );
 
     if (item.children !== undefined) {
-      walkChecklist(plan, item.children, depth + 1, ctx);
+      walkChecklist(plan, item.children, [...ancestorsOpen, !isLast], ctx);
     }
-  }
+  });
 }
 
 /**
- * Tasks-rail body lines — goal cue + nested checklist for the session-bound plan.
+ * Tasks-rail body — soft goal lead-in, hairline, then the checklist tree.
+ * Sticky `Tasks N/M` owns the chrome; no repeated PLAN/TASKS labels in body.
  */
 export function formatWorklistLines(
   plan: IPlanDocument | null,
@@ -385,12 +462,18 @@ export function formatWorklistLines(
   const goal = plan.goal.trim();
 
   if (goal.length > 0) {
-    lines.push(paint(clip(goal, columns), CONSOLE.muted, color));
+    // Cap so a novel-length goal cannot crowd out the checklist.
+    for (const part of wrapClamped(goal, columns, 3)) {
+      lines.push(paint(part, CONSOLE.soft, color));
+    }
+
+    lines.push(paint("─".repeat(columns), CONSOLE.rule, color));
+    lines.push("");
   }
 
   const pending = { shown: 0, hidden: 0 };
 
-  walkChecklist(plan, plan.items, 0, {
+  walkChecklist(plan, plan.items, [], {
     maxPending,
     columns,
     color,
@@ -402,10 +485,6 @@ export function formatWorklistLines(
     lines.push(
       paint(`… +${String(pending.hidden)} more`, CONSOLE.muted, color)
     );
-  }
-
-  if (countOpen(plan.items) === 0) {
-    lines.push(paint("All done.", CONSOLE.bright, color));
   }
 
   if (opts.showSelection === true && opts.selectedIndex !== undefined) {

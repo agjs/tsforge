@@ -85,7 +85,7 @@ import {
   renderAgentTree,
   AgentTreeModel,
   PaneScreen,
-  stripMouseReports,
+  createMouseCsiFilter,
   canUsePaneTui,
   PANE_MIN_ROWS,
   INPUT_INNER_ROWS_MAX,
@@ -125,12 +125,12 @@ import {
 import { scopeLabel, planHint } from "./banner";
 import { resolveGate, type AutoGateResolver } from "./gate-setup";
 import {
-  printSessions,
   turnsToGreenLine,
   runMapCommand,
   runReviewCommand,
   runTraceCommand,
 } from "./repl-commands";
+import { openSessionsMenu } from "./session-menu";
 import {
   formatWorklistLines,
   formatPlanProposal,
@@ -1146,6 +1146,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Placeholder declarations; defined after runLine / editorControl are available.
   let handleHelp: () => Promise<void>;
+  let handleSessions: () => Promise<void>;
   let openScaffold: () => Promise<void>;
   // Assigned after the pane console exists (same pattern as handleHelp).
   let handleCopy: () => void = () => undefined;
@@ -1241,7 +1242,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           const { before, after } = await session.compact();
 
           await persist();
-          process.stdout.write(`compacted ${before} → ${after} messages\n`);
+          streamOut(`compacted ${before} → ${after} messages\n`);
         } finally {
           spinner.stop();
           lastStatus = "ready";
@@ -1332,7 +1333,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           .filter(Boolean);
 
         session.setScope(globs.length > 0 ? globs : WHOLE_REPO);
-        process.stdout.write(`scope: ${scopeLabel(session.scope)}\n`);
+        streamOut(`scope: ${scopeLabel(session.scope)}\n`);
         await persist();
         break;
       }
@@ -1355,20 +1356,20 @@ export async function repl(args: ICliArgs): Promise<number> {
       }
 
       case "sessions":
-        await printSessions(args.dir);
+        await handleSessions();
         break;
 
       case "memory": {
         if (arg.trim() === "forget") {
           await forgetMemory(args.dir);
-          process.stdout.write("  memory cleared for this repo\n");
+          streamOut("  memory cleared for this repo\n");
           break;
         }
 
         const ledger = await loadLedger(args.dir);
 
         if (ledger.entries.length === 0) {
-          process.stdout.write("  no learned lessons yet\n");
+          streamOut("  no learned lessons yet\n");
           break;
         }
 
@@ -1376,19 +1377,19 @@ export async function repl(args: ICliArgs): Promise<number> {
           activeRules(ledger, Date.now()).map((r) => r.name)
         );
 
-        process.stdout.write(
+        streamOut(
           `  ${String(ledger.entries.length)} lesson(s), ${String(activeNames.size)} active (● fires · ○ still accruing):\n`
         );
 
         for (const entry of ledger.entries.slice(0, 20)) {
           const mark = activeNames.has(entry.name) ? "●" : "○";
 
-          process.stdout.write(
+          streamOut(
             `    ${mark} ${entry.rule} · ${String(entry.hits)} hit(s)\n`
           );
         }
 
-        process.stdout.write("  /memory forget to clear\n");
+        streamOut("  /memory forget to clear\n");
         break;
       }
 
@@ -1398,7 +1399,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           0
         );
 
-        process.stdout.write(
+        streamOut(
           `  ${String(session.messages.length)} messages · ~${String(Math.round(chars / 4))} tokens (rough)\n`
         );
         break;
@@ -1408,21 +1409,21 @@ export async function repl(args: ICliArgs): Promise<number> {
         const m = session.metrics;
 
         if (m.calls === 0) {
-          process.stdout.write("  no model calls yet\n");
+          streamOut("  no model calls yet\n");
         } else {
-          process.stdout.write(
+          streamOut(
             `  ${String(m.calls)} call(s) · ${String(m.promptTokens)} in / ${String(m.completionTokens)} out · ` +
               `${String(m.lastTokensPerSecond)} tok/s last · ${String(m.avgTokensPerSecond)} tok/s avg\n`
           );
         }
 
-        process.stdout.write(turnsToGreenLine(lastTurnsToGreen));
+        streamOut(turnsToGreenLine(lastTurnsToGreen));
 
         break;
       }
 
       default:
-        process.stdout.write(`unknown command: ${line} (try /help)\n`);
+        streamOut(`unknown command: ${line} (try /help)\n`);
     }
 
     return false;
@@ -2315,6 +2316,32 @@ export async function repl(args: ICliArgs): Promise<number> {
       refreshStatus();
     };
 
+    handleSessions = async (): Promise<void> => {
+      editorControl?.suspend();
+      editorControl?.setInputInert(true);
+
+      try {
+        await openSessionsMenu({
+          cwd: args.dir,
+          out: streamOut,
+          render: (lines) => {
+            chrome.setOverlay(lines);
+          },
+          close: () => {
+            chrome.clearOverlay();
+          },
+          columns: transcriptCols(),
+          viewportRows: overlayBudget(),
+        });
+      } finally {
+        editorControl?.setInputInert(false);
+        editorControl?.resume();
+        editorControl?.getBuffer().setText("");
+      }
+
+      refreshStatus();
+    };
+
     // Open the in-REPL scaffold wizard (create a new project here), reachable as a
     // first-class typed/palette command so it's discoverable at the prompt. This
     // path AWAITS openScaffoldInRepl, so the wizard's suspend/resume owns the screen
@@ -2609,17 +2636,37 @@ export async function repl(args: ICliArgs): Promise<number> {
         },
       };
 
-      // When panes are up, strip leftover SGR mouse reports before the editor
-      // sees them (clicks otherwise insert `[<0;98;13M` into the buffer).
+      // When panes are up, reassemble SGR mouse reports across stdin chunks
+      // before the editor sees them. A split report otherwise peels off ESC and
+      // types `[<65;96;52M` into the prompt (and wheel feels insane).
       const stdinDataWrappers = new Map<
         (data: string) => void,
         (data: string) => void
       >();
-      // Hoisted — allocating a unicode RegExp per keystroke showed up in typing lag.
-      const mouseReportRe = new RegExp(
-        `${String.fromCharCode(27)}\\[<\\d+;\\d+;\\d+[Mm]`,
-        "gu"
-      );
+      const mouseCsi = createMouseCsiFilter();
+      let mouseCsiFlushTimer: ReturnType<typeof setTimeout> | null = null;
+      const ESC_HOLD_MS = 35;
+
+      const deliverCleaned = (
+        cleaned: string,
+        cb: (data: string) => void
+      ): void => {
+        if (cleaned.length === 0) {
+          return;
+        }
+
+        // Pane chrome keys (Ctrl+G / Esc / panel nav) never reach the editor.
+        const paneKeys =
+          cleaned === "\x07" ||
+          cleaned === "\x1b" ||
+          paneScreen.focusState.panelFocused;
+
+        if (paneKeys && paneScreen.handleKey(cleaned) === "handled") {
+          return;
+        }
+
+        cb(cleaned);
+      };
 
       editorHandle = startEditor({
         stdin: {
@@ -2631,38 +2678,35 @@ export async function repl(args: ICliArgs): Promise<number> {
             }
 
             const wrapped = (data: string): void => {
+              if (mouseCsiFlushTimer !== null) {
+                clearTimeout(mouseCsiFlushTimer);
+                mouseCsiFlushTimer = null;
+              }
+
               if (!panesLive()) {
+                mouseCsi.reset();
                 cb(data);
 
                 return;
               }
 
-              // Mouse reports must hit PaneScreen BEFORE strip — wheel scrolls
-              // main/panel viewports; never let the host terminal scroll.
-              mouseReportRe.lastIndex = 0;
-              const reports = data.match(mouseReportRe) ?? [];
+              // Mouse reports hit PaneScreen before anything reaches the editor.
+              const fed = mouseCsi.feed(data);
 
-              for (const report of reports) {
+              for (const report of fed.reports) {
                 paneScreen.handleKey(report);
               }
 
-              const cleaned = stripMouseReports(data);
+              deliverCleaned(fed.cleaned, cb);
 
-              if (cleaned.length === 0) {
-                return;
+              if (fed.holding) {
+                mouseCsiFlushTimer = setTimeout(() => {
+                  mouseCsiFlushTimer = null;
+                  const flushed = mouseCsi.flush();
+
+                  deliverCleaned(flushed.cleaned, cb);
+                }, ESC_HOLD_MS);
               }
-
-              // Pane chrome keys (Ctrl+G / Esc / panel nav) never reach the editor.
-              const paneKeys =
-                cleaned === "\x07" ||
-                cleaned === "\x1b" ||
-                paneScreen.focusState.panelFocused;
-
-              if (paneKeys && paneScreen.handleKey(cleaned) === "handled") {
-                return;
-              }
-
-              cb(cleaned);
             };
 
             stdinDataWrappers.set(cb, wrapped);

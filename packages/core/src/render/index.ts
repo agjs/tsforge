@@ -68,6 +68,7 @@ export {
   inputContentCols,
   stripSgr,
   stripMouseReports,
+  createMouseCsiFilter,
   type IPaneInput,
   type IPaneScreenTerminal,
 } from "./frame";

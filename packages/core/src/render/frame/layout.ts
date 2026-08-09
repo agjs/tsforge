@@ -14,24 +14,24 @@ export const PANE_SPLIT_MIN_COLS = 72;
 export const PANEL_MAIN_MIN_COLS = 24;
 
 /**
- * Adaptive Tasks rail width: readable checklists without starving the main pane.
+ * Adaptive Tasks rail width: checklists need room for tree + titles.
  * `cols` is content width inside the outer frame (terminal − 4 chrome).
- * Maps to ≈32 / 36 / 40 for terminals under 100 / 100–139 / 140+.
+ * Maps to ≈42 / 48 / 56 for terminals under ~100 / mid / wide.
  */
 export function panelWidthFor(cols: number): number {
-  if (cols >= 136) {
-    return 40;
+  if (cols >= 128) {
+    return 56;
   }
 
   if (cols >= 96) {
-    return 36;
+    return 48;
   }
 
-  return 32;
+  return 42;
 }
 
 /** Default mid-size rail width — prefer {@link panelWidthFor} for live layout. */
-export const PANEL_WIDTH = 36;
+export const PANEL_WIDTH = 48;
 
 /**
  * Console chrome (inside the floating outer window):

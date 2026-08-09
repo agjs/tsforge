@@ -407,7 +407,12 @@ const PLAN_MODE_NOTE =
 export const PLAN_APPROVED_NOTE =
   "Your plan is APPROVED — saved as this session's checklist under " +
   ".tsforge/worklist/plans/<id>.json (bound via activePlanId). Plan mode is off; " +
-  "task_list / task_focus / task_complete / task_uncomplete are available. " +
+  "task_list / task_focus / task_complete / task_uncomplete / task_add / " +
+  "task_update are available. The plan is a living checklist: when you or the " +
+  "human discover work the approved plan missed, call task_add (optional " +
+  "parent_id to nest); when an item's title/detail/files/verify is wrong, call " +
+  "task_update; when done work needs redoing, task_uncomplete then continue. " +
+  "Do not keep discovered work only in chat — put it on the checklist. " +
   "task_complete RUNS THE GATE and only marks done when green — never invent " +
   "done, never mark an item complete while the gate is red. Finishing requires " +
   "BOTH gate green AND every checklist item done. Walk items in plan order " +
@@ -1454,7 +1459,9 @@ export class Session {
       `goal: ${plan.goal}`,
       `active: ${active}`,
       `open: ${String(open)}`,
-      "Checklist status changes ONLY via task_list / task_focus / task_complete / task_uncomplete.",
+      "Checklist changes ONLY via task_list / task_focus / task_complete / task_uncomplete / task_add / task_update.",
+      "Living plan: if you discover missing work (yours or the human's), task_add it — do not leave it only in chat.",
+      "If an item's scope/title/detail drifts, task_update; if done work must be redone, task_uncomplete.",
       "task_complete runs the gate — an item can be done only when the gate is green.",
       "Finished requires gate green AND every checklist item done.",
     ].join("\n");
@@ -1475,7 +1482,10 @@ export class Session {
     this.refreshChecklistContract();
     this.ctx.messages.push({
       role: "user",
-      content: `[checklist — session plan ${plan.id}]\n${formatPlanTree(plan)}`,
+      content:
+        `[checklist — session plan ${plan.id}]\n${formatPlanTree(plan)}\n` +
+        "Living plan: task_add discovered work; task_update drifted items; " +
+        "task_uncomplete to reopen. Do not leave new work only in chat.",
     });
   }
 

@@ -93,7 +93,6 @@ export function handleScrollKey(
     }
 
     deps.scrollback.scroll(1);
-    deps.invalidate();
     deps.paint();
 
     return "handled";
@@ -106,7 +105,6 @@ export function handleScrollKey(
       deps.focus.focusPrompt();
     }
 
-    deps.invalidate();
     deps.paint();
 
     return "handled";
@@ -114,7 +112,6 @@ export function handleScrollKey(
 
   if (seq === "\x1b[5~") {
     deps.scrollback.scroll(10);
-    deps.invalidate();
     deps.paint();
 
     return "handled";
@@ -122,7 +119,6 @@ export function handleScrollKey(
 
   if (seq === "\x1b[6~") {
     deps.scrollback.scroll(-10);
-    deps.invalidate();
     deps.paint();
 
     return "handled";
@@ -147,13 +143,14 @@ export function handleMouseKey(
     return null;
   }
 
-  // 64 = wheel up, 65 = wheel down (SGR).
+  // 64 = wheel up, 65 = wheel down (SGR). One row per notch — trackpads
+  // flood events; PaneScreen coalesces + body-patches so this stays smooth.
   if (report.button === 64 || report.button === 65) {
-    const delta = report.button === 64 ? 3 : -3;
+    const delta = report.button === 64 ? 1 : -1;
 
+    // onWheel owns paint (coalesced). Never invalidate here — that forced a
+    // full-frame rebuild per notch and made trackpads feel like molasses.
     deps.onWheel?.(delta, report.col, report.row);
-    deps.invalidate();
-    deps.paint();
   }
 
   return "handled";

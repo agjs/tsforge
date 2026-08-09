@@ -54,8 +54,14 @@ def main():
     # wizard forward — this is what proves the wizard owns stdin (the race the panel
     # flagged on the fire-and-forget browser path).
     os.write(m, b"\r")
+    # Pane overlay width can soft-truncate the Review subtitle ("…until you Apply"
+    # → "…until y"); match a stable prefix + the selected archetype label.
     reviewed, _ = read_until(
-        m, lambda b: "nothing is written until you Apply" in b and "Boringstack" in b, 10
+        m,
+        lambda b: "Review" in b
+        and "Boringstack" in b
+        and "nothing is written until" in b,
+        10,
     )
     t.check("keystroke reaches the WIZARD (Enter → Review, Boringstack selected)", reviewed)
 
@@ -66,8 +72,12 @@ def main():
     t.check("wizard advances to the config step (Project directory)", advanced)
 
     # Esc cancels the wizard cleanly (awaited path returns, nothing created).
+    # Cancel copy may wrap across pane rows ("nothing was" / "created.") — don't
+    # require the full phrase as one contiguous substring.
     os.write(m, b"\x1b")
-    cancelled, _ = read_until(m, lambda b: "cancelled" in b and "nothing was created" in b, 8)
+    cancelled, _ = read_until(
+        m, lambda b: "scaffold: cancelled" in b and "nothing was" in b, 8
+    )
     t.check("Esc cancels the wizard — nothing was created", cancelled)
 
     # The REPL must survive the wizard and accept input again (suspend/resume worked).

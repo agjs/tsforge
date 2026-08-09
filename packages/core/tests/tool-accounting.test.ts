@@ -459,6 +459,8 @@ const SPECIAL_TOOLS = new Set<string>([
   TOOL_NAME.taskFocus,
   TOOL_NAME.taskComplete,
   TOOL_NAME.taskUncomplete,
+  TOOL_NAME.taskAdd,
+  TOOL_NAME.taskUpdate,
 ]);
 
 test("every registered tool is classified read-only, mutating, or special", () => {

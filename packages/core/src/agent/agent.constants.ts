@@ -39,6 +39,8 @@ export const TOOL_NAME = {
   taskFocus: "task_focus",
   taskComplete: "task_complete",
   taskUncomplete: "task_uncomplete",
+  taskAdd: "task_add",
+  taskUpdate: "task_update",
   presentPlan: "present_plan",
 } as const;
 
@@ -114,6 +116,8 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.taskFocus]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.taskComplete]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.taskUncomplete]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.taskAdd]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.taskUpdate]: { readOnly: false, scriptExposable: false },
   // Propose a structured plan for human approve — no workspace / disk write until
   // approve. Plan-mode-safe. Offered in plan mode only (see offeredToolsFor).
   [TOOL_NAME.presentPlan]: { readOnly: true, scriptExposable: false },
@@ -781,7 +785,7 @@ export const TASK_LIST_TOOL = {
   function: {
     name: TOOL_NAME.taskList,
     description:
-      "Show the session's approved plan checklist (nested tree with ids and status). Checklist status changes ONLY via task_focus / task_complete / task_uncomplete — never invent done items. Does not run the acceptance gate.",
+      "Show the session's approved plan checklist (nested tree with ids and status). Checklist changes ONLY via task_focus / task_complete / task_uncomplete / task_add / task_update — never invent done items. Does not run the acceptance gate.",
     parameters: { type: "object", properties: {} },
   },
 } as const;
@@ -813,6 +817,95 @@ export const TASK_UNCOMPLETE_TOOL = {
     description:
       "Re-open a previously completed checklist item (status → pending). Does not run the gate.",
     parameters: TASK_ID_PARAM,
+  },
+} as const;
+
+export const TASK_ADD_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.taskAdd,
+    description:
+      "REQUIRED when you or the human discover work the approved plan missed — append it to " +
+      "the checklist instead of only mentioning it in chat. Optional parent_id nests under an " +
+      "existing item (re-opens a done parent). Status starts pending — use task_focus / " +
+      "task_complete after. Does not run the gate.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Short actionable title for the new item.",
+        },
+        parent_id: {
+          type: "string",
+          description:
+            "Optional parent item UUID from task_list — omit to add a new top-level item.",
+        },
+        detail: {
+          type: "string",
+          description: "Optional acceptance prose for this item.",
+        },
+        files: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional relative paths this item touches.",
+        },
+        verify: {
+          type: "string",
+          description: "Optional verify hint (not executed as a gate).",
+        },
+        kind: {
+          type: "string",
+          enum: ["investigate", "create", "modify", "test"],
+          description: "Optional advisory kind.",
+        },
+      },
+      required: ["title"],
+    },
+  },
+} as const;
+
+export const TASK_UPDATE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.taskUpdate,
+    description:
+      "REQUIRED when an existing item's title/detail/files/verify/kind no longer matches " +
+      "reality — keep the checklist accurate. Does NOT change status — use task_complete / " +
+      "task_uncomplete / task_focus for that. Pass empty string/array to clear " +
+      "detail/files/verify. Does not run the gate.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "Checklist item UUID from task_list.",
+        },
+        title: {
+          type: "string",
+          description: "New title (non-empty).",
+        },
+        detail: {
+          type: "string",
+          description: "New detail; empty string clears.",
+        },
+        files: {
+          type: "array",
+          items: { type: "string" },
+          description: "New files list; empty array clears.",
+        },
+        verify: {
+          type: "string",
+          description: "New verify hint; empty string clears.",
+        },
+        kind: {
+          type: "string",
+          enum: ["investigate", "create", "modify", "test"],
+          description: "New advisory kind.",
+        },
+      },
+      required: ["id"],
+    },
   },
 } as const;
 

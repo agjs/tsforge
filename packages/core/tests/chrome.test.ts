@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
+  CONSOLE,
   formatHints,
   formatTopStatus,
   formatConsoleTopbar,
@@ -85,7 +86,7 @@ describe("formatConsoleTitle", () => {
     expect(row).not.toContain("◆");
     expect(row).toContain("✓");
     expect(row).toContain("42t");
-    expect(row).toContain("#2/5");
+    expect(row).not.toContain("#2/5");
     // Where (brand…scope) then live chips — path before model.
     expect(row.indexOf("/tmp/demo")).toBeLessThan(row.indexOf("deepseek"));
     expect(row.indexOf("repo")).toBeLessThan(row.indexOf("deepseek"));
@@ -133,7 +134,7 @@ describe("formatConsoleTopbar", () => {
 });
 
 describe("formatRailHeader", () => {
-  test("Tasks left, cyan done/total right, bordered title block", () => {
+  test("Tasks left, bright done/total right, bordered title block", () => {
     const header = formatRailHeader({
       done: 2,
       total: 6,
@@ -151,7 +152,8 @@ describe("formatRailHeader", () => {
     expect(plain).toContain("Tasks");
     expect(plain).toContain("2/6");
     expect(plain.indexOf("Tasks")).toBeLessThan(plain.indexOf("2/6"));
-    expect(header).toContain(STYLE.cyan);
+    expect(header).toContain(CONSOLE.bright);
+    expect(header).not.toContain(STYLE.cyan);
     expect(RAIL_TITLE_ROWS).toBe(2);
     expect(block).toHaveLength(2);
     expect(block[0]).toContain("Tasks");
@@ -167,6 +169,7 @@ describe("formatRailHeader", () => {
     });
 
     expect(stripSgr(header)).toContain("0/0");
+    expect(header).not.toContain(CONSOLE.bright);
     expect(header).not.toContain(STYLE.cyan);
   });
 });
@@ -226,7 +229,7 @@ describe("formatTopStatus", () => {
 
     expect(line).toContain("deepseek");
     expect(line).toContain("PLAN");
-    expect(line).toContain("#2/5");
+    expect(line).not.toContain("#2/5");
   });
 
   test("truncates when cols are tight", () => {

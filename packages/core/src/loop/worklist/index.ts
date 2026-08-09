@@ -52,6 +52,8 @@ export {
   completeItemInPlan,
   uncompleteItemInPlan,
   focusItemInPlan,
+  addItemInPlan,
+  updateItemFieldsInPlan,
   formatPlanTree,
   planPath,
   worklistRoot,

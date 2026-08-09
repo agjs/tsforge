@@ -15,12 +15,21 @@ export function turnsToGreenLine(turns: number | null): string {
     : `  turns to green (last): ${String(turns)}\n`;
 }
 
-/** List saved sessions for a directory (the `/sessions` command). */
-export async function printSessions(dir: string): Promise<void> {
+/**
+ * List saved sessions to `out` (defaults to stdout).
+ * Prefer {@link openSessionsMenu} in the REPL — raw stdout under PaneScreen
+ * paints into the alt-screen and corrupts the input band.
+ */
+export async function printSessions(
+  dir: string,
+  out: (s: string) => void = (s) => {
+    process.stdout.write(s);
+  }
+): Promise<void> {
   const sessions = await listSessions(dir);
 
   if (sessions.length === 0) {
-    process.stdout.write("no saved sessions for this directory\n");
+    out("no saved sessions for this directory\n");
 
     return;
   }
@@ -29,7 +38,7 @@ export async function printSessions(dir: string): Promise<void> {
     const firstUser = s.messages.find((m) => m.role === "user")?.content ?? "";
     const snippet = firstUser.slice(0, 48).replace(/\s+/g, " ");
 
-    process.stdout.write(
+    out(
       `  ${s.id}  ${String(s.messages.length).padStart(3)} msgs  ${snippet}\n`
     );
   }

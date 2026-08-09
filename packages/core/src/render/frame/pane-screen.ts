@@ -103,6 +103,10 @@ export class PaneScreen {
   private geometryDirty = false;
   /** Panel list scroll offset (lines from top). Independent of main scrollback. */
   private panelOffset = 0;
+  /** Coalesced wheel delta (positive = older / up) awaiting setImmediate paint. */
+  private wheelAccum = 0;
+  private wheelCol = 1;
+  private wheelPaintQueued = false;
   private bodyViewportRows = 1;
   private entered = false;
   /** True after a successful enter — resize may re-enter after a shrink-leave. */
@@ -279,8 +283,7 @@ export class PaneScreen {
     this.scrollback.scroll(delta);
 
     if (this.entered) {
-      this.prevLines = null;
-      this.paint();
+      this.paintAfterScroll();
     }
   }
 
@@ -290,8 +293,7 @@ export class PaneScreen {
     this.clampPanelOffset();
 
     if (this.entered) {
-      this.prevLines = null;
-      this.paint();
+      this.paintAfterScroll();
     }
   }
 
@@ -709,10 +711,10 @@ export class PaneScreen {
       scrollback: this.scrollback,
       panelLen: this.panelSourceLen(),
       onWheel: (delta: number, col: number, _row: number): void => {
-        this.wheelAt(delta, col);
+        this.queueWheel(delta, col);
       },
       paint: () => {
-        this.paint();
+        this.paintAfterScroll();
       },
       invalidate: () => {
         this.prevLines = null;
@@ -727,8 +729,36 @@ export class PaneScreen {
     );
   }
 
+  /**
+   * Coalesce trackpad wheel floods into one scroll+paint on the next
+   * immediate turn — otherwise each notch rebuilds the body.
+   */
+  private queueWheel(delta: number, col1Based: number): void {
+    this.wheelAccum += delta;
+    this.wheelCol = col1Based;
+
+    if (this.wheelPaintQueued) {
+      return;
+    }
+
+    this.wheelPaintQueued = true;
+    setImmediate(() => {
+      this.wheelPaintQueued = false;
+      const d = this.wheelAccum;
+
+      this.wheelAccum = 0;
+
+      if (d === 0 || !this.entered) {
+        return;
+      }
+
+      this.applyWheel(d, this.wheelCol);
+      this.paintAfterScroll();
+    });
+  }
+
   /** Wheel over panel columns scrolls the rail; otherwise the main transcript. */
-  private wheelAt(delta: number, col1Based: number): void {
+  private applyWheel(delta: number, col1Based: number): void {
     const insets = outerInsets(this.rows, this.cols);
     const layout = computeLayout(this.layoutOpts());
     // Mouse cols are terminal-absolute; layout cols are content-relative.
@@ -745,6 +775,31 @@ export class PaneScreen {
     }
 
     this.scrollback.scroll(delta);
+  }
+
+  /**
+   * Scroll / focus paint: patch main+panel body when the frame cache is warm.
+   * Full compose only when geometry/overlay forces it — never null prevLines
+   * just because the viewport moved.
+   */
+  private paintAfterScroll(): void {
+    if (!this.entered) {
+      return;
+    }
+
+    if (
+      this.prevLines !== null &&
+      !this.geometryDirty &&
+      this.overlayLines.length === 0 &&
+      this.agentTreeLines.length === 0 &&
+      this.lastWrapCols > 0
+    ) {
+      this.paintMainFollowOnly();
+
+      return;
+    }
+
+    this.paint();
   }
 
   private panelSourceLen(): number {
@@ -888,21 +943,10 @@ export class PaneScreen {
     cols: number,
     layout: ReturnType<typeof computeLayout>
   ): string[] {
-    const counts = this.railCounts();
-    const rawBadge =
-      this.worklistBadge.length > 0
-        ? this.worklistBadge
-        : `${String(counts.done)}/${String(counts.total)}`;
-    const badge =
-      this.flashHeaderPaints > 0
-        ? paint(rawBadge, CONSOLE.bright, true)
-        : rawBadge;
-
     return formatConsoleTopbar({
       info: this.status,
       cwd: this.cwd,
       sessionId: this.sessionId,
-      worklistBadge: badge,
       cols,
       splitCol: layout.panel !== null ? layout.main.cols : undefined,
       padTop: layout.top.rows >= TOP_STATUS_ROWS,

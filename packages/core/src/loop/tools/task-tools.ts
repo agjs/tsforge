@@ -1,5 +1,9 @@
-import type { IPlanDocument } from "../worklist/checklist.types";
+import type {
+  ChecklistItemKind,
+  IPlanDocument,
+} from "../worklist/checklist.types";
 import {
+  addItemInPlan,
   completeItemInPlan,
   findItem,
   focusItemInPlan,
@@ -7,8 +11,37 @@ import {
   loadPlan,
   savePlan,
   uncompleteItemInPlan,
+  updateItemFieldsInPlan,
 } from "../worklist/checklist-store";
 import { reject, str, type IToolContext } from "./tool-context";
+
+type TaskMutateTool =
+  | "task_focus"
+  | "task_complete"
+  | "task_uncomplete"
+  | "task_add"
+  | "task_update";
+
+function parseKind(raw: unknown): ChecklistItemKind | undefined {
+  return raw === "investigate" ||
+    raw === "create" ||
+    raw === "modify" ||
+    raw === "test"
+    ? raw
+    : undefined;
+}
+
+function parseFiles(raw: unknown): readonly string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+
+  if (!raw.every((f): f is string => typeof f === "string")) {
+    return undefined;
+  }
+
+  return raw;
+}
 
 function requirePlan(
   ctx: IToolContext
@@ -30,7 +63,7 @@ function persistAndNotify(
   ctx: IToolContext,
   planId: string,
   plan: IPlanDocument,
-  tool: "task_focus" | "task_complete" | "task_uncomplete"
+  tool: TaskMutateTool
 ): string {
   savePlan(ctx.cwd, plan);
   ctx.onPlanChanged?.(plan);
@@ -234,4 +267,125 @@ export function doTaskUncomplete(
   }
 
   return persistAndNotify(ctx, bound.planId, result.plan, "task_uncomplete");
+}
+
+/** Append a discovered checklist item (root or under parent_id). */
+export function doTaskAdd(
+  args: Record<string, unknown>,
+  ctx: IToolContext
+): string {
+  const bound = requirePlan(ctx);
+
+  if (!bound.ok) {
+    return reject(ctx, "task_add", bound.error);
+  }
+
+  const title = str(args, "title").trim();
+
+  if (title.length === 0) {
+    return reject(ctx, "task_add", "task_add needs `title`");
+  }
+
+  const plan = loadPlan(bound.cwd, bound.planId);
+
+  if (plan === null) {
+    return reject(ctx, "task_add", `active plan file missing: ${bound.planId}`);
+  }
+
+  const parentRaw = str(args, "parent_id").trim();
+  const files = parseFiles(args.files);
+  const kind = parseKind(args.kind);
+  const detail = str(args, "detail");
+  const verify = str(args, "verify");
+  const result = addItemInPlan(plan, {
+    title,
+    ...(parentRaw.length > 0 ? { parentId: parentRaw } : {}),
+    ...(detail.trim().length > 0 ? { detail } : {}),
+    ...(files !== undefined ? { files } : {}),
+    ...(verify.trim().length > 0 ? { verify } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+  });
+
+  if (!result.ok) {
+    return reject(ctx, "task_add", result.error);
+  }
+
+  const tree = persistAndNotify(ctx, bound.planId, result.plan, "task_add");
+
+  return [`added: ${title} (${result.id})`, "", tree].join("\n");
+}
+
+/** Edit fields on an existing item (not status). */
+export function doTaskUpdate(
+  args: Record<string, unknown>,
+  ctx: IToolContext
+): string {
+  const bound = requirePlan(ctx);
+
+  if (!bound.ok) {
+    return reject(ctx, "task_update", bound.error);
+  }
+
+  const id = str(args, "id").trim();
+
+  if (id.length === 0) {
+    return reject(
+      ctx,
+      "task_update",
+      "task_update needs `id` (item UUID from task_list)"
+    );
+  }
+
+  const plan = loadPlan(bound.cwd, bound.planId);
+
+  if (plan === null) {
+    return reject(
+      ctx,
+      "task_update",
+      `active plan file missing: ${bound.planId}`
+    );
+  }
+
+  const hasTitle = Object.hasOwn(args, "title");
+  const hasDetail = Object.hasOwn(args, "detail");
+  const hasFiles = Object.hasOwn(args, "files");
+  const hasVerify = Object.hasOwn(args, "verify");
+  const hasKind = Object.hasOwn(args, "kind");
+
+  if (!hasTitle && !hasDetail && !hasFiles && !hasVerify && !hasKind) {
+    return reject(
+      ctx,
+      "task_update",
+      "task_update needs at least one of title/detail/files/verify/kind"
+    );
+  }
+
+  if (hasFiles && parseFiles(args.files) === undefined) {
+    return reject(ctx, "task_update", "files must be an array of strings");
+  }
+
+  if (hasKind && parseKind(args.kind) === undefined) {
+    return reject(
+      ctx,
+      "task_update",
+      "kind must be investigate|create|modify|test"
+    );
+  }
+
+  const result = updateItemFieldsInPlan(plan, id, {
+    ...(hasTitle ? { title: str(args, "title") } : {}),
+    ...(hasDetail ? { detail: str(args, "detail") } : {}),
+    ...(hasFiles ? { files: parseFiles(args.files) ?? [] } : {}),
+    ...(hasVerify ? { verify: str(args, "verify") } : {}),
+    ...(hasKind ? { kind: parseKind(args.kind) } : {}),
+  });
+
+  if (!result.ok) {
+    return reject(ctx, "task_update", result.error);
+  }
+
+  const tree = persistAndNotify(ctx, bound.planId, result.plan, "task_update");
+  const item = findItem(result.plan.items, id);
+
+  return [`updated: ${item?.title ?? id}`, "", tree].join("\n");
 }

@@ -260,11 +260,11 @@ describe("computeLayout", () => {
   });
 
   test("panelWidthFor adapts by content width", () => {
-    // Content cols ≈ term − 4; thresholds match 100- and 140-col terminals.
-    expect(panelWidthFor(80)).toBe(32);
-    expect(panelWidthFor(96)).toBe(36);
-    expect(panelWidthFor(136)).toBe(40);
-    expect(computeLayout({ rows: 20, cols: 160 }).panel?.cols).toBe(40);
+    // Content cols ≈ term − 4; thresholds match ~100- and ~140-col terminals.
+    expect(panelWidthFor(80)).toBe(42);
+    expect(panelWidthFor(96)).toBe(48);
+    expect(panelWidthFor(128)).toBe(56);
+    expect(computeLayout({ rows: 20, cols: 160 }).panel?.cols).toBe(56);
   });
 
   test("keeps pinned topbar at PANE_MIN_ROWS content height", () => {
@@ -432,7 +432,7 @@ describe("PaneScreen", () => {
     expect(screen.row(1).trim()).toBe("");
     expect(screen.row(2)).toContain("╭");
     expect(screen.row(titleRow(24))).toContain("TSFORGE");
-    expect(screen.row(titleRow(24))).toContain("#0/2");
+    expect(screen.row(titleRow(24))).not.toContain("#0/2");
     expect(screen.row(outerBottomRow(24))).toContain("╰");
     expect(screen.text()).toContain("[>] First");
     expect(screen.text()).not.toContain("forge>");
@@ -511,7 +511,7 @@ describe("PaneScreen", () => {
     expect(screen.row(title)).toContain("deepseek");
     expect(screen.row(title)).toContain("PLAN");
     expect(screen.row(title)).toContain("✓");
-    expect(screen.row(title)).toContain("#0/0");
+    expect(screen.row(title)).not.toContain("#0/0");
     expect(screen.row(title)).toContain("repo");
     expect(isFramedAir(screen.row(title + 1))).toBe(true);
     expect(screen.row(title + 2)).toContain("┬");
@@ -665,7 +665,7 @@ describe("PaneScreen", () => {
     expect(panes.handleKey("\x1b[<0;98;13m")).toBe("handled");
   });
 
-  test("wheel over main scrolls transcript; wheel over panel scrolls rail only", () => {
+  test("wheel over main scrolls transcript; wheel over panel scrolls rail only", async () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);
 
@@ -683,6 +683,9 @@ describe("PaneScreen", () => {
 
     // Main column: wheel must not move the input band.
     expect(panes.handleKey("\x1b[<64;10;5M")).toBe("handled");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(findPromptRow(term.text(), 24, 100)).toBe(expectedPromptRow(24));
 
     // Panel column: scroll rail — early PANEL lines leave the viewport.
@@ -694,6 +697,43 @@ describe("PaneScreen", () => {
     expect(after.text()).toMatch(/PANEL_\d+/);
     expect(findPromptRow(term.text(), 24, 100)).toBe(expectedPromptRow(24));
     expect(after.row(expectedPromptRow(24)).length).toBeGreaterThan(0);
+  });
+
+  test("wheel scroll stays fast on a large transcript (no full-frame thrash)", async () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+
+    const bulk = Array.from(
+      { length: 2_000 },
+      (_, i) => `line-${String(i)}-${"x".repeat(60)}`
+    ).join("\n");
+
+    panes.appendMain(`${bulk}\n`);
+    panes.setPanel(
+      Array.from({ length: 30 }, (_, i) =>
+        i === 0 ? "worklist  0/29" : `PANEL_${String(i)}`
+      )
+    );
+
+    term.writes = [];
+    const t0 = performance.now();
+
+    for (let i = 0; i < 80; i += 1) {
+      expect(panes.handleKey("\x1b[<64;10;5M")).toBe("handled");
+    }
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    // Full invalidate+paint per notch used to multi‑hundred-ms here on a
+    // warm 2k-line wrap cache; body patch + coalesce must stay interactive.
+    expect(performance.now() - t0).toBeLessThan(120);
+    // Coalesced: one (or a few) writes — not one full frame per wheel event.
+    expect(term.writes.length).toBeLessThan(10);
+    expect(term.writes.length).toBeGreaterThan(0);
   });
 
   test("preserves SGR in appended main text", () => {
@@ -864,11 +904,13 @@ describe("PaneScreen", () => {
     expect(text).toContain("Tasks");
     expect(text).toContain("0/2");
     expect(text).toContain("PLAN.md");
-    expect(text).toContain("▸");
+    expect(text).toContain("[>]");
+    // Sticky title owns chrome; body is goal + hairline + tree (no TASKS label).
+    expect(text).not.toMatch(/(?:^|\n)\s*TASKS\s*(?:\n|$)/mu);
     // Word-aware wrap + inset-matched budget — no mid-word clip at the rail edge.
-    expect(text).toContain("independent");
+    expect(text).toContain("interactive");
     expect(text).toContain("via");
-    expect(text).not.toMatch(/independen[^t]/u);
+    expect(text).not.toMatch(/interactiv[^e]/u);
     expect(text).not.toMatch(/\bvi\b/u);
   });
 
@@ -957,7 +999,7 @@ describe("PaneScreen", () => {
     expect(screen.row(title)).toContain("test-model");
     expect(screen.row(title)).toContain("12%");
     expect(screen.row(title)).toContain("42t");
-    expect(screen.row(title)).toContain("#2/5");
+    expect(screen.row(title)).not.toContain("#2/5");
     expect(screen.row(title)).toContain("✓");
     expect(screen.row(expectedPromptRow(24))).toContain("describe a task");
     expect(screen.text()).not.toContain("tok/s");
@@ -1243,7 +1285,7 @@ describe("PaneScreen", () => {
     expect(tall.text()).toContain("KEEP_ME");
     expect(tall.text()).toContain("hi");
     expect(tall.row(expectedPromptRow(40, 120))).toContain("hi");
-    expect(tall.row(titleRow(40, 120))).toContain("#0/0");
+    expect(tall.row(titleRow(40, 120))).not.toContain("#0/0");
     expect(tall.text()).not.toContain("forge>");
 
     term.writes = [];
@@ -1316,7 +1358,7 @@ describe("PaneScreen", () => {
     screen.feed(term.text());
     expect(findPromptRow(term.text(), 24, 100)).toBe(expectedPromptRow(24));
     expect(screen.row(expectedPromptRow(24))).toContain("describe a task");
-    expect(screen.row(titleRow(24))).toContain("#0/0");
+    expect(screen.row(titleRow(24))).not.toContain("#0/0");
     expect(screen.text()).not.toContain("forge>");
   });
 

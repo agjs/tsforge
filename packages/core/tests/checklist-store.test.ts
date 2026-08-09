@@ -3,18 +3,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  addItemInPlan,
   completeItemInPlan,
   focusItemInPlan,
   isChecklistComplete,
   loadPlan,
   savePlan,
   uncompleteItemInPlan,
+  updateItemFieldsInPlan,
 } from "../src/loop/worklist/checklist-store";
 import type { IPlanDocument } from "../src/loop/worklist/checklist.types";
 import {
+  doTaskAdd,
   doTaskComplete,
   doTaskFocus,
   doTaskList,
+  doTaskUpdate,
 } from "../src/loop/tools/task-tools";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 
@@ -197,5 +201,112 @@ describe("checklist-store", () => {
     }
 
     expect(undone.plan.items[0]?.children?.[1]?.status).toBe("pending");
+  });
+
+  test("addItemInPlan appends root and nested; reopens done parent", () => {
+    let plan = samplePlan("add");
+    const root = addItemInPlan(
+      plan,
+      { title: "New root" },
+      "2026-01-02T00:00:00.000Z",
+      () => "new-root"
+    );
+
+    expect(root.ok).toBe(true);
+
+    if (!root.ok) {
+      return;
+    }
+
+    plan = root.plan;
+    expect(plan.items.at(-1)?.id).toBe("new-root");
+
+    const doneParent = completeItemInPlan(
+      {
+        ...plan,
+        items: [
+          {
+            id: "solo",
+            title: "Solo",
+            status: "pending",
+          },
+        ],
+      },
+      "solo"
+    );
+
+    expect(doneParent.ok).toBe(true);
+
+    if (!doneParent.ok) {
+      return;
+    }
+
+    const nested = addItemInPlan(
+      doneParent.plan,
+      { title: "Child of done", parentId: "solo" },
+      "2026-01-02T00:00:00.000Z",
+      () => "new-child"
+    );
+
+    expect(nested.ok).toBe(true);
+
+    if (!nested.ok) {
+      return;
+    }
+
+    expect(nested.plan.items[0]?.status).toBe("pending");
+    expect(nested.plan.items[0]?.children?.[0]?.id).toBe("new-child");
+  });
+
+  test("updateItemFieldsInPlan edits title and clears detail", () => {
+    const plan = samplePlan("upd");
+    const updated = updateItemFieldsInPlan(plan, "child-a", {
+      title: "Renamed",
+      detail: "",
+    });
+
+    expect(updated.ok).toBe(true);
+
+    if (!updated.ok) {
+      return;
+    }
+
+    expect(updated.plan.items[0]?.children?.[0]?.title).toBe("Renamed");
+    expect(updated.plan.items[0]?.children?.[0]?.detail).toBeUndefined();
+  });
+
+  test("task_add / task_update tools persist", () => {
+    const plan = samplePlan("tools-mut");
+
+    savePlan(dir, plan);
+
+    const ctx: IToolContext = {
+      cwd: dir,
+      files: ["**/*"],
+      report: () => undefined,
+      task: "session",
+      activePlanId: "tools-mut",
+    };
+
+    const added = doTaskAdd(
+      { title: "Discovered work", parent_id: "parent" },
+      ctx
+    );
+
+    expect(added).toContain("added:");
+    expect(loadPlan(dir, "tools-mut")?.items[0]?.children).toHaveLength(3);
+
+    const updated = doTaskUpdate(
+      { id: "child-a", title: "Child A revised", detail: "more" },
+      ctx
+    );
+
+    expect(updated).toContain("updated:");
+    expect(loadPlan(dir, "tools-mut")?.items[0]?.children?.[0]?.title).toBe(
+      "Child A revised"
+    );
+    expect(loadPlan(dir, "tools-mut")?.items[0]?.children?.[0]?.detail).toBe(
+      "more"
+    );
   });
 });

@@ -14,6 +14,8 @@ const TASK_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_NAME.taskFocus,
   TOOL_NAME.taskComplete,
   TOOL_NAME.taskUncomplete,
+  TOOL_NAME.taskAdd,
+  TOOL_NAME.taskUpdate,
 ]);
 
 /** Propose-plan tool — only useful in plan mode (approve binds the proposal). */

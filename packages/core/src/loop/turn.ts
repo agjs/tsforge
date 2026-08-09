@@ -94,6 +94,8 @@ import {
   TASK_FOCUS_TOOL,
   TASK_COMPLETE_TOOL,
   TASK_UNCOMPLETE_TOOL,
+  TASK_ADD_TOOL,
+  TASK_UPDATE_TOOL,
   PRESENT_PLAN_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
@@ -157,6 +159,8 @@ type AdvertisedTool =
   | typeof TASK_FOCUS_TOOL
   | typeof TASK_COMPLETE_TOOL
   | typeof TASK_UNCOMPLETE_TOOL
+  | typeof TASK_ADD_TOOL
+  | typeof TASK_UPDATE_TOOL
   | typeof PRESENT_PLAN_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
@@ -243,6 +247,8 @@ export function toolsFor(
         TASK_FOCUS_TOOL,
         TASK_COMPLETE_TOOL,
         TASK_UNCOMPLETE_TOOL,
+        TASK_ADD_TOOL,
+        TASK_UPDATE_TOOL,
       ]
     : [];
 
