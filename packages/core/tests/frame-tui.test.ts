@@ -864,7 +864,7 @@ describe("PaneScreen", () => {
     expect(text).toContain("Tasks");
     expect(text).toContain("0/2");
     expect(text).toContain("PLAN.md");
-    expect(text).toContain("▸");
+    expect(text).toContain("[>]");
     // Word-aware wrap + inset-matched budget — no mid-word clip at the rail edge.
     expect(text).toContain("independent");
     expect(text).toContain("via");

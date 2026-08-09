@@ -87,8 +87,10 @@ export function formatMenuRow(opts: {
   const gutter = opts.active ? "▸" : " ";
   const raw = `${gutter} ${body}`;
 
+  // Always paint — bare rows inherit whatever SGR the previous cell left on
+  // (PLAN cyan / meta), which made /sessions and other lists look sky-blue.
   if (!opts.active) {
-    return raw;
+    return paint(raw, CONSOLE.fg, opts.color);
   }
 
   return paint(raw, CONSOLE.bright, opts.color);
@@ -130,7 +132,7 @@ export function formatOverlayShell(opts: IOverlayShellOpts): string[] {
 
   if (opts.describe !== undefined) {
     lines.push(menuRule(width, opts.color));
-    lines.push(menuClip(opts.describe, width));
+    lines.push(paint(menuClip(opts.describe, width), CONSOLE.soft, opts.color));
   }
 
   lines.push(menuFooter(opts.footer, width, opts.color));

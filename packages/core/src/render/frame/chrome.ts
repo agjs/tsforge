@@ -8,11 +8,16 @@ import type { ActiveSurface } from "./focus";
 export const CONSOLE = {
   green: STYLE.green,
   bright: truecolor(74, 222, 128),
+  /** Primary body text (#e4e4e7) — menus, rail titles, unreadables-not-dim. */
+  fg: truecolor(228, 228, 231),
+  /** Secondary body (#a1a1aa) — done items, hints; still readable on #141414. */
+  soft: truecolor(161, 161, 170),
   muted: STYLE.dim,
   /** Match STYLE.chrome — greenish rule made pane gutters disagree with AGENT/input. */
   rule: STYLE.chrome,
   warn: STYLE.yellow,
   fail: STYLE.red,
+  /** Status-strip accent only — never body copy (reads as random sky-blue). */
   meta: truecolor(125, 211, 252),
   accent: truecolor(251, 191, 36),
   /** Opaque canvas (#141414) — one surface for the whole frame. */

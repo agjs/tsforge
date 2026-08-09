@@ -30,17 +30,20 @@ export interface IFormatWorklistLinesOptions {
 type ItemKind = "done" | "current" | "pending" | "blocked";
 
 /**
- * Single-cell Unicode status marks (no SVG — pane TUI has no reliable image
- * layer). Color carries most of the meaning; glyphs stay width-1.
+ * Bracketed status marks (3 cols) — readable in a narrow pane rail.
+ * Tree connectors (`├─` / `└─`) show parent → child; color reinforces status.
  */
 const GLYPH: Record<ItemKind, string> = {
-  done: "☑",
-  current: "▸",
-  pending: "☐",
-  blocked: "⚠",
+  done: "[x]",
+  current: "[>]",
+  pending: "[ ]",
+  blocked: "[!]",
 };
 
-const CONT_INDENT = "  ";
+const CONNECT_MID = "├─ ";
+const CONNECT_END = "└─ ";
+const PIPE = "│  ";
+const GAP = "   ";
 
 /** Compact badge for the top status strip, e.g. `3/7`. */
 export function worklistBadge(plan: IPlanDocument | null): string {
@@ -113,23 +116,29 @@ export function formatPlanProposal(
   push(plan.goal.trim().length > 0 ? plan.goal.trim() : "plan", true);
   pushBlank();
 
-  const walk = (nodes: readonly IChecklistItem[], depth: number): void => {
-    for (const item of nodes) {
-      const pad = "  ".repeat(depth);
+  const walk = (
+    nodes: readonly IChecklistItem[],
+    ancestorsOpen: readonly boolean[]
+  ): void => {
+    nodes.forEach((item, index) => {
+      const isLast = index === nodes.length - 1;
+      const prefix = treePrefix(ancestorsOpen, isLast);
 
-      push(`${pad}${GLYPH.pending} ${item.title}`);
+      push(`${prefix}${GLYPH.pending} ${item.title}`);
 
       if (item.detail !== undefined && item.detail.trim().length > 0) {
-        push(`${pad}  ${item.detail.trim()}`);
+        const detailLead = `${treeGap(ancestorsOpen, isLast)}    `;
+
+        push(`${detailLead}${item.detail.trim()}`);
       }
 
       if (item.children) {
-        walk(item.children, depth + 1);
+        walk(item.children, [...ancestorsOpen, !isLast]);
       }
-    }
+    });
   };
 
-  walk(plan.items, 0);
+  walk(plan.items, []);
   pushBlank();
   push(`type approve to build · ${String(countOpen(plan.items))} items`);
   lines.push(
@@ -137,6 +146,34 @@ export function formatPlanProposal(
   );
 
   return lines.join("\n");
+}
+
+function treePrefix(
+  ancestorsOpen: readonly boolean[],
+  isLast: boolean
+): string {
+  let out = "";
+
+  for (const open of ancestorsOpen) {
+    out += open ? PIPE : GAP;
+  }
+
+  out += isLast ? CONNECT_END : CONNECT_MID;
+
+  return out;
+}
+
+/** Indent under a node for wrapped extras (aligns with title text). */
+function treeGap(ancestorsOpen: readonly boolean[], isLast: boolean): string {
+  let out = "";
+
+  for (const open of ancestorsOpen) {
+    out += open ? PIPE : GAP;
+  }
+
+  out += isLast ? GAP : PIPE;
+
+  return out;
 }
 
 function clip(text: string, max: number): string {
@@ -219,7 +256,7 @@ function paintGlyph(glyph: string, kind: ItemKind, color: boolean): string {
     return paint(glyph, CONSOLE.warn, true);
   }
 
-  return paint(glyph, CONSOLE.muted, true);
+  return paint(glyph, CONSOLE.soft, true);
 }
 
 function paintBody(part: string, kind: ItemKind, color: boolean): string {
@@ -228,18 +265,18 @@ function paintBody(part: string, kind: ItemKind, color: boolean): string {
   }
 
   if (kind === "done") {
-    return paint(part, CONSOLE.muted, true);
+    return paint(part, CONSOLE.soft, true);
   }
 
   if (kind === "current") {
-    return paint(part, CONSOLE.bright, true);
+    return paint(part, CONSOLE.fg, true);
   }
 
   if (kind === "blocked") {
     return paint(part, CONSOLE.warn, true);
   }
 
-  return paint(part, CONSOLE.muted, true);
+  return paint(part, CONSOLE.fg, true);
 }
 
 function kindOf(item: IChecklistItem, activeItemId: string | null): ItemKind {
@@ -258,33 +295,37 @@ function kindOf(item: IChecklistItem, activeItemId: string | null): ItemKind {
   return "pending";
 }
 
-/** One item: glyph + wrapped title (continuations indented). */
+/** One item: tree connector + status mark + wrapped title. */
 function formatItemLines(
   item: IChecklistItem,
   kind: ItemKind,
   columns: number,
   color: boolean,
-  depth: number,
+  ancestorsOpen: readonly boolean[],
+  isLast: boolean,
   extras: readonly string[]
 ): string[] {
   const glyph = GLYPH[kind];
   const painted = paintGlyph(glyph, kind, color);
-  const nest = CONT_INDENT.repeat(depth);
-  const budget = Math.max(4, columns - displayWidth(`${nest}${glyph} `));
+  const prefix = treePrefix(ancestorsOpen, isLast);
+  const leadPlain = `${prefix}${glyph} `;
+  const leadCols = displayWidth(leadPlain);
+  const budget = Math.max(4, columns - leadCols);
   const parts = wrapWords(item.title.trim(), budget);
   const lines = parts.map((part, i) => {
     const body = paintBody(part, kind, color);
 
     return i === 0
-      ? `${nest}${painted} ${body}`
-      : `${nest}${CONT_INDENT}${body}`;
+      ? `${prefix}${painted} ${body}`
+      : `${" ".repeat(leadCols)}${body}`;
   });
 
-  const extraBudget = Math.max(4, columns - nest.length - CONT_INDENT.length);
+  const extraLead = `${treeGap(ancestorsOpen, isLast)}    `;
+  const extraBudget = Math.max(4, columns - displayWidth(extraLead));
 
   for (const extra of extras) {
     for (const part of wrapWords(extra, extraBudget)) {
-      lines.push(paint(`${nest}${CONT_INDENT}${part}`, CONSOLE.muted, color));
+      lines.push(paint(`${extraLead}${part}`, CONSOLE.muted, color));
     }
   }
 
@@ -303,7 +344,7 @@ function applySelection(
 
     const plain = stripSgr(line);
 
-    if (plain.trimStart().startsWith(GLYPH.current)) {
+    if (plain.includes(GLYPH.current)) {
       return line;
     }
 
@@ -331,7 +372,7 @@ function focusExtras(item: IChecklistItem): string[] {
 function walkChecklist(
   plan: IPlanDocument,
   nodes: readonly IChecklistItem[],
-  depth: number,
+  ancestorsOpen: readonly boolean[],
   ctx: {
     readonly maxPending: number;
     readonly columns: number;
@@ -340,7 +381,8 @@ function walkChecklist(
     readonly out: string[];
   }
 ): void {
-  for (const item of nodes) {
+  nodes.forEach((item, index) => {
+    const isLast = index === nodes.length - 1;
     const kind = kindOf(item, plan.activeItemId);
     const isFocus =
       kind === "current" ||
@@ -351,10 +393,10 @@ function walkChecklist(
         ctx.pending.hidden += 1;
 
         if (item.children !== undefined) {
-          walkChecklist(plan, item.children, depth + 1, ctx);
+          walkChecklist(plan, item.children, [...ancestorsOpen, !isLast], ctx);
         }
 
-        continue;
+        return;
       }
 
       ctx.pending.shown += 1;
@@ -366,19 +408,20 @@ function walkChecklist(
         kind,
         ctx.columns,
         ctx.color,
-        depth,
+        ancestorsOpen,
+        isLast,
         isFocus ? focusExtras(item) : []
       )
     );
 
     if (item.children !== undefined) {
-      walkChecklist(plan, item.children, depth + 1, ctx);
+      walkChecklist(plan, item.children, [...ancestorsOpen, !isLast], ctx);
     }
-  }
+  });
 }
 
 /**
- * Tasks-rail body lines — goal cue + nested checklist for the session-bound plan.
+ * Tasks-rail body lines — labeled plan goal + nested checklist tree.
  */
 export function formatWorklistLines(
   plan: IPlanDocument | null,
@@ -397,16 +440,29 @@ export function formatWorklistLines(
 
   const lines: string[] = [];
   const goal = plan.goal.trim();
+  const open = countOpen(plan.items);
+  const done = countDone(plan.items);
+  const total = open + done;
+
+  lines.push(paint("PLAN", CONSOLE.bright, color));
 
   if (goal.length > 0) {
     for (const part of wrapWords(goal, columns)) {
-      lines.push(paint(part, CONSOLE.meta, color));
+      lines.push(paint(part, CONSOLE.fg, color));
     }
   }
 
+  lines.push(
+    paint(
+      total > 0 ? `TASKS  ${String(done)}/${String(total)}` : "TASKS",
+      CONSOLE.soft,
+      color
+    )
+  );
+
   const pending = { shown: 0, hidden: 0 };
 
-  walkChecklist(plan, plan.items, 0, {
+  walkChecklist(plan, plan.items, [], {
     maxPending,
     columns,
     color,
@@ -420,7 +476,7 @@ export function formatWorklistLines(
     );
   }
 
-  if (countOpen(plan.items) === 0) {
+  if (open === 0) {
     lines.push(paint("All done.", CONSOLE.bright, color));
   }
 

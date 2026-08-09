@@ -125,12 +125,12 @@ import {
 import { scopeLabel, planHint } from "./banner";
 import { resolveGate, type AutoGateResolver } from "./gate-setup";
 import {
-  printSessions,
   turnsToGreenLine,
   runMapCommand,
   runReviewCommand,
   runTraceCommand,
 } from "./repl-commands";
+import { openSessionsMenu } from "./session-menu";
 import {
   formatWorklistLines,
   formatPlanProposal,
@@ -1146,6 +1146,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Placeholder declarations; defined after runLine / editorControl are available.
   let handleHelp: () => Promise<void>;
+  let handleSessions: () => Promise<void>;
   let openScaffold: () => Promise<void>;
   // Assigned after the pane console exists (same pattern as handleHelp).
   let handleCopy: () => void = () => undefined;
@@ -1241,7 +1242,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           const { before, after } = await session.compact();
 
           await persist();
-          process.stdout.write(`compacted ${before} → ${after} messages\n`);
+          streamOut(`compacted ${before} → ${after} messages\n`);
         } finally {
           spinner.stop();
           lastStatus = "ready";
@@ -1332,7 +1333,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           .filter(Boolean);
 
         session.setScope(globs.length > 0 ? globs : WHOLE_REPO);
-        process.stdout.write(`scope: ${scopeLabel(session.scope)}\n`);
+        streamOut(`scope: ${scopeLabel(session.scope)}\n`);
         await persist();
         break;
       }
@@ -1355,20 +1356,20 @@ export async function repl(args: ICliArgs): Promise<number> {
       }
 
       case "sessions":
-        await printSessions(args.dir);
+        await handleSessions();
         break;
 
       case "memory": {
         if (arg.trim() === "forget") {
           await forgetMemory(args.dir);
-          process.stdout.write("  memory cleared for this repo\n");
+          streamOut("  memory cleared for this repo\n");
           break;
         }
 
         const ledger = await loadLedger(args.dir);
 
         if (ledger.entries.length === 0) {
-          process.stdout.write("  no learned lessons yet\n");
+          streamOut("  no learned lessons yet\n");
           break;
         }
 
@@ -1376,19 +1377,19 @@ export async function repl(args: ICliArgs): Promise<number> {
           activeRules(ledger, Date.now()).map((r) => r.name)
         );
 
-        process.stdout.write(
+        streamOut(
           `  ${String(ledger.entries.length)} lesson(s), ${String(activeNames.size)} active (● fires · ○ still accruing):\n`
         );
 
         for (const entry of ledger.entries.slice(0, 20)) {
           const mark = activeNames.has(entry.name) ? "●" : "○";
 
-          process.stdout.write(
+          streamOut(
             `    ${mark} ${entry.rule} · ${String(entry.hits)} hit(s)\n`
           );
         }
 
-        process.stdout.write("  /memory forget to clear\n");
+        streamOut("  /memory forget to clear\n");
         break;
       }
 
@@ -1398,7 +1399,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           0
         );
 
-        process.stdout.write(
+        streamOut(
           `  ${String(session.messages.length)} messages · ~${String(Math.round(chars / 4))} tokens (rough)\n`
         );
         break;
@@ -1408,21 +1409,21 @@ export async function repl(args: ICliArgs): Promise<number> {
         const m = session.metrics;
 
         if (m.calls === 0) {
-          process.stdout.write("  no model calls yet\n");
+          streamOut("  no model calls yet\n");
         } else {
-          process.stdout.write(
+          streamOut(
             `  ${String(m.calls)} call(s) · ${String(m.promptTokens)} in / ${String(m.completionTokens)} out · ` +
               `${String(m.lastTokensPerSecond)} tok/s last · ${String(m.avgTokensPerSecond)} tok/s avg\n`
           );
         }
 
-        process.stdout.write(turnsToGreenLine(lastTurnsToGreen));
+        streamOut(turnsToGreenLine(lastTurnsToGreen));
 
         break;
       }
 
       default:
-        process.stdout.write(`unknown command: ${line} (try /help)\n`);
+        streamOut(`unknown command: ${line} (try /help)\n`);
     }
 
     return false;
@@ -2306,6 +2307,32 @@ export async function repl(args: ICliArgs): Promise<number> {
         const deps = await buildHelpDeps();
 
         await runCapabilityMenu(deps);
+      } finally {
+        editorControl?.setInputInert(false);
+        editorControl?.resume();
+        editorControl?.getBuffer().setText("");
+      }
+
+      refreshStatus();
+    };
+
+    handleSessions = async (): Promise<void> => {
+      editorControl?.suspend();
+      editorControl?.setInputInert(true);
+
+      try {
+        await openSessionsMenu({
+          cwd: args.dir,
+          out: streamOut,
+          render: (lines) => {
+            chrome.setOverlay(lines);
+          },
+          close: () => {
+            chrome.clearOverlay();
+          },
+          columns: transcriptCols(),
+          viewportRows: overlayBudget(),
+        });
       } finally {
         editorControl?.setInputInert(false);
         editorControl?.resume();

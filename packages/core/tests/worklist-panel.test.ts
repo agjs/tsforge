@@ -29,7 +29,7 @@ function plain(lines: readonly string[]): string[] {
 }
 
 describe("formatWorklistLines", () => {
-  test("shows goal cue, nested tree, active ▸", () => {
+  test("labels PLAN/TASKS and draws parent→child tree with status marks", () => {
     const lines = formatWorklistLines(
       plan(
         [
@@ -49,11 +49,13 @@ describe("formatWorklistLines", () => {
     );
     const text = plain(lines);
 
-    expect(text[0]).toBe("PLAN.md");
-    expect(text).toContain("☑ First");
-    expect(text).toContain("▸ Second");
-    expect(text.some((l) => l.includes("Child"))).toBe(true);
-    expect(text).toContain("☐ Third");
+    expect(text[0]).toBe("PLAN");
+    expect(text).toContain("PLAN.md");
+    expect(text).toContain("TASKS  1/4");
+    expect(text).toContain("├─ [x] First");
+    expect(text).toContain("├─ [>] Second");
+    expect(text).toContain("│  └─ [ ] Child");
+    expect(text).toContain("└─ [ ] Third");
   });
 
   test("soft-wraps long goal — no mid-word clip", () => {
@@ -81,11 +83,11 @@ describe("formatWorklistLines", () => {
     );
 
     expect(
-      lines.some((l) => l.includes(CONSOLE.green) && l.includes("☑"))
+      lines.some((l) => l.includes(CONSOLE.green) && l.includes("[x]"))
     ).toBe(true);
   });
 
-  test("shows verify on focused row", () => {
+  test("shows verify under focused row, tree-indented", () => {
     const lines = formatWorklistLines(
       plan(
         [
@@ -123,13 +125,19 @@ describe("formatWorklistLines", () => {
     ).toContain("All done.");
   });
 
-  test("color mode paints current with CONSOLE.bright", () => {
+  test("color mode paints current mark bright and body fg (not meta blue)", () => {
     const lines = formatWorklistLines(
       plan([{ id: "a", title: "Now", status: "active" }], "g", "a"),
       { columns: 36, color: true }
     );
 
-    expect(lines.some((l) => l.includes(CONSOLE.bright))).toBe(true);
+    expect(
+      lines.some((l) => l.includes(CONSOLE.bright) && l.includes("[>]"))
+    ).toBe(true);
+    expect(lines.some((l) => l.includes(CONSOLE.fg) && l.includes("Now"))).toBe(
+      true
+    );
+    expect(lines.every((l) => !l.includes(CONSOLE.meta))).toBe(true);
   });
 
   test("worklistBadge is done/total", () => {
@@ -144,7 +152,7 @@ describe("formatWorklistLines", () => {
     expect(worklistBadge(null)).toBe("");
   });
 
-  test("formatPlanProposal is a PLAN card with items, not raw JSON", () => {
+  test("formatPlanProposal is a PLAN card with tree items, not raw JSON", () => {
     const card = formatPlanProposal(
       plan(
         [
@@ -163,8 +171,8 @@ describe("formatWorklistLines", () => {
 
     expect(card).toContain("PLAN");
     expect(card).toContain("Ship plan UI");
-    expect(card).toContain("Wire present_plan");
-    expect(card).toContain("Nested");
+    expect(card).toContain("└─ [ ] Wire present_plan");
+    expect(card).toContain("└─ [ ] Nested");
     expect(card).toContain("approve");
     expect(card).not.toContain('"items"');
   });

@@ -27,7 +27,7 @@ describe("menu-chrome", () => {
     expect(row).not.toContain(STYLE.cyan);
   });
 
-  test("formatMenuRow inactive has no accent paint", () => {
+  test("formatMenuRow inactive paints CONSOLE.fg (no SGR inherit / no cyan)", () => {
     const row = formatMenuRow({
       label: "/clear",
       active: false,
@@ -36,7 +36,10 @@ describe("menu-chrome", () => {
     });
 
     expect(stripSgr(row)).toMatch(/^ {2}/);
+    expect(row).toContain(CONSOLE.fg);
     expect(row).not.toContain(CONSOLE.bright);
+    expect(row).not.toContain(CONSOLE.meta);
+    expect(row).not.toContain(STYLE.cyan);
   });
 
   test("formatOverlayShell orders title, body, rule+describe, footer", () => {
