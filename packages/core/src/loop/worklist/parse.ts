@@ -4,10 +4,13 @@ import { isFeatureId } from "../greenfield/state";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { IParseWorklistOptions, IWorklistItem } from "./worklist.types";
 
-const DEFAULT_LOOKUP = ["PLAN.md", "TASKS.md", ".specs/next.md"] as const;
+/** Human markdown lookup only — never `.specs/next.md` (product/solo-spec). */
+const DEFAULT_LOOKUP = ["PLAN.md", "TASKS.md"] as const;
 
 const CHECKBOX_RE = /^(\s*)[-*]\s+\[([ xX])\]\s+(.+)$/;
 const NUMBERED_RE = /^(\d+)\.\s+(.+)$/;
+/** Plain bullets (plan-mode paste) — open items, not checkboxes. */
+const BULLET_RE = /^(\s*)[-*]\s+(?!\[)(.+)$/;
 
 function splitList(value: string): string[] {
   return value
@@ -145,6 +148,17 @@ function collectDrafts(md: string): IWorklistDraft[] {
       continue;
     }
 
+    const bullet = BULLET_RE.exec(line);
+
+    if (bullet !== null) {
+      pushCurrent(drafts, current);
+      current = {
+        text: (bullet[2] ?? "").trim(),
+        done: false,
+      };
+      continue;
+    }
+
     if (current !== null) {
       applyProperty(current, line);
     }
@@ -243,7 +257,7 @@ export function acceptMapOf(
 
 /**
  * Resolve which worklist file to use. Explicit path wins when present;
- * otherwise PLAN.md → TASKS.md → .specs/next.md under `cwd`.
+ * otherwise PLAN.md → TASKS.md under `cwd`.
  */
 export async function resolveWorklistPath(
   cwd: string,

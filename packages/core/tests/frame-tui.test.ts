@@ -530,7 +530,7 @@ describe("PaneScreen", () => {
     // Under-rule joins the gutter spine (├) and the outer rail (┤).
     expect(railRule[gutterIdx]).toBe("├");
     expect(railRule.trimEnd().endsWith("┤")).toBe(true);
-    expect(screen.text()).toContain("/work");
+    expect(screen.text()).toContain("approve a plan");
     expect(screen.row(promptBoxTop(24))).toContain("╭");
     expect(screen.row(expectedPromptRow(24))).toContain(">");
     expect(screen.row(expectedPromptRow(24))).toContain("describe a task");
@@ -721,7 +721,7 @@ describe("PaneScreen", () => {
     panes.enter();
     // Wider than the main pane — old path let this punch through the gutter.
     panes.appendMain(`│ ${"W".repeat(200)}\n`);
-    panes.setPanel(["/work"]);
+    panes.setPanel(["approve a plan"]);
 
     const screen = new VirtualScreen(24, 100);
 
@@ -828,19 +828,22 @@ describe("PaneScreen", () => {
     panes.setPanel(
       formatWorklistLines(
         {
+          schemaVersion: 2,
+          id: "plan-tui",
           goal: "PLAN.md",
-          features: [
+          activeItemId: "a",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          items: [
             {
               id: "a",
-              desc: "Accept a one-line description via argument or interactive prompt.",
-              passes: false,
-              attempts: 0,
+              title:
+                "Accept a one-line description via argument or interactive prompt.",
+              status: "active",
             },
             {
               id: "b",
-              desc: "Create a flat list of independent verifiable features.",
-              passes: false,
-              attempts: 0,
+              title: "Create a flat list of independent verifiable features.",
+              status: "pending",
             },
           ],
         },
@@ -1255,7 +1258,7 @@ describe("PaneScreen", () => {
     expect(narrow.row(expectedPromptRow(20, 60))).toContain("hi");
     // Narrow: no panel split tee (outer │ still frames the window).
     expect(narrow.row(titleRow(20, 60) + 2)).not.toContain("┬");
-    expect(narrow.text()).not.toContain("/work");
+    expect(narrow.text()).not.toContain("approve a plan");
   });
 
   test("resize no-op when geometry unchanged does not clear", () => {

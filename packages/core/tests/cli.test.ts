@@ -491,6 +491,9 @@ test("--version/-V and --help/-h parse as flags, not as a task", () => {
 test("cliUsage documents the print-and-exit flags it is reached by", () => {
   const usage = cliUsage();
 
+  expect(usage).not.toContain("--work");
+  expect(usage).not.toContain("--tick");
+
   expect(usage).toContain("--version");
   expect(usage).toContain("--help");
   expect(usage).toContain("--accept");

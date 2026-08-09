@@ -90,6 +90,11 @@ import {
   GENERATE_IMAGE_TOOL,
   CHECK_TOOL,
   ASK_USER_TOOL,
+  TASK_LIST_TOOL,
+  TASK_FOCUS_TOOL,
+  TASK_COMPLETE_TOOL,
+  TASK_UNCOMPLETE_TOOL,
+  PRESENT_PLAN_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -147,7 +152,12 @@ type AdvertisedTool =
   | typeof READ_IMAGE_TOOL
   | typeof GENERATE_IMAGE_TOOL
   | typeof CHECK_TOOL
-  | typeof ASK_USER_TOOL;
+  | typeof ASK_USER_TOOL
+  | typeof TASK_LIST_TOOL
+  | typeof TASK_FOCUS_TOOL
+  | typeof TASK_COMPLETE_TOOL
+  | typeof TASK_UNCOMPLETE_TOOL
+  | typeof PRESENT_PLAN_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
  *  image tools are advertised. Resolved once by the driver (run.ts) so
@@ -202,7 +212,8 @@ export function toolsFor(
   offerConventions = false,
   offerCheck = false,
   offerAskUser = false,
-  conventionTopics: readonly string[] = []
+  conventionTopics: readonly string[] = [],
+  offerTaskTools = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -219,7 +230,16 @@ export function toolsFor(
   // (an interactive co-pilot session); off for autonomous eval/CI so the model isn't
   // tempted to ask a question no one will answer. The handler ALSO guards on
   // ctx.humanPresent, so a stray call in an unattended run returns "proceed" not a hang.
-  const askUser: AdvertisedTool[] = offerAskUser ? [ASK_USER_TOOL] : [];
+  // present_plan rides the same opt-in; offeredToolsFor withholds it outside plan mode.
+  const askUser: AdvertisedTool[] = offerAskUser
+    ? [ASK_USER_TOOL, PRESENT_PLAN_TOOL]
+    : [];
+
+  // Session-bound checklist tools — only when a plan was approved for this session
+  // (`activePlanId`). Off until then so plan-mode exploration isn't cluttered.
+  const taskTools: AdvertisedTool[] = offerTaskTools
+    ? [TASK_LIST_TOOL, TASK_FOCUS_TOOL, TASK_COMPLETE_TOOL, TASK_UNCOMPLETE_TOOL]
+    : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
   // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
@@ -239,6 +259,7 @@ export function toolsFor(
       ...conventions,
       ...check,
       ...askUser,
+      ...taskTools,
       ...web,
       ...git,
       ...script,
@@ -253,6 +274,7 @@ export function toolsFor(
     ...conventions,
     ...check,
     ...askUser,
+    ...taskTools,
     ...LSP_TOOLS,
     ...web,
     ...git,
@@ -329,6 +351,12 @@ export interface ILoopCtxTool {
    *  demand for the `check` tool. Threaded into the tool context; declared here so
    *  the seam is typed, not accidental. Absent ⇒ `check` isn't offered. */
   runCheck?: IToolContext["runCheck"];
+  /** Session-bound plan id — task_* tools read/write this plan. */
+  activePlanId?: string | null;
+  /** Fired after a task_* tool persists a plan change (Tasks rail refresh). */
+  onPlanChanged?: IToolContext["onPlanChanged"];
+  /** present_plan proposal callback (REPL renders pending plan). */
+  onPlanPresented?: IToolContext["onPlanPresented"];
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
@@ -2568,7 +2596,7 @@ async function scopeRevision(
   const parts: string[] = [];
 
   for (const path of [...snap.existed].sort()) {
-    parts.push(`${path} ${snap.contents.get(path) ?? ""}`);
+    parts.push(`${path}\0${snap.contents.get(path) ?? ""}`);
   }
 
   return String(Bun.hash(parts.join("")));

@@ -7,6 +7,7 @@ import type { McpRegistry } from "../../mcp";
 import type { PolicyMode, IPolicyRules } from "../../policy";
 import type { IValidateResult } from "../../validate/validate.types";
 import type { IConventionProvider } from "../conventions-provider";
+import type { IPlanDocument } from "../worklist/checklist.types";
 
 /** What one on-demand gate run produced for the `check` tool: the standard
  *  validate result PLUS the files the gate's autofix reformatted/rewrote on disk
@@ -161,6 +162,13 @@ export interface IToolContext {
   /** Run the fast acceptance gate on demand for the `check` tool (see {@link RunCheck}).
    *  Wired by the build overlay; absent ⇒ `check` says it isn't available here. */
   runCheck?: RunCheck;
+  /** Session-bound plan id under `.tsforge/worklist/plans/<id>.json`. Absent/null
+   *  ⇒ task_* tools refuse (no plan approved for this session yet). */
+  activePlanId?: string | null;
+  /** Fired after a task_* tool persists a plan change — REPL refreshes the Tasks rail. */
+  onPlanChanged?: (plan: IPlanDocument) => void;
+  /** Fired when present_plan validates a proposal (pending until human approve). */
+  onPlanPresented?: (plan: IPlanDocument) => void;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

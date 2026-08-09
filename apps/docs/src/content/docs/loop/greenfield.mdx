@@ -9,6 +9,8 @@ Most of tsforge drives **one change to green**. Greenfield mode drives a **whole
 tsforge --greenfield "build a kanban board" --accept "bun run build"
 ```
 
+This is the **autonomous / headless** checklist loop (scaffold and app builds). Interactive sessions use a different path: [plan mode](/cli/plan-mode/) → approve → `.tsforge/worklist/plans/<planId>.json` (session-bound) → implement in the same REPL (`--continue`). Do not confuse the two folders.
+
 ## How it works
 
 1. **Plan**: a planner model turns your one-line goal into a high-level spec and a flat feature checklist (sprints, not file-level steps). Written to `.tsforge/greenfield/`.

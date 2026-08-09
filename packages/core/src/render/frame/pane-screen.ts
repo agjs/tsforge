@@ -75,7 +75,7 @@ const FORGE_PLACEHOLDER = "describe a task, or /help";
 
 const GUTTER = "│";
 /** Fallback when no worklist lines are set — mirrors formatWorklistLines empty. */
-const EMPTY_PANEL_LINES = ["/work PLAN.md", "or /work <goal>"] as const;
+const EMPTY_PANEL_LINES = ["approve a plan", "to fill this list"] as const;
 
 /**
  * Interactive console TUI: dense top strip, hairlines, scroll + rail, caret input.
@@ -309,6 +309,7 @@ export class PaneScreen {
       head === "(empty)" ||
       head === "—" ||
       head.startsWith("No worklist") ||
+      head === "approve a plan" ||
       head === "/work to start" ||
       head === "/work"
     ) {

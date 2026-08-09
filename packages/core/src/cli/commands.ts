@@ -31,13 +31,7 @@ export const COMMANDS: readonly ICommandSpec[] = [
   {
     name: "/plan",
     summary:
-      "toggle plan mode (on by default: explore → clarify → plan; 'approve' implements)",
-  },
-  {
-    name: "/work",
-    arg: "[file|goal]",
-    summary:
-      "drive a checklist (PLAN.md / file) to completion, or plan one from a goal",
+      "toggle plan mode (on by default: explore → checklist → approve saves + implements)",
   },
   {
     name: "/copy",

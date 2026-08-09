@@ -130,14 +130,17 @@ import {
   runReviewCommand,
   runTraceCommand,
 } from "./repl-commands";
-import { runWorkCommand } from "./repl-work";
 import {
-  WORKLIST_STATE,
   formatWorklistLines,
+  formatPlanProposal,
   worklistBadge,
+  pendingPlanBadge,
+  seedWorklistFromPlan,
+  persistPlanDocument,
+  goalFromMessages,
+  loadPlan,
 } from "../loop/worklist";
-import { loadState } from "../loop/greenfield";
-import { runInlineMenu } from "../render/inline-menu";
+import type { IPlanDocument } from "../loop/worklist";
 
 /** A unique-enough id for a new session (time + a little randomness). */
 function newSessionId(): string {
@@ -515,6 +518,10 @@ async function initReplSession(args: ICliArgs): Promise<{
     // gate so it re-gates on the first send — never silently dropped across --continue
     // (WS-C; the persisted counterpart of the /clear carry).
     ...(resumed?.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
+    ...(typeof resumed?.activePlanId === "string" &&
+    resumed.activePlanId.length > 0
+      ? { activePlanId: resumed.activePlanId }
+      : {}),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
@@ -657,6 +664,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       planMode,
       // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
       pausedWithEdit: session.hasDeferredGate,
+      activePlanId: session.getActivePlanId(),
       messages: [...session.messages],
     });
   };
@@ -1028,13 +1036,44 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    // GENERAL plan mode, approval: unlock the tools and implement the plan that
-    // is already the latest assistant message. Only an explicit approval word
-    // counts ("yes" may be answering one of the model's clarifying questions).
+    // GENERAL plan mode, approval: bind present_plan proposal (or fenced JSON
+    // fallback), unlock tools, implement. Only an explicit approval word counts.
     if (route === "plan-approval") {
+      const pending = session.takePendingPlan();
+      let plan: IPlanDocument | null = null;
+
+      if (pending !== null) {
+        plan = persistPlanDocument(args.dir, pending);
+      } else {
+        const last = session.messages.at(-1);
+        const planText =
+          last?.role === "assistant" && typeof last.content === "string"
+            ? last.content
+            : "";
+        const seeded = seedWorklistFromPlan(
+          args.dir,
+          planText,
+          goalFromMessages(session.messages)
+        );
+
+        if (!seeded.ok) {
+          echo(`  ✗ ${seeded.error}\n`);
+
+          return;
+        }
+
+        plan = seeded.plan;
+      }
+
+      session.setActivePlanId(plan.id);
+      syncWorklistPanel(plan);
+      echo(
+        `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
+      );
       planMode = false;
       planDiscussed = false;
       session.setPlanMode(false);
+      await persist();
       echo("  ✓ plan approved — implementing\n");
       await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
 
@@ -1047,14 +1086,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       await runSend(line);
       planDiscussed = true;
 
+      // present_plan already paints the card + approve footer mid-turn. Only
+      // nudge here for the legacy ## Plan heading path (no present_plan call).
       const last = session.messages.at(-1);
-      const planned =
+      const plannedHeading =
         last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
 
-      // Only nudge approve when a real plan was proposed — casual turns in
-      // plan mode already show ◆plan in the top strip; repeating the PLAN
-      // footer after every "sup" is noise.
-      if (planned) {
+      if (plannedHeading && session.getPendingPlan() === null) {
         const cols = panesLive()
           ? paneScreen.mainInnerCols()
           : process.stdout.columns > 0
@@ -1095,7 +1133,6 @@ export async function repl(args: ICliArgs): Promise<number> {
   let openScaffold: () => Promise<void>;
   // Assigned after the pane console exists (same pattern as handleHelp).
   let handleCopy: () => void = () => undefined;
-  let handleWork: (arg: string) => Promise<void> = () => Promise.resolve();
 
   // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
   // it can rebuild `session` (e.g. /clear) and reach config/persist.
@@ -1115,10 +1152,6 @@ export async function repl(args: ICliArgs): Promise<number> {
         handleCopy();
         break;
 
-      case "work":
-        await handleWork(arg);
-        break;
-
       case "clear": {
         // Rebuild the session with the current state (config is not reused;
         // repl's /clear creates a fresh Session.create call)
@@ -1128,6 +1161,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         // not merely a dirty tree, so a fresh session would otherwise never re-validate
         // the on-disk edit on a conversational send (WS-C).
         const carryDeferredGate = session.hasDeferredGate;
+        const carryPlanId = session.getActivePlanId();
 
         session = await Session.create({
           provider,
@@ -1152,9 +1186,11 @@ export async function repl(args: ICliArgs): Promise<number> {
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),
+          ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
         });
         wireDelegation(); // re-offer spawn_agent on the rebuilt session
         wireImages(); // re-offer read_image/generate_image + preview on the rebuild
+        wirePlanRail();
         // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
         // chips), so their temp files are now orphaned.
         void discardClipboardImages(pendingImages.splice(0));
@@ -1511,92 +1547,58 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
-  /** Paint the Tasks rail from a worklist state (or empty-rail hints). */
-  const syncWorklistPanel = (
-    workState: Awaited<ReturnType<typeof loadState>>
-  ): void => {
+  /** Paint the Tasks rail from the session-bound plan (or empty-rail hints). */
+  const syncWorklistPanel = (plan: IPlanDocument | null): void => {
     if (!panesLive()) {
       return;
     }
 
     const cols = Math.max(12, paneScreen.panelInnerCols());
     const maxPending = Math.max(4, paneScreen.panelListBudgetRows());
-    const state = workState ?? { goal: "worklist", features: [] };
 
     paneScreen.setPanel(
-      formatWorklistLines(state, {
+      formatWorklistLines(plan, {
         columns: cols,
         maxPending,
         color: true,
       })
     );
-    paneScreen.setWorklistBadge(
-      state.features.length > 0 ? worklistBadge(state) : ""
-    );
+    paneScreen.setWorklistBadge(worklistBadge(plan));
 
     syncPaneChrome();
   };
 
-  handleWork = async (workArg: string): Promise<void> => {
-    await runWorkCommand({
-      args,
-      arg: workArg,
-      echo: (s) => {
-        streamOut(s);
-      },
-      rl,
-      // Pane editor leaves `rl` null — approve via the shared overlay menu.
-      askApprove: async () => {
-        editorControl?.suspend();
-        editorControl?.setInputInert(true);
-
-        try {
-          const picked = await runInlineMenu(
-            [
-              {
-                id: "approve",
-                label: "approve",
-                describe: "Save this list and start driving remaining items",
-              },
-              {
-                id: "cancel",
-                label: "cancel",
-                describe: "Discard the proposed worklist",
-              },
-            ],
-            {
-              title: "Approve this worklist?",
-              render: (lines) => {
-                chrome.setOverlay(lines);
-              },
-              close: () => {
-                chrome.clearOverlay();
-              },
-              columns: transcriptCols(),
-              viewportRows: overlayBudget(),
-            }
-          );
-
-          return picked === 0 ? "approve" : "cancel";
-        } finally {
-          editorControl?.setInputInert(false);
-          editorControl?.resume();
-        }
-      },
-      workProvider: provider,
-      activeModelEntry,
-      gate: session.gate,
-      tick: args.tick,
-      logFile,
-      id,
-      onProgress: (workState) => {
-        syncWorklistPanel(workState);
-      },
+  const wirePlanRail = (): void => {
+    session.setOnPlanChanged((plan) => {
+      syncWorklistPanel(plan);
     });
+    session.setOnPlanPresented((plan) => {
+      planDiscussed = true;
+      const cols = panesLive()
+        ? paneScreen.mainInnerCols()
+        : process.stdout.columns > 0
+          ? process.stdout.columns
+          : 80;
 
-    // Keep the Tasks rail hydrated from disk after /work (do not wipe on exit).
-    syncWorklistPanel(await loadState(args.dir, WORKLIST_STATE));
+      echo(`\n${formatPlanProposal(plan, cols, true)}\n`);
+      // Preview in Tasks rail before approve (pending badge).
+      if (panesLive()) {
+        paneScreen.setPanel(
+          formatWorklistLines(plan, {
+            columns: Math.max(12, paneScreen.panelInnerCols()),
+            maxPending: Math.max(4, paneScreen.panelListBudgetRows()),
+            color: true,
+          })
+        );
+        paneScreen.setWorklistBadge(pendingPlanBadge(plan));
+        syncPaneChrome();
+      }
+
+      echo(`\n${planHint(true, cols)}\n`);
+    });
   };
+
+  wirePlanRail();
 
   /** Stream conversation text: main pane when live, else plain stdout (pipes). */
   const streamOut = (text: string): void => {
@@ -2043,8 +2045,14 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   process.stdout.on("resize", handleResize);
 
-  // Restore the terminal even on an unexpected exit (leave is idempotent).
+  // Editor handle lives inside the prompt loop below; this ref lets the process
+  // exit hook tear down Kitty/modifyOtherKeys even on an unexpected exit.
+  // Without that cleanup the shell sees Ctrl+C as literal `;5;99~` junk.
+  let editorForExit: { close: () => void } | null = null;
+
+  // Restore the terminal even on an unexpected exit (leave/close are idempotent).
   process.on("exit", () => {
+    editorForExit?.close();
     paneScreen.leave();
   });
 
@@ -2693,6 +2701,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       };
 
       editorControl = editorHandle;
+      editorForExit = editorHandle;
 
       editorHandle.onSubmit(submitLine);
       editorHandle.onInterrupt(() => {
@@ -2764,12 +2773,14 @@ export async function repl(args: ICliArgs): Promise<number> {
         }
       }
 
-      // Resume Tasks rail from a prior /work run (`.tsforge/worklist/`).
-      void loadState(args.dir, WORKLIST_STATE).then((workState) => {
-        if (panesLive()) {
-          syncWorklistPanel(workState);
-        }
-      });
+      // Rehydrate Tasks rail from the session-bound plan (`activePlanId`).
+      const planId = session.getActivePlanId();
+      const plan =
+        planId !== null ? loadPlan(args.dir, planId) : null;
+
+      if (panesLive()) {
+        syncWorklistPanel(plan);
+      }
     };
 
     if (interactiveTty) {

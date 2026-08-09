@@ -37,8 +37,24 @@ export {
   runWorklist,
   tickWorklistFile,
   formatWorklistLines,
+  worklistBadge,
+  extractPlanJson,
+  seedWorklistFromPlan,
+  goalFromMessages,
+  loadPlan,
+  savePlan,
+  loadPlanIndex,
+  isChecklistComplete,
+  countOpen,
+  formatPlanTree,
 } from "./worklist";
-export type { IWorklistItem, IPrepareWorklistOptions } from "./worklist";
+export type {
+  IWorklistItem,
+  IPrepareWorklistOptions,
+  SeedWorklistResult,
+  IPlanDocument,
+  IChecklistItem,
+} from "./worklist";
 export type {
   IFeature,
   IGreenfieldState,
@@ -62,6 +78,7 @@ export {
 export {
   Session,
   PLAN_APPROVED_NOTE,
+  checklistOpenNudge,
   filterGateStream,
   type ISessionConfig,
   type ISendResult,

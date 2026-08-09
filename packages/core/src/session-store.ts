@@ -47,6 +47,10 @@ export interface ISessionRecord {
    *  restored on `--continue`/`--resume` so a resumed session re-gates that edit on its
    *  first send instead of silently dropping the deferred gate (WS-C, same as /clear). */
   pausedWithEdit?: boolean;
+  /** Session-bound checklist plan id (`plans/<id>.json`). Restored on `--continue`
+   *  so task_* tools, turn inject, and the Tasks rail stay scoped to this session's
+   *  plan (concurrent sessions in one project each bind their own id). */
+  activePlanId?: string | null;
   /** The full conversation, including the system message. */
   messages: IChatMessage[];
 }
@@ -194,6 +198,9 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
         // of dropping the deferred gate across the process boundary (WS-C).
         ...(typeof data.pausedWithEdit === "boolean"
           ? { pausedWithEdit: data.pausedWithEdit }
+          : {}),
+        ...(data.activePlanId === null || typeof data.activePlanId === "string"
+          ? { activePlanId: data.activePlanId }
           : {}),
         messages: toMessages(data.messages),
       };

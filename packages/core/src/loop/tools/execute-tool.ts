@@ -15,6 +15,13 @@ import { doSpawnAgent } from "./spawn-agent";
 import { doReadImage, doGenerateImage } from "./image-tools";
 import { doCheck } from "./check-tool";
 import { doAskUser } from "./ask-user-tool";
+import {
+  doTaskComplete,
+  doTaskFocus,
+  doTaskList,
+  doTaskUncomplete,
+} from "./task-tools";
+import { doPresentPlan } from "./present-plan-tool";
 import { reject, type IToolContext } from "./tool-context";
 import {
   classifyAction,
@@ -62,6 +69,11 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.generateImage]: doGenerateImage,
   [TOOL_NAME.check]: doCheck,
   [TOOL_NAME.askUser]: doAskUser,
+  [TOOL_NAME.taskList]: doTaskList,
+  [TOOL_NAME.taskFocus]: doTaskFocus,
+  [TOOL_NAME.taskComplete]: doTaskComplete,
+  [TOOL_NAME.taskUncomplete]: doTaskUncomplete,
+  [TOOL_NAME.presentPlan]: doPresentPlan,
 };
 
 function isToolName(name: string): name is ToolName {

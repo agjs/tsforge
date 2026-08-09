@@ -118,6 +118,12 @@ describe("parseWorklist", () => {
     expect(items[0]?.text).toContain("hud.ts");
     expect(items[2]?.text).toContain("Uniform grid");
   });
+
+  test("parses plain bullets as open items", () => {
+    const items = parseWorklist("## Plan\n\n- First\n- Second\n");
+
+    expect(items.map((i) => i.text)).toEqual(["First", "Second"]);
+  });
 });
 
 describe("resolveWorklistPath", () => {
@@ -139,12 +145,12 @@ describe("resolveWorklistPath", () => {
     expect(await resolveWorklistPath(dir, "MY.md")).toBe(path);
   });
 
-  test("looks up PLAN.md, then TASKS.md, then .specs/next.md", async () => {
+  test("looks up PLAN.md then TASKS.md — not .specs/next.md", async () => {
     expect(await resolveWorklistPath(dir)).toBeNull();
 
     await mkdir(join(dir, ".specs"), { recursive: true });
     await writeFile(join(dir, ".specs", "next.md"), "- [ ] from specs\n");
-    expect(await resolveWorklistPath(dir)).toBe(join(dir, ".specs", "next.md"));
+    expect(await resolveWorklistPath(dir)).toBeNull();
 
     await writeFile(join(dir, "TASKS.md"), "- [ ] from tasks\n");
     expect(await resolveWorklistPath(dir)).toBe(join(dir, "TASKS.md"));

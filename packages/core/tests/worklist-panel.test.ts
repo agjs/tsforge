@@ -1,14 +1,27 @@
 import { test, expect, describe } from "bun:test";
-import { formatWorklistLines, worklistBadge } from "../src/loop/worklist/panel";
-import type { IGreenfieldState } from "../src/loop/greenfield";
+import {
+  formatWorklistLines,
+  formatPlanProposal,
+  worklistBadge,
+  pendingPlanBadge,
+} from "../src/loop/worklist/panel";
+import type { IPlanDocument } from "../src/loop/worklist/checklist.types";
 import { stripSgr } from "../src/render/frame";
 import { CONSOLE } from "../src/render/frame/chrome";
 
-function state(
-  features: IGreenfieldState["features"],
-  goal = "g"
-): IGreenfieldState {
-  return { goal, features };
+function plan(
+  items: IPlanDocument["items"],
+  goal = "g",
+  activeItemId: string | null = null
+): IPlanDocument {
+  return {
+    schemaVersion: 2,
+    id: "plan-1",
+    goal,
+    activeItemId,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    items,
+  };
 }
 
 function plain(lines: readonly string[]): string[] {
@@ -16,103 +29,74 @@ function plain(lines: readonly string[]): string[] {
 }
 
 describe("formatWorklistLines", () => {
-  test("shows goal cue, current ▸, pending ○ — no worklist N/M header", () => {
+  test("shows goal cue, nested tree, active ▸", () => {
     const lines = formatWorklistLines(
-      state(
+      plan(
         [
-          { id: "a", desc: "First", passes: true, attempts: 1 },
-          { id: "b", desc: "Second", passes: false, attempts: 0 },
-          { id: "c", desc: "Third", passes: false, attempts: 0 },
-          { id: "d", desc: "Fourth", passes: false, attempts: 0 },
+          { id: "a", title: "First", status: "done" },
+          {
+            id: "b",
+            title: "Second",
+            status: "active",
+            children: [{ id: "b1", title: "Child", status: "pending" }],
+          },
+          { id: "c", title: "Third", status: "pending" },
         ],
-        "PLAN.md"
+        "PLAN.md",
+        "b"
       ),
-      { maxPending: 2, columns: 36, color: false }
+      { maxPending: 4, columns: 36, color: false }
     );
     const text = plain(lines);
 
     expect(text[0]).toBe("PLAN.md");
-    expect(text.some((l) => l.startsWith("worklist"))).toBe(false);
     expect(text).toContain("✓ First");
     expect(text).toContain("▸ Second");
+    expect(text.some((l) => l.includes("Child"))).toBe(true);
     expect(text).toContain("○ Third");
-    expect(text).toContain("○ Fourth");
   });
 
-  test("wraps long descriptions to columns", () => {
-    const columns = 20;
+  test("shows verify on focused row", () => {
     const lines = formatWorklistLines(
-      state(
+      plan(
         [
           {
             id: "a",
-            desc: "Accept a one-line goal and produce a sprint checklist",
-            passes: false,
-            attempts: 0,
+            title: "Wire rail",
+            status: "active",
+            verify: "bun test panel",
           },
         ],
-        "worklist"
+        "goal",
+        "a"
       ),
-      { columns, color: false }
+      { columns: 40, color: false }
     );
     const text = plain(lines);
-    const current = text.find((l) => l.startsWith("▸ "));
 
-    expect(current).toBeDefined();
-    expect(text.length).toBeGreaterThan(1);
-    expect(text.some((l) => l.startsWith("  "))).toBe(true);
-
-    for (const line of text) {
-      expect(line.length).toBeLessThanOrEqual(columns);
-    }
-
-    expect(text.join(" ")).toContain("checklist");
-    expect(text.join("\n")).not.toMatch(/checklis\n/u);
+    expect(text.some((l) => l.includes("verify: bun test panel"))).toBe(true);
   });
 
-  test("empty state points at /work PLAN.md", () => {
-    expect(
-      plain(formatWorklistLines(state([], "worklist"), { color: false }))
-    ).toEqual(["/work PLAN.md", "or /work <goal>"]);
+  test("empty state points at plan approve", () => {
+    expect(plain(formatWorklistLines(null, { color: false }))).toEqual([
+      "approve a plan",
+      "to fill this list",
+    ]);
   });
 
-  test("all done and parked-only copy", () => {
+  test("all done copy", () => {
     expect(
       plain(
-        formatWorklistLines(
-          state([{ id: "a", desc: "A", passes: true, attempts: 1 }]),
-          { color: false }
-        )
+        formatWorklistLines(plan([{ id: "a", title: "A", status: "done" }]), {
+          color: false,
+        })
       )
     ).toContain("All done.");
-
-    const parked = plain(
-      formatWorklistLines(
-        state([
-          { id: "a", desc: "A", passes: true, attempts: 1 },
-          { id: "b", desc: "B", passes: false, attempts: 2, parked: true },
-        ]),
-        { color: false }
-      )
-    );
-
-    expect(parked.some((l) => l.includes("Parked 1"))).toBe(true);
-    expect(parked.some((l) => l.startsWith("~ "))).toBe(true);
-  });
-
-  test("selection prefix when focused skips double ▸ on current", () => {
-    const lines = formatWorklistLines(
-      state([{ id: "a", desc: "A", passes: false, attempts: 0 }], "worklist"),
-      { showSelection: true, selectedIndex: 0, color: false }
-    );
-
-    expect(plain(lines)[0]?.startsWith("▸ ")).toBe(true);
-    expect(plain(lines)[0]?.startsWith("▸ ▸")).toBe(false);
   });
 
   test("color mode paints current with CONSOLE.bright", () => {
     const lines = formatWorklistLines(
-      state([{ id: "a", desc: "Now", passes: false, attempts: 0 }], "worklist"),
+      plan([{ id: "a", title: "Now", status: "active" }], "g", "a"),
       { columns: 36, color: true }
     );
 
@@ -122,12 +106,63 @@ describe("formatWorklistLines", () => {
   test("worklistBadge is done/total", () => {
     expect(
       worklistBadge(
-        state([
-          { id: "a", desc: "A", passes: true, attempts: 1 },
-          { id: "b", desc: "B", passes: false, attempts: 0 },
+        plan([
+          { id: "a", title: "A", status: "done" },
+          { id: "b", title: "B", status: "pending" },
         ])
       )
     ).toBe("1/2");
-    expect(worklistBadge(state([]))).toBe("");
+    expect(worklistBadge(null)).toBe("");
+  });
+
+  test("formatPlanProposal is a PLAN card with items, not raw JSON", () => {
+    const card = formatPlanProposal(
+      plan(
+        [
+          {
+            id: "a",
+            title: "Wire present_plan",
+            status: "pending",
+            children: [{ id: "a1", title: "Nested", status: "pending" }],
+          },
+        ],
+        "Ship plan UI"
+      ),
+      60,
+      false
+    );
+
+    expect(card).toContain("PLAN");
+    expect(card).toContain("Ship plan UI");
+    expect(card).toContain("Wire present_plan");
+    expect(card).toContain("Nested");
+    expect(card).toContain("approve");
+    expect(card).not.toContain('"items"');
+  });
+
+  test("formatPlanProposal soft-wraps long detail — no mid-word clip", () => {
+    const detail =
+      "Bun CLI with subcommands: add <text>, list, search <query>. Persists notes to .notes.json (id, text, createdAt ISO). Search matches case-insensitive.";
+    const card = formatPlanProposal(
+      plan(
+        [{ id: "a", title: "Create src/notes.ts CLI", status: "pending", detail }],
+        "Build a tiny static notes CLI"
+      ),
+      48,
+      false
+    );
+    const plain = stripSgr(card);
+
+    expect(plain).toContain("Search");
+    expect(plain).not.toMatch(/Searc[^h]/u);
+    expect(plain.split("\n").length).toBeGreaterThan(6);
+  });
+
+  test("pendingPlanBadge marks open count", () => {
+    expect(
+      pendingPlanBadge(
+        plan([{ id: "a", title: "A", status: "pending" }])
+      )
+    ).toBe("·1");
   });
 });

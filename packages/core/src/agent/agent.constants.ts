@@ -35,6 +35,11 @@ export const TOOL_NAME = {
   generateImage: "generate_image",
   check: "check",
   askUser: "ask_user",
+  taskList: "task_list",
+  taskFocus: "task_focus",
+  taskComplete: "task_complete",
+  taskUncomplete: "task_uncomplete",
+  presentPlan: "present_plan",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -101,6 +106,17 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // safe (clarifying while planning is fine). Not script-exposable: it's an
   // interactive control-flow tool, not a data call a program should make.
   [TOOL_NAME.askUser]: { readOnly: true, scriptExposable: false },
+  // Session-bound checklist tools. `task_list` is a pure read of the plan file;
+  // focus/complete/uncomplete mutate the plan JSON (not workspace source) and are
+  // offered only after approve (activePlanId set) — withheld from plan mode by
+  // not advertising them until then. Not script-exposable (interactive scope).
+  [TOOL_NAME.taskList]: { readOnly: true, scriptExposable: false },
+  [TOOL_NAME.taskFocus]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.taskComplete]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.taskUncomplete]: { readOnly: false, scriptExposable: false },
+  // Propose a structured plan for human approve — no workspace / disk write until
+  // approve. Plan-mode-safe. Offered in plan mode only (see offeredToolsFor).
+  [TOOL_NAME.presentPlan]: { readOnly: true, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -745,6 +761,114 @@ export const ASK_USER_TOOL = {
         },
       },
       required: ["question"],
+    },
+  },
+} as const;
+
+const TASK_ID_PARAM = {
+  type: "object",
+  properties: {
+    id: {
+      type: "string",
+      description: "Checklist item UUID from task_list (not the title).",
+    },
+  },
+  required: ["id"],
+} as const;
+
+export const TASK_LIST_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.taskList,
+    description:
+      "Show the session's approved plan checklist (nested tree with ids and status). Checklist status changes ONLY via task_focus / task_complete / task_uncomplete — never invent done items. Does not run the acceptance gate.",
+    parameters: { type: "object", properties: {} },
+  },
+} as const;
+
+export const TASK_FOCUS_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.taskFocus,
+    description:
+      "Mark one open checklist item as the active focus (activeItemId). Call when you start work on the next item. Does not run the gate.",
+    parameters: TASK_ID_PARAM,
+  },
+} as const;
+
+export const TASK_COMPLETE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.taskComplete,
+    description:
+      "Mark a checklist item done ONLY after the acceptance gate is green. Runs the full gate first; if red, the item stays open and you get the errors — fix them, then call again. Parents complete only when all children are done. Do NOT mark items done before validation. The gate is the authority; never invent done.",
+    parameters: TASK_ID_PARAM,
+  },
+} as const;
+
+export const TASK_UNCOMPLETE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.taskUncomplete,
+    description:
+      "Re-open a previously completed checklist item (status → pending). Does not run the gate.",
+    parameters: TASK_ID_PARAM,
+  },
+} as const;
+
+const PLAN_ITEM_SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string", description: "Short actionable item title." },
+    detail: {
+      type: "string",
+      description: "Optional prose / notes for this item.",
+    },
+    files: {
+      type: "array",
+      items: { type: "string" },
+      description: "Optional file/path hints.",
+    },
+    verify: {
+      type: "string",
+      description: "Optional verify hint (not executed as a gate).",
+    },
+    children: {
+      type: "array",
+      description: "Optional nested items (same shape).",
+      items: { type: "object" },
+    },
+  },
+  required: ["title"],
+} as const;
+
+export const PRESENT_PLAN_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.presentPlan,
+    description:
+      "Present the structured plan for human approval. Call this when the plan is ready — do NOT dump JSON into the chat. The harness validates the tree and renders it in the UI. Items are work units (files/features) — do NOT add a checklist item for running tests/lint/the gate; the harness gate validates every task_complete. The human replies with refinements (revise via another present_plan) or approve/go/lgtm. Does not write files or unlock editing until they approve.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          description: "One-line goal for this plan.",
+        },
+        items: {
+          type: "array",
+          description: "Non-empty nested checklist (title required per node).",
+          items: PLAN_ITEM_SCHEMA,
+        },
+        plan: {
+          type: "object",
+          description: "Alternative: pass { goal, items } as one object.",
+          properties: {
+            goal: { type: "string" },
+            items: { type: "array", items: PLAN_ITEM_SCHEMA },
+          },
+        },
+      },
     },
   },
 } as const;

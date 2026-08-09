@@ -54,11 +54,6 @@ export interface ICliArgs {
   /** Run the greenfield feature-checklist outer loop (`--greenfield`, or a recipe
    *  with `mode: "greenfield"`). `task` carries the one-line build goal. */
   greenfield: boolean;
-  /** Run a human-written worklist (`--work`). `task` is an optional list path;
-   *  when empty, looks up PLAN.md → TASKS.md → .specs/next.md. */
-  work: boolean;
-  /** Opt-in rewrite of the human checklist file as items pass (`--tick`). */
-  tick: boolean;
   /** Shell command to run on completion of an unattended run (`--notify <cmd>`),
    *  with the outcome in $TSFORGE_STATUS. "" = no notification. */
   notify: string;
@@ -118,8 +113,6 @@ const BOOL_FLAGS: Record<
   | "withReview"
   | "scout"
   | "greenfield"
-  | "work"
-  | "tick"
   | "setupYes"
   | "version"
   | "help"
@@ -136,8 +129,6 @@ const BOOL_FLAGS: Record<
   "--with-review": "withReview",
   "--scout": "scout",
   "--greenfield": "greenfield",
-  "--work": "work",
-  "--tick": "tick",
   "--yes": "setupYes",
   "--version": "version",
   "-V": "version",
@@ -232,8 +223,6 @@ export function cliUsage(): string {
     "  --policy-mode <m>   plan|default|acceptEdits|ci|dontAsk|bypassPermissions",
     `  --profile <id>      strictness: ${PROFILE_IDS.join("|")}`,
     "  --notify <cmd>      run a command when an unattended run finishes",
-    "  --work [path]       drive a checklist (PLAN.md / TASKS.md / path)",
-    "  --tick              rewrite the human checklist as items pass",
     "  --version, -V       print the version and exit",
     "  --help, -h          this help",
     "",
@@ -266,8 +255,6 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     withReview: false,
     scout: false,
     greenfield: false,
-    work: false,
-    tick: false,
     notify: "",
     base: "",
     map: false,

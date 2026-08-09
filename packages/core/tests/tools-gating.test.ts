@@ -130,6 +130,22 @@ test("ask_user is offered only via offerAskUser (the co-pilot opt-in), off by de
 
   expect(names(toolsFor(false, {}, false, false, true))).toContain("ask_user");
   expect(names(toolsFor(true, {}, false, false, true))).toContain("ask_user");
+  // present_plan rides the same interactive opt-in (plan-mode filter is in offeredToolsFor).
+  expect(names(toolsFor(false, {}, false, false, true))).toContain(
+    "present_plan"
+  );
+});
+
+test("task_* tools are offered only via offerTaskTools (activePlanId bound)", () => {
+  expect(names(toolsFor(false))).not.toContain("task_list");
+  expect(names(toolsFor(true))).not.toContain("task_complete");
+
+  const offered = names(toolsFor(false, {}, false, false, false, [], true));
+
+  expect(offered).toContain("task_list");
+  expect(offered).toContain("task_focus");
+  expect(offered).toContain("task_complete");
+  expect(offered).toContain("task_uncomplete");
 });
 
 test("the script tool is on by default for scratch and existing code", () => {
