@@ -268,13 +268,18 @@ export class PaneScreen {
     this.paint();
   }
 
-  setPanel(lines: readonly string[]): void {
+  setPanel(lines: readonly string[], opts?: { readonly soft?: boolean }): void {
     this.panelLines = lines;
     this.focus.syncHasItems(this.hasPanelContent());
     this.clampPanelOffset();
 
     if (this.entered) {
-      this.paint();
+      // Soft = body patch only (spinner ticks on the current-task mark).
+      if (opts?.soft === true) {
+        this.paintAfterScroll();
+      } else {
+        this.paint();
+      }
     }
   }
 

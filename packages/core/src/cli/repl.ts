@@ -1568,23 +1568,39 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   /** Paint the Tasks rail from the session-bound plan (or empty-rail hints). */
-  const syncWorklistPanel = (plan: IPlanDocument | null): void => {
+  let railPlan: IPlanDocument | null = null;
+  let worklistSpin = 0;
+
+  const syncWorklistPanel = (
+    plan: IPlanDocument | null,
+    opts?: { readonly soft?: boolean }
+  ): void => {
+    railPlan = plan;
+
     if (!panesLive()) {
       return;
     }
 
     const cols = Math.max(12, paneScreen.panelInnerCols());
     const maxPending = Math.max(4, paneScreen.panelListBudgetRows());
+    // Spinner ticks only while a turn is live — drive the focused-task mark.
+    const spinning = spinner.frameLabel().length > 0;
 
     paneScreen.setPanel(
       formatWorklistLines(plan, {
         columns: cols,
         maxPending,
         color: true,
-      })
+        ...(spinning ? { currentFrame: worklistSpin } : {}),
+      }),
+      { soft: opts?.soft === true }
     );
-    paneScreen.setWorklistBadge(worklistBadge(plan));
 
+    if (opts?.soft === true) {
+      return;
+    }
+
+    paneScreen.setWorklistBadge(worklistBadge(plan));
     syncPaneChrome();
   };
 
@@ -2030,6 +2046,12 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     syncPaneChrome();
+
+    // Spin the focused Tasks-rail mark in step with the status spinner.
+    if (panesLive() && railPlan !== null) {
+      worklistSpin = (worklistSpin + 1) % 10;
+      syncWorklistPanel(railPlan, { soft: true });
+    }
 
     // Advance the tree's spinner so running agent rows animate in step.
     if (treeActive) {

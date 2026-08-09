@@ -46,11 +46,12 @@ test("welcomeBanner: paints a cyan→violet gradient across the wordmark", () =>
   expect(stripAnsi(banner)).toContain("███████╗");
 });
 
-test("planHint: filled PLAN badge + orange rail strip", () => {
+test("planHint: outlined PLAN badge + orange rail strip", () => {
   const out = planHint(false, 40);
   const plain = stripAnsi(out);
 
-  expect(out).toContain("[48;2;255;153;0m"); // planBg
+  expect(out).toContain("[38;2;255;153;0m");
+  expect(out).not.toContain("[48;2;255;153;0m");
   expect(plain).toContain(" PLAN ");
   expect(plain).toMatch(/^ PLAN /m);
   expect(plain).toContain("REPLY TO REFINE");

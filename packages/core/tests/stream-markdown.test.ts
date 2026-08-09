@@ -80,3 +80,15 @@ test("color:false passes prose through unstyled", () => {
     "\n**bold** and `code`\n"
   );
 });
+
+test("inline code uses zinc, never sky-blue brand", () => {
+  const s = new StreamingMarkdown();
+  const out = s.push("move to the `updatedAt` task.\n", true);
+
+  expect(out).toContain("updatedAt");
+  // brandLight #60a5fa — the blue the user keeps spotting in agent prose.
+  expect(out).not.toContain("38;2;96;165;250");
+  expect(out).not.toContain("38;2;59;130;246");
+  // chromeLight #f4f4f5 — quiet zinc on the dark canvas.
+  expect(out).toContain("38;2;244;244;245");
+});

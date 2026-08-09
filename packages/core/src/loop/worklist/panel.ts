@@ -25,6 +25,11 @@ export interface IFormatWorklistLinesOptions {
   columns?: number;
   /** When false, emit plain glyphs with no SGR. Default true. */
   color?: boolean;
+  /**
+   * Spinner phase for the focused/current mark. Omit (or while idle) → static
+   * `[∙]`; while the agent is working, pass the live spinner frame index.
+   */
+  currentFrame?: number;
 }
 
 type ItemKind = "done" | "current" | "pending" | "blocked";
@@ -32,13 +37,45 @@ type ItemKind = "done" | "current" | "pending" | "blocked";
 /**
  * Bracketed status marks (3 cols) — readable in a narrow pane rail.
  * Tree connectors (`├─` / `└─`) show parent → child; color reinforces status.
+ * Current/focused uses a braille spinner while a turn is running.
  */
-const GLYPH: Record<ItemKind, string> = {
+const CURRENT_IDLE = "[∙]";
+/** Same braille cycle as the status-bar spinner — reads as "working on this". */
+const CURRENT_FRAMES = [
+  "[⠋]",
+  "[⠙]",
+  "[⠹]",
+  "[⠸]",
+  "[⠼]",
+  "[⠴]",
+  "[⠦]",
+  "[⠧]",
+  "[⠇]",
+  "[⠏]",
+] as const;
+
+const GLYPH: Record<Exclude<ItemKind, "current">, string> = {
   done: "[✓]",
-  current: "[>]",
   pending: "[ ]",
   blocked: "[!]",
 };
+
+/** Visible mark for the focused item (idle bullet or spinning frame). */
+export function currentTaskMark(frame?: number): string {
+  if (frame === undefined) {
+    return CURRENT_IDLE;
+  }
+
+  return CURRENT_FRAMES[frame % CURRENT_FRAMES.length] ?? CURRENT_IDLE;
+}
+
+function isCurrentMark(plain: string): boolean {
+  if (plain.includes(CURRENT_IDLE)) {
+    return true;
+  }
+
+  return CURRENT_FRAMES.some((m) => plain.includes(m));
+}
 
 const CONNECT_MID = "├─ ";
 const CONNECT_END = "└─ ";
@@ -321,9 +358,11 @@ function formatItemLines(
   color: boolean,
   ancestorsOpen: readonly boolean[],
   isLast: boolean,
-  extras: readonly string[]
+  extras: readonly string[],
+  currentFrame: number | undefined
 ): string[] {
-  const glyph = GLYPH[kind];
+  const glyph =
+    kind === "current" ? currentTaskMark(currentFrame) : GLYPH[kind];
   const painted = paintGlyph(glyph, kind, color);
   const prefix = treePrefix(ancestorsOpen, isLast);
   const prefixPainted = paint(prefix, CONSOLE.muted, color);
@@ -363,7 +402,7 @@ function applySelection(
 
     const plain = stripSgr(line);
 
-    if (plain.includes(GLYPH.current)) {
+    if (isCurrentMark(plain)) {
       return line;
     }
 
@@ -396,6 +435,7 @@ function walkChecklist(
     readonly maxPending: number;
     readonly columns: number;
     readonly color: boolean;
+    readonly currentFrame: number | undefined;
     readonly pending: { shown: number; hidden: number };
     readonly out: string[];
   }
@@ -429,7 +469,8 @@ function walkChecklist(
         ctx.color,
         ancestorsOpen,
         isLast,
-        isFocus ? focusExtras(item) : []
+        isFocus ? focusExtras(item) : [],
+        ctx.currentFrame
       )
     );
 
@@ -477,6 +518,7 @@ export function formatWorklistLines(
     maxPending,
     columns,
     color,
+    currentFrame: opts.currentFrame,
     pending,
     out: lines,
   });

@@ -1,5 +1,9 @@
 import type { IRenderOptions, IStatusInfo } from "./render.types";
 import type { ILoopEvent } from "../loop";
+import {
+  isEphemeralUserInject,
+  isHarnessUserInject,
+} from "../loop/harness-inject";
 import type { IChatMessage } from "../inference";
 import { RESET, STYLE, paint } from "./style";
 import { displayWidth, sliceToWidth } from "./width";
@@ -202,7 +206,10 @@ export function roleCardCols(columns?: number): number {
   );
 }
 
-/** Filled role badge (USER cyan / AGENT chrome / PLAN amber). */
+/**
+ * Outlined role badge — accent foreground, no fill (USER cyan / AGENT light
+ * zinc / PLAN amber). Same geometry as the old solid pills (` USER ` etc.).
+ */
 export function filledRoleBadge(
   kind: "USER" | "AGENT" | "PLAN",
   color: boolean
@@ -214,14 +221,14 @@ export function filledRoleBadge(
   }
 
   if (kind === "USER") {
-    return `${STYLE.cyanBg}${STYLE.ink}${STYLE.bold}${label}${RESET}`;
+    return `${STYLE.cyan}${STYLE.bold}${label}${RESET}`;
   }
 
   if (kind === "AGENT") {
-    return `${STYLE.chromeBg}${STYLE.chromeInk}${STYLE.bold}${label}${RESET}`;
+    return `${STYLE.chromeLight}${STYLE.bold}${label}${RESET}`;
   }
 
-  return `${STYLE.planBg}${STYLE.ink}${STYLE.bold}${label}${RESET}`;
+  return `${STYLE.plan}${STYLE.bold}${label}${RESET}`;
 }
 
 /**
@@ -329,7 +336,7 @@ export function agentCardPadRow(color: boolean, columns?: number): string {
   return paint(`│${" ".repeat(inner)}│`, STYLE.chrome, color);
 }
 
-/** Closed AGENT card top (filled badge + hairline + `┐`). Model lives in the top bar. */
+/** Closed AGENT card top (outlined badge + hairline + `┐`). Model lives in the top bar. */
 export function agentCardTop(color: boolean, columns?: number): string {
   const cols = roleCardCols(columns);
   const badge = filledRoleBadge("AGENT", color);
@@ -392,10 +399,16 @@ export function renderMessage(
     return "";
   }
 
-  if (message.role === "user") {
-    // A full rounded bubble so YOUR turns read as a distinct block.
-    const columns = opts.columns ?? process.stdout.columns;
+  // Checklist injects — Tasks rail owns that UI; never a transcript card.
+  if (isEphemeralUserInject(message)) {
+    return "";
+  }
 
+  const columns = opts.columns ?? process.stdout.columns;
+
+  // Human turns only. Harness→model injects are stored as role:user for the
+  // API but must paint as AGENT (NEAR-GREEN / gate feedback / resteers).
+  if (message.role === "user" && !isHarnessUserInject(message)) {
     return `\n${userBubble(message.content, color, columns)}\n`;
   }
 
@@ -412,8 +425,6 @@ export function renderMessage(
   }
 
   // Closed card: top + pad, railed body, pad + bottom (model lives in the top bar).
-  const columns = opts.columns ?? process.stdout.columns;
-
   return parts.length > 0
     ? `\n${agentCardTop(color, columns)}\n` +
         `${agentCardPadRow(color, columns)}\n` +

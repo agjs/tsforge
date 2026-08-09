@@ -60,6 +60,35 @@ describe("renderMessage — hybrid bubbles", () => {
     expect(renderMessage({ role: "tool", content: "x" })).toBe("");
   });
 
+  test("harness gate injects paint as AGENT cards, not USER", () => {
+    const out = stripAnsi(
+      renderMessage(
+        {
+          role: "user",
+          content:
+            "⚠ NEAR-GREEN — only 1 error(s) from done.\n\n" +
+            "The acceptance command still fails:\n- SyntaxError\n\n" +
+            "Fix your editable files and run it again.",
+        },
+        { color: false, columns: 80 }
+      )
+    );
+
+    expect(out).toContain(" AGENT ");
+    expect(out).toContain("NEAR-GREEN");
+    expect(out).toContain("acceptance command still fails");
+    expect(out).not.toContain(" USER ");
+  });
+
+  test("checklist injects stay out of the transcript", () => {
+    expect(
+      renderMessage({
+        role: "user",
+        content: "[checklist — session plan abc]\ngoal: x",
+      })
+    ).toBe("");
+  });
+
   test("cards honor columns — resume must pass pane mainInnerCols, not stdout", () => {
     const narrow = 40;
     const wide = 120;
@@ -143,11 +172,12 @@ describe("userBubble", () => {
     }
   });
 
-  test("filled badge and rails use cyan when color is on", () => {
+  test("outlined badge and rails use cyan foreground (no fill) when color is on", () => {
     const out = userBubble("hi", true, 40);
 
-    expect(out).toContain("[48;2;34;211;238m");
     expect(out).toContain("[38;2;34;211;238m");
+    expect(out).not.toContain("[48;2;34;211;238m");
+    expect(out).not.toContain("[48;2;");
     expect(stripAnsi(out)).toMatch(/│ {2}hi\s+│/);
     expect(stripAnsi(out)).not.toContain("▌");
   });
@@ -183,7 +213,7 @@ describe("agentCardPadRow", () => {
 });
 
 describe("agentCardTop", () => {
-  test("labels the card with a filled AGENT badge + closed top rule", () => {
+  test("labels the card with an outlined AGENT badge + closed top rule", () => {
     const out = stripAnsi(agentCardTop(false, 40));
 
     expect(out.startsWith(" AGENT ")).toBe(true);
@@ -192,10 +222,11 @@ describe("agentCardTop", () => {
     expect(displayWidth(out)).toBe(40);
   });
 
-  test("filled badge uses chrome background when color is on", () => {
+  test("outlined AGENT badge uses light chrome foreground (no fill) when color is on", () => {
     const out = agentCardTop(true, 40);
 
-    expect(out).toContain("[48;2;244;244;245m");
+    expect(out).toContain("[38;2;244;244;245m");
+    expect(out).not.toContain("[48;2;244;244;245m");
     expect(stripAnsi(out)).toContain(" AGENT ");
   });
 });

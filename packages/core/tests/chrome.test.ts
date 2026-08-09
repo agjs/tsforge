@@ -17,7 +17,7 @@ import { STYLE } from "../src/render/style";
 import { stripSgr } from "../src/render/frame/ansi-plain";
 
 describe("formatConsoleTitle", () => {
-  test("mode chip: plan is amber pill, normal is quiet chrome pill", () => {
+  test("mode chip: plan is amber outline, normal is light chrome outline", () => {
     const plan = formatConsoleTitle({
       info: {
         model: "m",
@@ -50,9 +50,11 @@ describe("formatConsoleTitle", () => {
     });
 
     expect(plan).toContain(" PLAN ");
-    expect(plan).toContain(STYLE.planBg);
+    expect(plan).toContain(STYLE.plan);
+    expect(plan).not.toContain("[48;2;");
     expect(normal).toContain(" NORMAL ");
-    expect(normal).toContain(STYLE.chromeBg);
+    expect(normal).toContain(STYLE.chromeLight);
+    expect(normal).not.toContain("[48;2;");
     expect(plan).not.toContain("◆");
     expect(normal).not.toContain("◆");
   });
