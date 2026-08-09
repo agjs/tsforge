@@ -16,7 +16,7 @@ Most users run `tsforge` and stay in the interactive session.
 | **Interactive** | `tsforge` | default: open-ended tasks, steering, exploration |
 | **One-shot** | `tsforge "task" --accept "gate cmd"` | drive a single task to green and exit |
 | **New app** | `tsforge scaffold` | stand up a full-stack [BoringStack](/scaffold/boringstack/) project, then build it with the [greenfield loop](/loop/greenfield/) |
-| **Plan mode** | default: **Shift+Tab** or `/plan` to switch | read-only exploration before implementing. See [Plan mode](/cli/plan-mode/). |
+| **Plan mode** | default: **Shift+Tab** or `/plan` to switch | read-only explore → approve saves a project checklist → implement in-session. See [Plan mode](/cli/plan-mode/). |
 
 ## Flags
 
@@ -28,7 +28,7 @@ Most users run `tsforge` and stay in the interactive session.
 | `--no-gate` | skip auto gate detection |
 | `--browser <html>` | append headless render check to gate |
 | `--plan` | force plan mode on for an interactive session. Plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
-| `--continue` / `-c` | resume latest saved session for this dir |
+| `--continue` / `-c` | resume latest saved session for this dir (restores `activePlanId`; Tasks rail reloads that plan) |
 | `--resume <id>` | resume a specific session |
 | `--log` | append JSONL event stream to `~/.tsforge/logs/` |
 
@@ -40,7 +40,7 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL`. See [Environment 
 | --- | --- |
 | `/help` | list commands |
 | `/scaffold` | create a new full-stack project here (BoringStack / Astro) via the wizard |
-| `/plan` | toggle plan mode (on by default) |
+| `/plan` | toggle plan mode (on by default; approve saves the checklist and implements) |
 | `/config` | settings hub: model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
 | `/gate <cmd>` | set gate command (`/gate` alone clears) |
 | `/files <globs>` | set editable scope |

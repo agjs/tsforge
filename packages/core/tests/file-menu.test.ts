@@ -52,7 +52,7 @@ test("formatCompletionRows: one truncated row per file; selected gutter; no wrap
   const rows = formatCompletionRows(FILES, 1, 40, false);
 
   expect(rows).toHaveLength(FILES.length);
-  expect(rows[1]?.startsWith("›")).toBe(true); // selected row marked
+  expect(rows[1]?.startsWith("▸")).toBe(true); // selected row marked
 
   for (const r of rows) {
     expect(r.length).toBeLessThanOrEqual(40); // never wider than the terminal

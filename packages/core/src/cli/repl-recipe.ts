@@ -12,6 +12,10 @@ export interface IReplRecipeDeps {
   readonly close: () => void;
   readonly runRecipe: (recipe: ITaskRecipe) => void;
   readonly out: (s: string) => void;
+  /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
+  readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 /**
@@ -46,6 +50,8 @@ export async function openRecipePicker(deps: IReplRecipeDeps): Promise<void> {
     title: "recipes",
     render: deps.render,
     close: deps.close,
+    columns: deps.columns,
+    viewportRows: deps.viewportRows,
   });
 
   if (selected !== null) {

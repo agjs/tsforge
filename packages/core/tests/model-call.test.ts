@@ -98,6 +98,37 @@ describe("offeredToolsFor (plan mode's read-only guarantee)", () => {
     expect(names).toContain("mcp__docs__search");
     expect(names).not.toContain(TOOL_NAME.create);
   });
+
+  test("task_* tools withheld until offerTaskTools (activePlanId bound)", () => {
+    const withTasks = [
+      ...tools,
+      tool(TOOL_NAME.taskList),
+      tool(TOOL_NAME.taskComplete),
+    ];
+
+    expect(
+      offeredToolsFor(withTasks, false, []).map((t) => t.function.name)
+    ).not.toContain(TOOL_NAME.taskList);
+
+    const offered = offeredToolsFor(withTasks, false, [], [], true).map(
+      (t) => t.function.name
+    );
+
+    expect(offered).toContain(TOOL_NAME.taskList);
+    expect(offered).toContain(TOOL_NAME.taskComplete);
+  });
+
+  test("present_plan offered in plan mode only", () => {
+    const withPresent = [...tools, tool(TOOL_NAME.presentPlan)];
+
+    expect(
+      offeredToolsFor(withPresent, false, []).map((t) => t.function.name)
+    ).not.toContain(TOOL_NAME.presentPlan);
+
+    expect(
+      offeredToolsFor(withPresent, true, []).map((t) => t.function.name)
+    ).toContain(TOOL_NAME.presentPlan);
+  });
 });
 
 describe("offeredToolsFor: overlay tool wiring", () => {

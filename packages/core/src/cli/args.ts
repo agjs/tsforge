@@ -152,7 +152,13 @@ const VALUE_FLAGS = new Set([
 
 /** True for any token the parser recognises as a flag, boolean or value-taking. */
 function isKnownFlag(token: string): boolean {
-  return Object.hasOwn(BOOL_FLAGS, token) || VALUE_FLAGS.has(token);
+  return (
+    Object.hasOwn(BOOL_FLAGS, token) ||
+    VALUE_FLAGS.has(token) ||
+    // Removed flags — still recognized so old aliases/scripts do not become task text.
+    token === "--tui-panes" ||
+    token === "--no-tui-panes"
+  );
 }
 
 /**
@@ -277,6 +283,11 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
       continue;
     }
 
+    // Pane console is the only interactive UI — old opt-in/out flags are no-ops.
+    if (arg === "--tui-panes" || arg === "--no-tui-panes") {
+      continue;
+    }
+
     const boolKey = BOOL_FLAGS[arg];
 
     if (boolKey !== undefined) {
@@ -299,37 +310,44 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
   }
 
   out.task = positional.join(" ").trim();
+  applyPositionalSubcommand(positional, out);
 
-  // `tsforge review` / `tsforge map` are subcommands, not tasks: the first
-  // positional selects them.
-  if (positional[0] === "review") {
+  out.dir = isAbsolute(out.dir) ? out.dir : join(process.cwd(), out.dir);
+
+  return out;
+}
+
+/** `tsforge review` / `map` / … — first positional selects the mode, not the task. */
+function applyPositionalSubcommand(
+  positional: readonly string[],
+  out: ICliArgs
+): void {
+  const head = positional[0];
+
+  if (head === "review") {
     out.review = true;
     out.task = positional.slice(1).join(" ").trim();
-  } else if (positional[0] === "map") {
+  } else if (head === "map") {
     out.map = true;
     out.task = positional.slice(1).join(" ").trim();
-  } else if (positional[0] === "trace") {
+  } else if (head === "trace") {
     out.trace = true;
     out.task = positional.slice(1).join(" ").trim();
-  } else if (positional[0] === "recipes") {
+  } else if (head === "recipes") {
     out.recipes = true;
-  } else if (positional[0] === "agents") {
+  } else if (head === "agents") {
     // `tsforge agents` lists specs; `tsforge agents explore,verify "task"`
     // fans the named specs out over the task.
     out.agents = true;
     out.agentIds = positional[1] ?? "";
     out.task = positional.slice(2).join(" ").trim();
-  } else if (positional[0] === "setup") {
+  } else if (head === "setup") {
     out.setup = true;
-  } else if (positional[0] === "run") {
+  } else if (head === "run") {
     out.run = true;
     out.recipe = positional[1] ?? "";
     out.task = positional.slice(2).join(" ").trim();
   }
-
-  out.dir = isAbsolute(out.dir) ? out.dir : join(process.cwd(), out.dir);
-
-  return out;
 }
 
 /** Assign one `--flag value` into the args (mutates `out`). */

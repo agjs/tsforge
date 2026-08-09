@@ -1,13 +1,14 @@
 import type { IRenderOptions, IStatusInfo } from "./render.types";
 import type { ILoopEvent } from "../loop";
 import type { IChatMessage } from "../inference";
-import { STYLE, paint } from "./style";
-import { displayWidth, padToWidth, sliceToWidth } from "./width";
+import { RESET, STYLE, paint } from "./style";
+import { displayWidth, sliceToWidth } from "./width";
 import { box, GLYPH } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
 import { StreamingMarkdown } from "./stream-markdown";
 import { renderDiff } from "./diff";
 import { makeAgentRail } from "./agent-rail";
+import { stripSgr } from "./frame/ansi-plain";
 
 /** Split highlighted/plain text into the body-line array a box expects. */
 function bodyLines(text: string): string[] {
@@ -170,43 +171,195 @@ export function wrapToWidth(text: string, width: number): string[] {
   return out;
 }
 
-/** A full rounded bubble for a USER message: `╭─ you ─╮ / │ … │ / ╰──╯`, sized to
- *  its content and capped at the terminal width, painted brand. */
+/**
+ * Shared role-card geometry — cards share the same right edge (and left rail
+ * column for body rows). Badge pills hug their label; hairlines fill the rest.
+ */
+/** Widest role pill (` AGENT `) — floors minimum card width. */
+const ROLE_BADGE_COLS = 7;
+/** Spaces after the rail glyph before text (`▌  ` / `│  `) — breathing room. */
+const ROLE_INNER_PAD = 2;
+/** Open-card left gutter width: glyph + inner pad. */
+const ROLE_GUTTER_COLS = 1 + ROLE_INNER_PAD;
+/** Closed-card chrome: left glyph+pad + right glyph. */
+const ROLE_BOX_CHROME_COLS = ROLE_GUTTER_COLS + 1;
+const ROLE_MIN_COLS = ROLE_BADGE_COLS + 2;
+
+/** Role pill body: one space each side — no fixed-width right pad. */
+function roleLabel(label: string): string {
+  return ` ${label.trim()} `;
+}
+
+/** Resolve the shared card width for role chrome. */
+export function roleCardCols(columns?: number): number {
+  if (columns !== undefined && columns > 0) {
+    return Math.max(ROLE_MIN_COLS, columns);
+  }
+
+  return Math.max(
+    ROLE_MIN_COLS,
+    process.stdout.columns > 0 ? process.stdout.columns : 80
+  );
+}
+
+/** Filled role badge (USER cyan / AGENT chrome / PLAN amber). */
+export function filledRoleBadge(
+  kind: "USER" | "AGENT" | "PLAN",
+  color: boolean
+): string {
+  const label = roleLabel(kind);
+
+  if (!color) {
+    return label;
+  }
+
+  if (kind === "USER") {
+    return `${STYLE.cyanBg}${STYLE.ink}${STYLE.bold}${label}${RESET}`;
+  }
+
+  if (kind === "AGENT") {
+    return `${STYLE.chromeBg}${STYLE.chromeInk}${STYLE.bold}${label}${RESET}`;
+  }
+
+  return `${STYLE.planBg}${STYLE.ink}${STYLE.bold}${label}${RESET}`;
+}
+
+/**
+ * Hairline from the badge to the shared right edge.
+ * Optional `endCap` (e.g. `┐`) closes an AGENT top rule without changing width.
+ * `badgeCols` must match the visible width of the badge that precedes the line
+ * so shorter pills (` USER ` / ` PLAN `) still land on the same right edge.
+ */
+export function roleHairline(
+  columns: number,
+  code: string,
+  color: boolean,
+  endCap = "",
+  badgeCols: number = ROLE_BADGE_COLS
+): string {
+  const capCols = endCap.length > 0 ? displayWidth(endCap) : 0;
+  const n = Math.max(1, columns - badgeCols - capCols);
+  const line = paint("─".repeat(n), code, color);
+
+  return endCap.length > 0 ? `${line}${paint(endCap, code, color)}` : line;
+}
+
+/** Visible columns of a filled/plain role badge (ANSI stripped). */
+export function roleBadgeCols(badge: string): number {
+  return displayWidth(stripSgr(badge));
+}
+
+/** Open-card left gutter (`▌  ` / `│  `). */
+function roleGutter(glyph: "▌" | "│", code: string, color: boolean): string {
+  return paint(glyph, code, color) + " ".repeat(ROLE_INNER_PAD);
+}
+
+/** Empty closed USER row — cyan twin of {@link agentCardPadRow}. */
+function userCardPadRow(color: boolean, columns: number): string {
+  const cols = roleCardCols(columns);
+  const inner = Math.max(1, cols - 2);
+
+  // One SGR span for the whole row — a mid-line RESET left the right │ on the
+  // default (bright) foreground in iTerm, so empty rows looked speckled.
+  return paint(`│${" ".repeat(inner)}│`, STYLE.cyan, color);
+}
+
+/** A USER turn: closed cyan card — same geometry as AGENT (`┐` / `│…│` / `└┘`). */
 export function userBubble(
   content: string,
   color: boolean,
   columns: number
 ): string {
-  const label = "you";
-  const maxInner = Math.max(label.length + 4, columns - 2);
-  const body = wrapToWidth(content, Math.max(1, maxInner - 2));
-  const widest = body.reduce((m, l) => Math.max(m, displayWidth(l)), 0);
-  const inner = Math.min(maxInner, Math.max(label.length + 4, widest + 2));
-  const fill = "─".repeat(Math.max(0, inner - label.length - 3));
-  const top = paint(`╭─ ${label} ${fill}╮`, STYLE.brand + STYLE.bold, color);
-  const bottom = paint(`╰${"─".repeat(inner)}╯`, STYLE.brand, color);
-  const side = paint("│", STYLE.brand, color);
-  const rows = body.map(
-    (line) =>
-      `${side} ${paint(padToWidth(line, inner - 2), STYLE.brand + STYLE.bold, color)} ${side}`
+  const cols = roleCardCols(columns);
+  const badge = filledRoleBadge("USER", color);
+  const top =
+    badge + roleHairline(cols, STYLE.cyan, color, "┐", roleBadgeCols(badge));
+  const rail = makeAgentRail(
+    roleGutter("│", STYLE.cyan, color),
+    () => Math.max(1, cols - ROLE_BOX_CHROME_COLS),
+    paint("│", STYLE.cyan, color)
+  );
+  const painted = content
+    .split("\n")
+    .map((line) => paint(line, STYLE.cyan + STYLE.bold, color))
+    .join("\n");
+  const body = `${rail.feed(painted)}${rail.flush()}`.replace(/\n$/, "");
+  const padRow = userCardPadRow(color, cols);
+  const bottom = paint(
+    `└${"─".repeat(Math.max(0, cols - 2))}┘`,
+    STYLE.cyan,
+    color
   );
 
-  return [top, ...rows, bottom].join("\n");
+  return [top, padRow, body, padRow, bottom].join("\n");
 }
 
-/** The rounded top cap + model label for an AGENT card (streams below it). */
-export function agentCardTop(model: string, color: boolean): string {
-  return paint(`╭ ${model}`, STYLE.brandLight + STYLE.bold, color);
+/** One closed agent row: `│  content…  │` padded to `cols`. */
+export function agentCardRow(
+  content: string,
+  color: boolean,
+  columns: number
+): string {
+  const cols = roleCardCols(columns);
+  const inner = Math.max(1, cols - 2);
+
+  if (stripSgr(content).length === 0) {
+    return paint(`│${" ".repeat(inner)}│`, STYLE.chrome, color);
+  }
+
+  const left = paint("│", STYLE.chrome, color);
+  const right = paint("│", STYLE.chrome, color);
+  const maxText = Math.max(1, inner - ROLE_INNER_PAD * 2);
+  const plain = stripSgr(content);
+  const text =
+    displayWidth(plain) <= maxText
+      ? content
+      : sliceToWidth(plain, maxText).text;
+  const body = `${" ".repeat(ROLE_INNER_PAD)}${text}`;
+  const pad = Math.max(ROLE_INNER_PAD, inner - displayWidth(stripSgr(body)));
+
+  return `${left}${body}${" ".repeat(pad)}${right}`;
 }
 
-/** The rounded bottom cap that closes an AGENT card. */
-export function agentCardBottom(color: boolean): string {
-  return paint("╰", STYLE.brandLight, color);
+/** Empty closed row — vertical breathing room under the top rule / above the bottom. */
+export function agentCardPadRow(color: boolean, columns?: number): string {
+  const cols = roleCardCols(columns);
+  const inner = Math.max(1, cols - 2);
+
+  return paint(`│${" ".repeat(inner)}│`, STYLE.chrome, color);
 }
 
-/** The left-rail prefix (`│ `) painted for every row inside an AGENT card. */
+/** Closed AGENT card top (filled badge + hairline + `┐`). Model lives in the top bar. */
+export function agentCardTop(color: boolean, columns?: number): string {
+  const cols = roleCardCols(columns);
+  const badge = filledRoleBadge("AGENT", color);
+
+  // No leading `┌` — badge starts on the same column as USER / PLAN.
+  return (
+    badge + roleHairline(cols, STYLE.chrome, color, "┐", roleBadgeCols(badge))
+  );
+}
+
+/** Closed AGENT card bottom rule. */
+export function agentCardBottom(color: boolean, columns?: number): string {
+  const cols = roleCardCols(columns);
+
+  return paint(`└${"─".repeat(Math.max(0, cols - 2))}┘`, STYLE.chrome, color);
+}
+
+/** The left-rail prefix (`│  `) painted for every row inside an AGENT card. */
 export function agentBar(color: boolean): string {
-  return `${paint("│", STYLE.brandLight, color)} `;
+  return roleGutter("│", STYLE.chrome, color);
+}
+
+/** The right-rail closer (`│`) for a closed agent card. */
+export function agentRight(color: boolean): string {
+  return paint("│", STYLE.chrome, color);
+}
+
+/** Content budget inside `│  …  │` (left gutter + right rail). */
+export function agentRailInnerCols(columns: number): number {
+  return Math.max(20, roleCardCols(columns) - ROLE_BOX_CHROME_COLS);
 }
 
 /** Rail-prefix AND soft-wrap a settled agent body (the `--continue` replay
@@ -217,10 +370,16 @@ export function agentCardBody(
   color: boolean,
   columns?: number
 ): string {
-  const cols = columns !== undefined && columns > 0 ? columns : 80;
-  const rail = makeAgentRail(agentBar(color), () => cols - 4);
+  const cols = roleCardCols(columns);
+  const rail = makeAgentRail(
+    agentBar(color),
+    () => agentRailInnerCols(cols),
+    agentRight(color)
+  );
 
-  return rail.feed(text);
+  // Trim the rail's trailing newline so joiners (`body\n` + pad) cannot inject
+  // a railless blank row into scrollback.
+  return `${rail.feed(text)}${rail.flush()}`.replace(/\n$/, "");
 }
 
 export function renderMessage(
@@ -252,11 +411,15 @@ export function renderMessage(
     parts.push(paint(`· used ${names}`, STYLE.dim, color));
   }
 
-  // A left-accent card (rounded caps + rail), streaming-friendly.
+  // Closed card: top + pad, railed body, pad + bottom (model lives in the top bar).
+  const columns = opts.columns ?? process.stdout.columns;
+
   return parts.length > 0
-    ? `\n${agentCardTop(opts.speaker ?? "assistant", color)}\n` +
-        `${agentCardBody(parts.join("\n"), color, opts.columns ?? process.stdout.columns)}\n` +
-        `${agentCardBottom(color)}\n`
+    ? `\n${agentCardTop(color, columns)}\n` +
+        `${agentCardPadRow(color, columns)}\n` +
+        `${agentCardBody(parts.join("\n"), color, columns)}\n` +
+        `${agentCardPadRow(color, columns)}\n` +
+        `${agentCardBottom(color, columns)}\n`
     : "";
 }
 

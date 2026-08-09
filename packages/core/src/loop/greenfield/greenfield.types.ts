@@ -82,4 +82,6 @@ export interface IGreenfieldDeps {
 
 export interface IGreenfieldOptions {
   onEvent?: Reporter;
+  /** Subdirectory under `.tsforge/` for persistence. Defaults to `"greenfield"`. */
+  stateName?: string;
 }

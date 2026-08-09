@@ -136,6 +136,18 @@ function assemble(segs: ISegment[], columns: number, color: boolean): string {
   return ` ${painted}`;
 }
 
+/**
+ * Same metrics line (model, mode, activity, meter, tok/s, turns, status, scope).
+ * Shared formatter for pane-console footer chrome and StatusBar unit tests.
+ */
+export function formatStatusBarLine(
+  info: IStatusInfo,
+  columns: number,
+  color = true
+): string {
+  return assemble(barSegments(info), columns, color);
+}
+
 /** A dim rule with a leading corner tick, spanning the width. */
 function topBorder(columns: number, color: boolean): string {
   return paint(`╶${"─".repeat(Math.max(0, columns - 3))}`, STYLE.dim, color);
@@ -253,6 +265,9 @@ export class StatusBar {
    *  region — above the overlay and input — while subagents run. Its own slot so
    *  it composes with the `@`-picker/palette overlay instead of fighting it. */
   private agentTreeLines: readonly string[] = [];
+  /** Worklist checklist slot (gate-derived ticks), below the agent tree and above
+   *  the overlay/input. */
+  private worklistLines: readonly string[] = [];
   /** While a drag-resize storm is in flight, ALL painting is suspended and streamed
    *  output is buffered; flushed once the size settles (so the region isn't churned
    *  against a reflowing terminal). */
@@ -294,7 +309,11 @@ export class StatusBar {
   } {
     const columns = this.out.columns ?? 80;
     const info = this.lastInfo;
-    const lines: string[] = [...this.agentTreeLines, ...this.overlayLines];
+    const lines: string[] = [
+      ...this.agentTreeLines,
+      ...this.worklistLines,
+      ...this.overlayLines,
+    ];
     let cursorRow: number;
     let cursorCol: number;
 
@@ -524,6 +543,28 @@ export class StatusBar {
     }
 
     this.agentTreeLines = [];
+
+    if (this.installed && this.withInput) {
+      this.renderRegion();
+    }
+  }
+
+  /** Show/replace the worklist checklist above the input row, then repaint. */
+  setWorklist(lines: readonly string[]): void {
+    this.worklistLines = lines;
+
+    if (this.installed && this.withInput) {
+      this.renderRegion();
+    }
+  }
+
+  /** Erase the worklist slot and repaint. Idempotent. */
+  clearWorklist(): void {
+    if (this.worklistLines.length === 0) {
+      return;
+    }
+
+    this.worklistLines = [];
 
     if (this.installed && this.withInput) {
       this.renderRegion();

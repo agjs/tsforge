@@ -1,11 +1,22 @@
 import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
 import { clampIndex } from "./command-menu";
+import { CONSOLE } from "./frame/chrome";
+import {
+  formatMenuRow,
+  formatOverlayShell,
+  menuBodyBudget,
+  menuClip,
+  menuRule,
+  menuScrollCue,
+  menuWindow,
+} from "./menu-chrome";
 import type {
   IWizardAction,
   IWizardOption,
   IWizardState,
   IWizardStep,
+  IWizardView,
 } from "./wizard.types";
 
 const ESC = String.fromCharCode(27);
@@ -14,7 +25,9 @@ const EXIT_ALT = `${ESC}[?1049l`;
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
 const CLEAR_HOME = `${ESC}[2J${ESC}[H`;
-const RULE = "─".repeat(52);
+
+/** Default overlay width when the host does not pass pane inner cols. */
+const DEFAULT_WIZARD_COLS = 80;
 
 // ─────────────────────────── pure state model ───────────────────────────
 
@@ -424,14 +437,26 @@ export function checkedValues(
 
 // ──────────────────────────── pure rendering ────────────────────────────
 
-function evidenceBlock(step: IWizardStep, color: boolean): string[] {
+export interface IWizardFrameOpts {
+  readonly columns?: number;
+  readonly viewportRows?: number;
+}
+
+function evidenceBlock(
+  step: IWizardStep,
+  color: boolean,
+  columns: number
+): string[] {
   if (step.evidence.length === 0) {
     return [];
   }
 
   return [
     paint("Evidence", STYLE.bold, color),
-    ...step.evidence.map((e) => `  ${paint(e, STYLE.dim, color)}`),
+    ...step.evidence.map(
+      (e) =>
+        `  ${paint(menuClip(e, Math.max(0, columns - 2)), STYLE.dim, color)}`
+    ),
     "",
   ];
 }
@@ -440,50 +465,91 @@ function optionRow(
   opt: IWizardOption,
   active: boolean,
   marker: string,
-  color: boolean
+  color: boolean,
+  columns: number
 ): string {
-  const gutter = active ? paint("›", STYLE.brand, color) : " ";
-  const label = paint(opt.label, active ? STYLE.brand : STYLE.bold, color);
-  const rec =
-    opt.recommended === true
-      ? `  ${paint("recommended", STYLE.dim, color)}`
-      : "";
-  const note =
-    opt.note === undefined ? "" : `  ${paint(opt.note, STYLE.dim, color)}`;
+  const hintBits: string[] = [];
 
-  return `${gutter} ${marker}${label}${rec}${note}`;
+  if (opt.recommended === true) {
+    hintBits.push("recommended");
+  }
+
+  if (opt.note !== undefined && opt.note.length > 0) {
+    hintBits.push(opt.note);
+  }
+
+  return formatMenuRow({
+    label: opt.label,
+    hint: hintBits.length > 0 ? hintBits.join(" · ") : undefined,
+    active,
+    columns,
+    color,
+    marker,
+  });
 }
 
-function singleChoiceRows(
+function choiceRows(
   step: IWizardStep,
-  cursor: number,
-  color: boolean
+  state: IWizardState,
+  color: boolean,
+  columns: number
 ): string[] {
-  return step.options.map((opt, i) => optionRow(opt, i === cursor, "", color));
-}
+  if (step.kind === "multi") {
+    const checked = new Set(state.multi[step.key] ?? []);
 
-function multiChoiceRows(
-  step: IWizardStep,
-  cursor: number,
-  checkedIdx: readonly number[],
-  color: boolean
-): string[] {
-  const checked = new Set(checkedIdx);
+    return step.options.map((opt, i) =>
+      optionRow(
+        opt,
+        i === state.cursor,
+        `${checked.has(i) ? "◉" : "◯"} `,
+        color,
+        columns
+      )
+    );
+  }
 
   return step.options.map((opt, i) =>
-    optionRow(opt, i === cursor, `${checked.has(i) ? "◉" : "◯"} `, color)
+    optionRow(opt, i === state.cursor, "", color, columns)
   );
 }
 
-function hints(step: IWizardStep, color: boolean): string {
-  const parts =
-    step.kind === "text"
-      ? ["type to edit", "← back", "enter continue", "esc cancel"]
-      : step.kind === "multi"
-        ? ["space toggle", "enter continue", "b back", "q cancel"]
-        : ["↑/↓ move", "enter select", "b back", "q cancel"];
+/** Window Choices so the selected row stays visible under a short pane. */
+function windowedChoices(
+  allRows: readonly string[],
+  cursor: number,
+  maxVisible: number,
+  color: boolean
+): string[] {
+  if (allRows.length <= maxVisible) {
+    return [...allRows];
+  }
 
-  return paint(parts.join("   "), STYLE.dim, color);
+  const { start, end } = menuWindow(allRows.length, cursor, maxVisible);
+  const out: string[] = [];
+
+  if (start > 0) {
+    out.push(menuScrollCue("up", start, color));
+  }
+
+  out.push(...allRows.slice(start, end));
+
+  if (end < allRows.length) {
+    out.push(menuScrollCue("down", allRows.length - end, color));
+  }
+
+  return out;
+}
+
+function hints(step: IWizardStep): string {
+  if (step.kind === "text") {
+    return "type to edit · enter continue · esc cancel";
+  }
+
+  if (step.kind === "multi") {
+    return "space toggle · enter continue · b back · q cancel";
+  }
+
+  return "↑/↓ move · enter select · b back · q cancel";
 }
 
 /** The editable field for a text step: value (or placeholder) + caret, masked for
@@ -500,7 +566,7 @@ function textFieldRows(
       : step.mask === true
         ? "•".repeat(raw.length)
         : raw;
-  const field = `${shown}${paint("▏", STYLE.brand, color)}`;
+  const field = `${shown}${paint("▏", CONSOLE.bright, color)}`;
   const error = step.validate === undefined ? null : step.validate(raw);
   const errorLine =
     error === null ? [] : ["", paint(error, STYLE.yellow, color)];
@@ -511,7 +577,9 @@ function textFieldRows(
 function stepBody(
   step: IWizardStep,
   state: IWizardState,
-  color: boolean
+  color: boolean,
+  columns: number,
+  choiceBudget: number
 ): string[] {
   if (step.kind === "text") {
     return textFieldRows(step, state, color);
@@ -520,14 +588,16 @@ function stepBody(
   const active = step.options[clampIndex(state.cursor, step.options.length)];
   const outcome =
     step.kind === "single" && active?.outcome !== undefined
-      ? ["", paint("Outcome", STYLE.bold, color), `  ${active.outcome}`]
+      ? [
+          "",
+          paint("Outcome", STYLE.bold, color),
+          `  ${menuClip(active.outcome, Math.max(0, columns - 2))}`,
+        ]
       : [];
-  const rows =
-    step.kind === "multi"
-      ? multiChoiceRows(step, state.cursor, state.multi[step.key] ?? [], color)
-      : singleChoiceRows(step, state.cursor, color);
+  const rows = choiceRows(step, state, color, columns);
+  const windowed = windowedChoices(rows, state.cursor, choiceBudget, color);
 
-  return [paint("Choices", STYLE.bold, color), ...rows, ...outcome];
+  return [paint("Choices", STYLE.bold, color), ...windowed, ...outcome];
 }
 
 function renderStep(
@@ -536,19 +606,34 @@ function renderStep(
   color: boolean,
   position: number,
   total: number,
-  title: string
+  title: string,
+  columns: number,
+  viewportRows: number
 ): string {
-  return [
-    paint(title, STYLE.brand, color),
-    `${paint(`Step ${position} of ${total}`, STYLE.bold, color)} · ${step.title}`,
-    RULE,
-    step.explanation,
+  const width = Math.max(20, columns);
+  // Reserve room for explanation + evidence + section headers inside the body.
+  const choiceBudget = Math.max(
+    1,
+    Math.min(8, menuBodyBudget(viewportRows, { hasSubtitle: true }) - 6)
+  );
+  const subtitle = `${paint(`Step ${position} of ${total}`, STYLE.bold, color)} · ${step.title}`;
+  const bodyLines = [
+    menuRule(width, color),
+    menuClip(step.explanation, width),
     "",
-    ...evidenceBlock(step, color),
-    ...stepBody(step, state, color),
-    "",
-    hints(step, color),
-  ].join("\n");
+    ...evidenceBlock(step, color, width),
+    ...stepBody(step, state, color, width, choiceBudget),
+  ];
+
+  return formatOverlayShell({
+    title,
+    subtitle,
+    bodyLines,
+    footer: hints(step),
+    columns: width,
+    color,
+    titleStyle: STYLE.brand,
+  }).join("\n");
 }
 
 /** One readable summary line per step for the overview ("Title: chosen"). */
@@ -592,17 +677,25 @@ function renderOverview(
   state: IWizardState,
   color: boolean,
   extra: string,
-  title: string
+  title: string,
+  columns: number
 ): string {
-  return [
-    paint(title, STYLE.brand, color),
-    `${paint("Review", STYLE.bold, color)} · nothing is written until you Apply`,
-    RULE,
+  const width = Math.max(20, columns);
+  const bodyLines = [
+    menuRule(width, color),
     ...overviewLines(steps, state, color),
-    ...(extra.length > 0 ? ["", extra] : []),
-    "",
-    paint("enter apply   b back   q cancel", STYLE.dim, color),
-  ].join("\n");
+    ...(extra.length > 0 ? ["", menuClip(extra, width)] : []),
+  ];
+
+  return formatOverlayShell({
+    title,
+    subtitle: `${paint("Review", STYLE.bold, color)} · nothing is written until you Apply`,
+    bodyLines,
+    footer: "enter apply · b back · q cancel",
+    columns: width,
+    color,
+    titleStyle: STYLE.brand,
+  }).join("\n");
 }
 
 /** Render the current frame (a step, or the final overview). `extra` is appended
@@ -613,10 +706,20 @@ export function renderFrame(
   steps: readonly IWizardStep[],
   color: boolean,
   extra = "",
-  title = "tsforge setup"
+  title = "tsforge setup",
+  frameOpts: IWizardFrameOpts = {}
 ): string {
+  const columns =
+    frameOpts.columns !== undefined && frameOpts.columns > 0
+      ? frameOpts.columns
+      : DEFAULT_WIZARD_COLS;
+  const viewportRows =
+    frameOpts.viewportRows !== undefined && frameOpts.viewportRows > 0
+      ? frameOpts.viewportRows
+      : 40;
+
   if (state.stepIndex >= steps.length) {
-    return renderOverview(steps, state, color, extra, title);
+    return renderOverview(steps, state, color, extra, title, columns);
   }
 
   const step = steps[state.stepIndex];
@@ -629,7 +732,9 @@ export function renderFrame(
         color,
         visiblePosition(steps, state, state.stepIndex),
         visibleTotal(steps, state),
-        title
+        title,
+        columns,
+        viewportRows
       );
 }
 
@@ -699,6 +804,14 @@ export interface IRunWizardOpts {
   readonly extra?: (state: IWizardState) => string;
   /** Output sink (default process.stdout.write). */
   readonly out?: (s: string) => void;
+  /** When set, paint into the host chrome (main pane / status overlay) instead of
+   *  opening a nested alt-screen. Required under the pane console so setup/scaffold
+   *  do not fight PaneScreen. */
+  readonly view?: IWizardView;
+  /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
+  readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 /**
@@ -734,6 +847,7 @@ export function runWizard(
 
   return new Promise((resolve) => {
     let state = initWizard(steps);
+    const view = opts.view;
 
     emitKeypressEvents(stdin);
 
@@ -763,9 +877,26 @@ export function runWizard(
     }
 
     const draw = (): void => {
-      out(
-        `${CLEAR_HOME}${renderFrame(state, steps, color, extra(state), title)}`
-      );
+      const frame = renderFrame(state, steps, color, extra(state), title, {
+        columns:
+          opts.columns !== undefined && opts.columns > 0
+            ? opts.columns
+            : process.stdout.columns > 0
+              ? process.stdout.columns
+              : DEFAULT_WIZARD_COLS,
+        viewportRows:
+          opts.viewportRows !== undefined && opts.viewportRows > 0
+            ? opts.viewportRows
+            : process.stdout.rows > 0
+              ? process.stdout.rows
+              : 40,
+      });
+
+      if (view !== undefined) {
+        view.render(frame.split("\n"));
+      } else {
+        out(`${CLEAR_HOME}${frame}`);
+      }
     };
 
     const finish = (): void => {
@@ -783,7 +914,11 @@ export function runWizard(
       // wedging the terminal (dead keypress, hung Promise) on exit. The terminal
       // is already gone in that case, so there's nothing to restore on it.
       try {
-        out(`${SHOW_CURSOR}${EXIT_ALT}`);
+        if (view !== undefined) {
+          view.close();
+        } else {
+          out(`${SHOW_CURSOR}${EXIT_ALT}`);
+        }
       } catch {
         // swallow — the stream is closed; cleanup below still runs
       }
@@ -841,7 +976,11 @@ export function runWizard(
     };
 
     stdin.on("keypress", onKey);
-    out(`${ENTER_ALT}${HIDE_CURSOR}`);
+
+    if (view === undefined) {
+      out(`${ENTER_ALT}${HIDE_CURSOR}`);
+    }
+
     draw();
   });
 }

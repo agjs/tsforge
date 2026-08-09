@@ -241,6 +241,134 @@ def reap(pid, master, exit_cmd=b"/exit\r"):
         pass
 
 
+# --- headless ANSI screen (pane / CUP paints) ---------------------------------
+
+
+class VirtualScreen:
+    """Minimal VT grid for e2e assertions on *visible* pane output.
+
+    Pane paints accumulate many CUP+row writes; counting markers in the raw
+    byte stream overcounts. Feed the stream here and assert on ``text()``.
+    """
+
+    def __init__(self, rows=40, cols=120):
+        self.rows = rows
+        self.cols = cols
+        self.grid = [[" "] * cols for _ in range(rows)]
+        self.row = 0
+        self.col = 0
+
+    def feed(self, data):
+        i = 0
+        n = len(data)
+        while i < n:
+            ch = data[i]
+            if ch != "\x1b":
+                self._plain(ch)
+                i += 1
+                continue
+            if i + 1 >= n:
+                break
+            nxt = data[i + 1]
+            if nxt == "]":  # OSC … BEL / ST
+                end = data.find("\x07", i + 2)
+                st = data.find("\x1b\\", i + 2)
+                cut = n
+                if end != -1:
+                    cut = min(cut, end + 1)
+                if st != -1:
+                    cut = min(cut, st + 2)
+                i = cut if cut < n else n
+                continue
+            if nxt != "[":
+                i += 2
+                continue
+            j = i + 2
+            while j < n and data[j] in "0123456789;?":
+                j += 1
+            if j >= n:
+                break
+            params = data[i + 2 : j]
+            cmd = data[j]
+            self._csi(params, cmd)
+            i = j + 1
+
+    def _csi(self, params, cmd):
+        parts = [p for p in params.replace("?", "").split(";") if p != ""]
+        nums = [int(p) for p in parts if p.isdigit()]
+        if cmd in ("H", "f"):
+            r = (nums[0] if len(nums) > 0 else 1) - 1
+            c = (nums[1] if len(nums) > 1 else 1) - 1
+            self.row = max(0, min(self.rows - 1, r))
+            self.col = max(0, min(self.cols - 1, c))
+        elif cmd == "J":
+            mode = nums[0] if nums else 0
+            if mode == 2:
+                self.grid = [[" "] * self.cols for _ in range(self.rows)]
+                self.row = 0
+                self.col = 0
+            elif mode == 0:
+                self._clear_to_eos()
+            elif mode == 1:
+                self._clear_from_bos()
+        elif cmd == "K":
+            mode = nums[0] if nums else 0
+            if mode == 2:
+                self.grid[self.row] = [" "] * self.cols
+            elif mode == 1:
+                for c in range(0, self.col + 1):
+                    self.grid[self.row][c] = " "
+            else:
+                for c in range(self.col, self.cols):
+                    self.grid[self.row][c] = " "
+        # SGR / private modes / sync / cursor show-hide: ignore
+
+    def _clear_to_eos(self):
+        for c in range(self.col, self.cols):
+            self.grid[self.row][c] = " "
+        for r in range(self.row + 1, self.rows):
+            self.grid[r] = [" "] * self.cols
+
+    def _clear_from_bos(self):
+        for r in range(0, self.row):
+            self.grid[r] = [" "] * self.cols
+        for c in range(0, self.col + 1):
+            self.grid[self.row][c] = " "
+
+    def _plain(self, ch):
+        if ch == "\r":
+            self.col = 0
+            return
+        if ch == "\n":
+            self.row = min(self.rows - 1, self.row + 1)
+            self.col = 0
+            return
+        if ch == "\x08":
+            self.col = max(0, self.col - 1)
+            return
+        if ord(ch) < 32:
+            return
+        if 0 <= self.row < self.rows and 0 <= self.col < self.cols:
+            self.grid[self.row][self.col] = ch
+        self.col += 1
+        if self.col >= self.cols:
+            self.col = 0
+            self.row = min(self.rows - 1, self.row + 1)
+
+    def text(self):
+        lines = ["".join(row).rstrip() for row in self.grid]
+        while lines and lines[-1] == "":
+            lines.pop()
+        return "\n".join(lines)
+
+
+def visible_text(buf, rows=40, cols=120):
+    """Apply ``buf`` onto a VirtualScreen and return the visible text."""
+    screen = VirtualScreen(rows, cols)
+    screen.feed(buf)
+    return screen.text()
+
+
 # --- pass/fail tally ----------------------------------------------------------
 
 

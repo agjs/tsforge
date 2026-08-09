@@ -1,18 +1,58 @@
 ---
 title: Plan mode
-description: Read-only exploration before the model is allowed to edit files.
+description: Read-only exploration, then approve to save a session-bound plan checklist and implement in the same session.
 ---
 
-Plan mode is a safety rail for ambiguous work. The model can **read** your repo and **propose** a plan, but it cannot **edit** until you say go.
+Plan mode is the default interactive posture. The model can **read** your repo and **propose** a plan, but it cannot **edit** until you approve. On approve, tsforge validates the model's fenced plan JSON, writes a session-bound plan file, shows it in the Tasks rail, and the same session implements it.
 
-**It is the default for a fresh interactive session.** tsforge explores, asks the few clarifying questions that matter, and proposes a plan before it writes anything. The status bar shows the current mode as a `◆ plan` / `◆ normal` chip.
+```text
+plan mode (default)
+  → discuss or paste
+  → model calls present_plan { goal, items }
+  → TUI renders PLAN card (+ Tasks preview)
+  → approve / go / lgtm
+  → <cwd>/.tsforge/worklist/plans/<planId>.json
+  → session.activePlanId binds that plan
+  → implement in-session (task_* tools + /gate as usual)
+  → finished = gate green AND checklist done
+  → tsforge --continue resumes the session (+ activePlanId + rail)
+```
+
+The status bar shows `◆ plan` / `◆ normal`.
 
 ## Switching modes
 
 - Press **Shift+Tab** to cycle the mode (plan → normal → …), or type **`/plan`** to toggle it
-- When the plan looks right, reply **`approve`**, **`go`**, or **`lgtm`**. The model implements it
+- When the plan looks right, reply **`approve`**, **`go`**, or **`lgtm`**
 
 There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --plan` forces plan mode on for an interactive session even in a repo that configured an autonomous `policy.mode`. One-shot and headless runs are autonomous regardless.)
+
+## What gets saved on approve
+
+When the plan is ready, the model calls **`present_plan`** with a structured `{ goal, items }` tree (nested `children`, optional `detail` / `files` / `verify`). The harness validates it, holds it as a **pending proposal**, and renders a PLAN card in the TUI (not a JSON dump in chat). Revise by calling `present_plan` again.
+
+Approve (`approve` / `go` / `lgtm`):
+
+1. Takes the pending proposal from `present_plan` (fenced JSON in chat is a fallback only)
+2. Writes **`<project>/.tsforge/worklist/plans/<planId>.json`**, updates `index.json`, sets the session's **`activePlanId`**
+3. Updates the Tasks side rail
+4. Turns plan mode off and continues in the same session
+
+If there is no pending plan (and no valid fenced JSON fallback), approve is refused — stay in plan mode.
+
+Concurrent sessions in one project each bind their own `activePlanId`; plan files do not clobber.
+
+Resume with **`tsforge --continue`** (or `--resume <id>`): the conversation and `activePlanId` return from the session store, and the Tasks rail reloads that plan.
+
+## Task tools (after approve)
+
+When `activePlanId` is set:
+
+- `task_list` — nested tree with ids
+- `task_focus` — set the active item
+- `task_complete` / `task_uncomplete` — status changes (**tools only**; not invented in prose)
+
+`task_complete` **runs the acceptance gate** and only marks the item done when green. If the gate is red, the item stays open and the errors are returned — fix, then complete again. Do not put “run tests / lint / the gate” as a checklist item; that is the harness’s job on every complete. A session cannot claim finished while the bound plan still has open items.
 
 ## What the model can do in plan mode
 
@@ -22,26 +62,15 @@ Read tools only:
 - `git_context`: structured, read-only repo history/diffs (see [Git context](/reference/flags/#git-context))
 - `run` for **read-only** shell commands (no installs, no writes)
 
-Blocked until approval: `edit`, `create`, `edit_lines`, scaffolders.
+Blocked until approval: `edit`, `create`, `edit_lines`, scaffolders, and the `task_*` tools (offered only after a plan is bound).
 
-## General plan mode
+## Whole-app builds (different path)
 
-Good for: "explore this repo and tell me how you'd refactor auth" or "what files would you touch for feature X?"
+Plan mode is for **interactive work in a repo**. Building a *new* app from scratch is a separate headless loop: [`tsforge scaffold`](/scaffold/boringstack/) then [`tsforge --greenfield`](/loop/greenfield/), which keeps its own checklist under `.tsforge/greenfield/`. That path does not use plan-mode approve or the Tasks rail plan files.
 
-After approval, tsforge switches to the normal implement loop with full write tools.
+## Leaving plan mode without approving
 
-## Whole-app builds
+- **Shift+Tab** (or `/plan`) drops to normal mode for hands-on edits
+- One-shot runs (`tsforge "task" --accept …`) and headless/eval runs are autonomous already
 
-Plan mode is for **exploring and approving a change** in a repo. Building a *new*
-app from scratch is a different flow: [`tsforge scaffold`](/scaffold/boringstack/)
-stands up BoringStack, then the [greenfield loop](/loop/greenfield/) drives the app
-to green one resource at a time. The harness runs the generators + wiring and the
-model fills the domain, each feature verified and frozen before the next. That loop
-plans and checkpoints per feature on its own, so it doesn't need plan mode.
-
-## Leaving plan mode
-
-- **Shift+Tab** (or `/plan`) drops to normal mode for hands-on edits in a repo you know
-- One-shot runs (`tsforge "task" --accept …`) and headless/eval runs are autonomous already. Plan mode is interactive-only, since it needs a human to approve
-
-→ [Greenfield scaffolding](/scaffold/boringstack/) · [Interactive CLI](/cli/interactive/)
+→ [Greenfield builds](/loop/greenfield/) · [Interactive CLI](/cli/interactive/)

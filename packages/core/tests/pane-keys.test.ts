@@ -1,0 +1,82 @@
+import { test, expect, describe } from "bun:test";
+import {
+  handleFocusKey,
+  handleScrollKey,
+  handleMouseKey,
+} from "../src/render/frame/pane-keys";
+import { PaneFocus } from "../src/render/frame/focus";
+import { Scrollback } from "../src/render/frame/scrollback";
+
+function deps(overrides: { panelLen?: number; paints?: number[] } = {}) {
+  const focus = new PaneFocus();
+  const scrollback = new Scrollback(100, 5);
+  const paints = overrides.paints ?? [];
+
+  focus.syncHasItems((overrides.panelLen ?? 3) > 0);
+
+  return {
+    focus,
+    scrollback,
+    panelLen: overrides.panelLen ?? 3,
+    paint: () => {
+      paints.push(1);
+    },
+    invalidate: () => undefined,
+    paints,
+  };
+}
+
+describe("handleFocusKey", () => {
+  test("Ctrl+G toggles panel focus", () => {
+    const d = deps();
+
+    expect(handleFocusKey("\x07", d)).toBe("handled");
+    expect(d.focus.panelFocused).toBe(true);
+    expect(d.paints.length).toBe(1);
+  });
+
+  test("Esc from panel returns handled", () => {
+    const d = deps();
+
+    handleFocusKey("\x07", d);
+    expect(handleFocusKey("\x1b", d)).toBe("handled");
+    expect(d.focus.promptFocused).toBe(true);
+  });
+});
+
+describe("handleScrollKey", () => {
+  test("up arrow does not steal from the prompt editor", () => {
+    const d = deps();
+
+    d.scrollback.append("a\nb\nc\nd\ne\n");
+    // Prompt-focused: arrows stay with the editor (null → passthrough).
+    expect(handleScrollKey("\x1b[A", d)).toBeNull();
+    expect(d.paints.length).toBe(0);
+  });
+
+  test("up arrow scrolls when scrollback is focused", () => {
+    const d = deps();
+
+    d.scrollback.append("a\nb\nc\nd\ne\n");
+    d.focus.focusScrollback();
+    expect(handleScrollKey("\x1b[A", d)).toBe("handled");
+    expect(d.paints.length).toBe(1);
+  });
+});
+
+describe("handleMouseKey", () => {
+  test("wheel invokes onWheel with delta and column", () => {
+    const wheels: { delta: number; col: number }[] = [];
+    const d = {
+      ...deps(),
+      onWheel: (delta: number, col: number) => {
+        wheels.push({ delta, col });
+      },
+    };
+
+    expect(handleMouseKey("\x1b[<64;12;4M", d)).toBe("handled");
+    expect(wheels).toEqual([{ delta: 3, col: 12 }]);
+    expect(handleMouseKey("\x1b[<65;80;4M", d)).toBe("handled");
+    expect(wheels[1]).toEqual({ delta: -3, col: 80 });
+  });
+});

@@ -42,13 +42,18 @@ describe("displayWidth", () => {
     expect(displayWidth("é")).toBe(1); // é as two code points
   });
 
-  test("emoji and ZWJ sequences are two columns", () => {
+  test("wide emoji and ZWJ sequences are two columns", () => {
     expect(displayWidth("😀")).toBe(2);
+    expect(displayWidth("😊")).toBe(2);
     expect(displayWidth("👨‍👩‍👧")).toBe(2); // single grapheme via ZWJ
   });
 
-  test("VS16 forces a wide cell for an otherwise-narrow base", () => {
-    expect(displayWidth("❤️")).toBe(2); // U+2764 U+FE0F
+  test("lone VS16 is zero-width; Neutral emoji stay one column (iTerm advance)", () => {
+    expect(displayWidth("\uFE0F")).toBe(0);
+    // U+1F5A5 / U+1F6CB are East-Asian Neutral — terminals advance 1 even with VS16.
+    expect(displayWidth("🖥️")).toBe(1);
+    expect(displayWidth("🛋️")).toBe(1);
+    expect(displayWidth("❤️")).toBe(1); // U+2764 U+FE0F
   });
 
   test("flags (regional indicator pairs) are two columns", () => {

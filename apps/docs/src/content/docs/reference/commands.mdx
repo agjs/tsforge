@@ -76,7 +76,7 @@ tsforge --greenfield "build a kanban board" --accept "bun run build"
 tsforge --greenfield "..." --notify 'curl -s "$WEBHOOK?s=$TSFORGE_STATUS"'
 ```
 
-`--greenfield` (or a recipe with `mode: "greenfield"`) plans a feature checklist and drives it to all-green one feature at a time, persisting state under `.tsforge/greenfield/` so a long run resumes. Each feature is verified by the gate, the browser oracle, and a reject-by-default judge. `--notify <cmd>` runs a shell command on completion with the outcome in `$TSFORGE_STATUS`. See [Greenfield builds](/loop/greenfield/).
+`--greenfield` (or a recipe with `mode: "greenfield"`) is the **headless** whole-app checklist loop: it plans features and drives them to all-green one at a time under `.tsforge/greenfield/`. It is separate from interactive [plan mode](/cli/plan-mode/), which saves a session-bound plan under `.tsforge/worklist/plans/` on approve and continues in the same session (`--continue`). Each greenfield feature is verified by the gate, the browser oracle, and a reject-by-default judge. `--notify <cmd>` runs a shell command on completion with the outcome in `$TSFORGE_STATUS`. See [Greenfield builds](/loop/greenfield/).
 
 ## Drive one change, then review it
 

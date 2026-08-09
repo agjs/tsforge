@@ -92,6 +92,14 @@ import {
   tryExpertRescue,
 } from "./turn";
 import { parkOrRaiseHand } from "./raise-hand";
+import type { IPlanDocument } from "./worklist/checklist.types";
+import {
+  countOpen,
+  findItem,
+  formatPlanTree,
+  isChecklistComplete,
+  loadPlan,
+} from "./worklist/checklist-store";
 
 /** Signature of the memory-consolidation step, injectable for tests so they can
  *  capture the per-build source id each send passes. */
@@ -211,6 +219,12 @@ export interface ISessionConfig {
    *  yields (or churns) then validates the on-disk edit. Without this the rebuilt session
    *  starts `edited=false` and a conversational send silently skips the gate (WS-C). */
   pausedWithEdit?: boolean;
+  /** Session-bound plan id restored from the session store on `--continue`. */
+  activePlanId?: string | null;
+  /** Fired when a task_* tool persists a plan change (REPL refreshes the Tasks rail). */
+  onPlanChanged?: (plan: IPlanDocument) => void;
+  /** Fired when present_plan proposes a plan (REPL renders pending proposal). */
+  onPlanPresented?: (plan: IPlanDocument) => void;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -373,19 +387,70 @@ const PLAN_MODE_NOTE =
   "reference examples, and explicit non-goals) yields a far better build than a vague " +
   "one. Then ask for the specific missing pieces that matter most. If the user would " +
   "rather not answer, proceed on clearly-stated assumptions — never block.\n" +
-  "4. PLAN — once you know enough, reply with a concise plan under a `## Plan` " +
-  "heading: each file to change and what to do in it, in order. For a small, " +
-  "unambiguous change the plan can be a single line. No code dumps, no tool calls " +
-  "in that reply.\n" +
-  "The user replies with feedback (revise the plan) or approves it; you implement " +
-  "ONLY after approval.";
+  "4. PLAN — once you know enough, call the `present_plan` tool with " +
+  "{ goal, items: [{ title, detail?, files?, verify?, children? }] }. " +
+  "Do NOT paste the JSON into chat — the harness renders it for the human. " +
+  "Items are concrete work units (e.g. create X, wire Y) — NEVER a checklist " +
+  "item for 'run tests / lint / the gate'; the harness gate validates each " +
+  "task_complete. Nested children allowed; `verify` is a hint only. " +
+  "The user replies with feedback (call present_plan again with revisions) or " +
+  "approves (approve/go/lgtm). On approve, the harness writes plans/<id>.json " +
+  "and you implement ONLY after that.";
 
 /** Sent when the user approves a plan-mode plan — the plan itself is already the
  *  latest assistant message, so anchor it instead of re-pasting it. */
 export const PLAN_APPROVED_NOTE =
-  "Your plan is APPROVED — plan mode is off and all tools are available again. " +
-  "Implement the approved plan above now, in order, starting with the first " +
-  "step. Do not re-explore or restate the plan; emit the tool calls.";
+  "Your plan is APPROVED — saved as this session's checklist under " +
+  ".tsforge/worklist/plans/<id>.json (bound via activePlanId). Plan mode is off; " +
+  "task_list / task_focus / task_complete / task_uncomplete are available. " +
+  "task_complete RUNS THE GATE and only marks done when green — never invent " +
+  "done, never mark an item complete while the gate is red. Finishing requires " +
+  "BOTH gate green AND every checklist item done. Implement now: task_focus " +
+  "the first open item, then emit the tool calls. Do not re-explore or restate " +
+  "the plan.";
+
+const CHECKLIST_CONTRACT_MARKER = "## Active plan checklist";
+
+/** Post-green nudge when the gate is clean but the bound plan still has open nodes. */
+export function checklistOpenNudge(opts: {
+  openCount: number;
+  calledTaskComplete: boolean;
+}): string {
+  const base =
+    `Gate is GREEN but the approved checklist still has ${String(opts.openCount)} ` +
+    "open item(s). Finished work requires BOTH gate green AND every checklist " +
+    "item done (via task_complete). Status is tools-only — do not invent done.";
+
+  if (!opts.calledTaskComplete) {
+    return (
+      `${base} You did not call task_complete this turn — mark finished items, ` +
+      "then task_focus the next open item and continue."
+    );
+  }
+
+  return `${base} Continue with the next open item (task_focus / task_complete).`;
+}
+
+/**
+ * Per-turn checklist injects / Phase B nudges are real model context, but they
+ * must not paint as USER cards on `--continue` — the Tasks rail already owns
+ * that UI. Kept in session history for the model; filtered from transcript replay.
+ */
+export function isEphemeralUserInject(message: {
+  readonly role: string;
+  readonly content: string;
+}): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+
+  const content = message.content;
+
+  return (
+    content.startsWith("[checklist — session plan ") ||
+    content.startsWith("Gate is GREEN but the approved checklist")
+  );
+}
 
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;
@@ -830,6 +895,10 @@ export class Session {
   private baseMode: PolicyMode = "default";
   /** Attach PLAN_MODE_NOTE to the NEXT send only (not every revision reply). */
   private planIntroPending = false;
+  /** Session-bound checklist plan id (`.tsforge/worklist/plans/<id>.json`). */
+  private activePlanId: string | null = null;
+  /** Last present_plan proposal — bound on approve; not on disk until then. */
+  private pendingPlan: IPlanDocument | null = null;
   /** Mid-session turn-cap override (setMaxTurns) — a web scaffold raises it. */
   private maxTurnsOverride?: number;
   /** TTSR manager (built-in + project + memory-learned rules). Null when TTSR is
@@ -886,26 +955,46 @@ export class Session {
         ? cfg.conventions.topics()
         : [];
 
+    // Task tools are advertised in the session list for interactive co-pilot
+    // sessions; offeredToolsFor withholds them until activePlanId is set.
     this.tools = toolsFor(
       false,
       {},
       offerConventions,
       offerCheck,
       cfg.interactive === true,
-      conventionTopics
+      conventionTopics,
+      cfg.interactive === true
     );
 
     this.ctx = ctx;
 
-    // Wire the `check` tool's runCheck seam to `runCheckGate` — the SAME full
-    // evaluation `settleGate` runs (autofix → gate command → META_RULES combined),
-    // so `check` can never report green while the end-of-turn settle is red. Reads
-    // `this.ctx` LAZILY so a mid-build `setGate` swap is honored, and never
-    // `validate(accept)` (empty for an injected gate — the vacuous-recheck trap).
-    // Absent ⇒ the tool isn't offered and reports it isn't available.
+    // `check` tool seam — only when offerCheck (do not enable via hasGate alone).
+    // Reads `this.ctx` LAZILY so a mid-build `setGate` swap is honored.
     if (offerCheck) {
       this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
     }
+
+    // Checklist complete seam — separate from `check` so a gate for task_complete
+    // does not advertise/enable the model's on-demand check tool.
+    if (this.hasGate) {
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
+    }
+
+    if (typeof cfg.activePlanId === "string" && cfg.activePlanId.length > 0) {
+      this.activePlanId = cfg.activePlanId;
+      this.ctx.tool.activePlanId = cfg.activePlanId;
+      this.refreshChecklistContract();
+    }
+
+    if (cfg.onPlanChanged !== undefined) {
+      this.ctx.tool.onPlanChanged = cfg.onPlanChanged;
+    }
+
+    this.ctx.tool.onPlanPresented = (plan) => {
+      this.pendingPlan = plan;
+      cfg.onPlanPresented?.(plan);
+    };
 
     // create() already resolved the base mode (CLI > config > default) onto ctx.
     this.baseMode = ctx.tool.policyMode ?? "default";
@@ -1212,6 +1301,11 @@ export class Session {
       this.hasGate = true;
     }
 
+    // task_complete needs runTaskGate; wire it when a gate appears mid-session.
+    if (this.hasGate && this.ctx.tool.runTaskGate === undefined) {
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
+    }
+
     this.refreshTaskContract();
   }
 
@@ -1264,6 +1358,186 @@ export class Session {
     // (e.g. an explicit --policy-mode ci), not a hard reset to "default".
     this.ctx.tool.policyMode = on ? "plan" : this.baseMode;
     this.planIntroPending = on;
+  }
+
+  /** Bind this session to a plan file id (after approve or `--continue`). Offers
+   *  task_* tools and refreshes the system checklist block. */
+  setActivePlanId(planId: string | null): void {
+    this.activePlanId = planId;
+    this.ctx.tool.activePlanId = planId;
+    this.refreshChecklistContract();
+  }
+
+  /** Session-bound plan id, or null when none approved yet. */
+  getActivePlanId(): string | null {
+    return this.activePlanId;
+  }
+
+  /** Wire the Tasks-rail refresh callback (REPL). */
+  setOnPlanChanged(fn: ((plan: IPlanDocument) => void) | undefined): void {
+    this.ctx.tool.onPlanChanged = fn;
+  }
+
+  /** Wire the present_plan UI callback (REPL). Keeps pendingPlan in sync. */
+  setOnPlanPresented(fn: ((plan: IPlanDocument) => void) | undefined): void {
+    this.ctx.tool.onPlanPresented = (plan) => {
+      this.pendingPlan = plan;
+      fn?.(plan);
+    };
+  }
+
+  /** Last present_plan proposal, if any (not yet approved). */
+  getPendingPlan(): IPlanDocument | null {
+    return this.pendingPlan;
+  }
+
+  /** Take and clear the pending proposal (approve path). */
+  takePendingPlan(): IPlanDocument | null {
+    const plan = this.pendingPlan;
+
+    this.pendingPlan = null;
+
+    return plan;
+  }
+
+  /** System block: goal, active item, open counts, tools-only status reminder. */
+  private refreshChecklistContract(): void {
+    const system = this.ctx.messages[0];
+
+    if (system?.role !== "system") {
+      return;
+    }
+
+    const block = this.checklistContractText();
+    const idx = system.content.indexOf(CHECKLIST_CONTRACT_MARKER);
+
+    if (block.length === 0) {
+      if (idx !== -1) {
+        system.content = system.content.slice(0, idx).trimEnd();
+      }
+
+      return;
+    }
+
+    system.content =
+      idx === -1
+        ? `${system.content}\n\n${block}`
+        : `${system.content.slice(0, idx).trimEnd()}\n\n${block}`;
+  }
+
+  private checklistContractText(): string {
+    if (this.activePlanId === null) {
+      return "";
+    }
+
+    const plan = loadPlan(this.cfg.cwd, this.activePlanId);
+
+    if (plan === null) {
+      return "";
+    }
+
+    const open = countOpen(plan.items);
+    const focused =
+      plan.activeItemId === null
+        ? null
+        : findItem(plan.items, plan.activeItemId);
+    const active =
+      focused === null ? "(none)" : `${focused.title} (${focused.id})`;
+
+    return [
+      CHECKLIST_CONTRACT_MARKER,
+      `goal: ${plan.goal}`,
+      `active: ${active}`,
+      `open: ${String(open)}`,
+      "Checklist status changes ONLY via task_list / task_focus / task_complete / task_uncomplete.",
+      "task_complete runs the gate — an item can be done only when the gate is green.",
+      "Finished requires gate green AND every checklist item done.",
+    ].join("\n");
+  }
+
+  /** Compact tree injected once per model turn for the bound plan. */
+  private injectPlanTree(): void {
+    if (this.activePlanId === null) {
+      return;
+    }
+
+    const plan = loadPlan(this.cfg.cwd, this.activePlanId);
+
+    if (plan === null) {
+      return;
+    }
+
+    this.refreshChecklistContract();
+    this.ctx.messages.push({
+      role: "user",
+      content: `[checklist — session plan ${plan.id}]\n${formatPlanTree(plan)}`,
+    });
+  }
+
+  /** True when a bound plan still has open nodes (blocks claiming finished). */
+  private checklistBlocksFinish(): {
+    block: true;
+    openCount: number;
+    calledTaskComplete: boolean;
+  } | null {
+    if (this.activePlanId === null) {
+      return null;
+    }
+
+    const plan = loadPlan(this.cfg.cwd, this.activePlanId);
+
+    if (plan === null || isChecklistComplete(plan)) {
+      return null;
+    }
+
+    return {
+      block: true,
+      openCount: countOpen(plan.items),
+      calledTaskComplete: this.calledTaskCompleteThisSend(),
+    };
+  }
+
+  /** Whether task_complete ran during this send (scan buffered tool events). */
+  private calledTaskCompleteThisSend(): boolean {
+    return this.sendEvents.some(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.startsWith("task_complete:")
+    );
+  }
+
+  /**
+   * After a green settle: if the bound checklist is still open, inject a nudge
+   * and keep driving (Phase B — finished = gate green AND plan done).
+   */
+  private continueIfChecklistOpen(
+    settled: ISendResult
+  ): ISendResult | "continue" {
+    if (settled.status !== "done") {
+      return settled;
+    }
+
+    const block = this.checklistBlocksFinish();
+
+    if (block === null) {
+      return settled;
+    }
+
+    this.ctx.messages.push({
+      role: "user",
+      content: checklistOpenNudge({
+        openCount: block.openCount,
+        calledTaskComplete: block.calledTaskComplete,
+      }),
+    });
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⊙ gate green — checklist still open (${String(block.openCount)} item(s)); continuing`,
+    });
+
+    return "continue";
   }
 
   /** Set (or clear, with "") the auto-fix command run before each gate — e.g. a
@@ -1652,7 +1926,8 @@ export class Session {
       this.tools,
       this.planMode,
       this.ctx.tool.mcpRegistry?.toolSchemas() ?? [],
-      activeOverlay()?.toolOverrides ?? []
+      activeOverlay()?.toolOverrides ?? [],
+      this.activePlanId !== null && this.activePlanId.length > 0
     );
     const callStart = performance.now();
     let firstTokenAt = 0;
@@ -2221,10 +2496,17 @@ export class Session {
     }
 
     // Gate confirms. Green/stuck ⇒ terminal; null ⇒ red, feedback pushed.
+    // Phase B: green + open checklist ⇒ nudge and continue (not finished yet).
     const settled = await this.settleTurn(turn, turnStart, sendStart);
 
     if (settled !== null) {
-      return { action: settled, buildNudges, forceTool: false };
+      const next = this.continueIfChecklistOpen(settled);
+
+      if (next === "continue") {
+        return { action: "continue", buildNudges, forceTool: false };
+      }
+
+      return { action: next, buildNudges, forceTool: false };
     }
 
     // Gate came back RED → enter repair mode (think to converge on the fix), nudge
@@ -2255,9 +2537,14 @@ export class Session {
 
     if (forced === null) {
       this.repairing = true;
+
+      return null;
     }
 
-    return forced;
+    const next = this.continueIfChecklistOpen(forced);
+
+    // Checklist-open continue is NOT a red gate — keep repairing off.
+    return next === "continue" ? null : next;
   }
 
   /** Run the gate once the model has stopped after editing: a terminal result
@@ -2622,6 +2909,8 @@ export class Session {
       // Inject any messages the user typed while the run was in flight, so they
       // steer the next model turn instead of waiting for the run to finish.
       this.injectSteer(opts.steer);
+      // Compact bound-plan tree so every turn sees current checklist status.
+      this.injectPlanTree();
 
       report({
         kind: "cycle",

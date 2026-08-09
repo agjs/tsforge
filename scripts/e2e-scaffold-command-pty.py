@@ -33,7 +33,7 @@ def main():
     home = tempfile.mkdtemp(prefix="tsforge-scaffold-")
     pid, m = spawn_tsforge(port, home=home, rows=24, cols=100)
 
-    got, _ = read_until(m, lambda b: "plan mode" in b or "› " in b, 40)
+    got, _ = read_until(m, lambda b: " PLAN " in b or "> " in b or "TSFORGE" in b, 40)
     t.check("REPL boots", got)
 
     # Run /scaffold via the palette (open with "/", filter, Enter).

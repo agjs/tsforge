@@ -1,6 +1,6 @@
 /**
  * The interactive REPL: a persistent gate-anchored conversation. Owns the
- * status bar, the multi-line editor / readline fallback, the slash-command
+ * pane console, the multi-line editor / readline fallback, the slash-command
  * dispatcher, plan-mode flow, and the inline overlays (palette, @ picker,
  * /config, /help). Extracted from cli.ts; the entry point stays `repl(args)`.
  */
@@ -39,6 +39,7 @@ import {
 import {
   Session,
   PLAN_APPROVED_NOTE,
+  isEphemeralUserInject,
   type Reporter,
   type ILoopEvent,
 } from "../loop";
@@ -71,15 +72,23 @@ import {
   userBubble,
   agentCardTop,
   agentCardBottom,
+  agentCardPadRow,
   agentBar,
+  agentRight,
+  agentRailInnerCols,
   makeAgentRail,
-  StatusBar,
-  MIN_ROWS,
   STYLE,
   paint,
-  PROMPT_COLS,
+  FORGE_EDITOR_GUTTER,
+  renderMessage,
+  inputContentCols,
   renderAgentTree,
   AgentTreeModel,
+  PaneScreen,
+  stripMouseReports,
+  canUsePaneTui,
+  PANE_MIN_ROWS,
+  INPUT_INNER_ROWS_MAX,
   type IStatusInfo,
   type IAgentRow,
 } from "../render";
@@ -113,12 +122,7 @@ import {
   runModelCommand,
   modelForRun,
 } from "./model-setup";
-import {
-  scopeLabel,
-  planHint,
-  printHeader,
-  maybePrintNoConfigHint,
-} from "./banner";
+import { scopeLabel, planHint } from "./banner";
 import { resolveGate, type AutoGateResolver } from "./gate-setup";
 import {
   printSessions,
@@ -127,6 +131,17 @@ import {
   runReviewCommand,
   runTraceCommand,
 } from "./repl-commands";
+import {
+  formatWorklistLines,
+  formatPlanProposal,
+  worklistBadge,
+  pendingPlanBadge,
+  seedWorklistFromPlan,
+  persistPlanDocument,
+  goalFromMessages,
+  loadPlan,
+} from "../loop/worklist";
+import type { IPlanDocument } from "../loop/worklist";
 
 /** A unique-enough id for a new session (time + a little randomness). */
 function newSessionId(): string {
@@ -371,6 +386,26 @@ export function humanAtKeyboard(): boolean {
   return process.stdin.isTTY;
 }
 
+/**
+ * When non-null, an interactive TTY cannot host the pane console — caller should
+ * print the reason and exit. Non-TTY / pipes return null (plain path, no panes).
+ */
+export function paneConsoleRejectReason(opts: {
+  stdinTty: boolean;
+  stdoutTty: boolean;
+  rows: number;
+}): string | null {
+  if (!opts.stdinTty || !opts.stdoutTty) {
+    return null;
+  }
+
+  if (canUsePaneTui(opts.rows)) {
+    return null;
+  }
+
+  return `tsforge: need a terminal at least ${String(PANE_MIN_ROWS)} rows high (got ${String(opts.rows)})`;
+}
+
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -484,6 +519,10 @@ async function initReplSession(args: ICliArgs): Promise<{
     // gate so it re-gates on the first send — never silently dropped across --continue
     // (WS-C; the persisted counterpart of the /clear carry).
     ...(resumed?.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
+    ...(typeof resumed?.activePlanId === "string" &&
+    resumed.activePlanId.length > 0
+      ? { activePlanId: resumed.activePlanId }
+      : {}),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
@@ -548,6 +587,24 @@ export function resumedProfileArg(
   return cliProfile.length === 0 && isProfileId(saved) ? saved : cliProfile;
 }
 
+/** One-line plan-mode banner for a fresh interactive session. */
+function maybeWritePlanModeIntro(planMode: boolean): void {
+  if (!planMode) {
+    return;
+  }
+
+  const chip = paint("◆ plan mode (default)", STYLE.brand + STYLE.bold, true);
+  const body = paint(
+    "— I'll explore and propose a plan; reply",
+    STYLE.dim,
+    true
+  );
+  const approve = paint("approve", STYLE.green + STYLE.bold, true);
+  const tail = paint("to build", STYLE.dim, true);
+
+  process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -564,7 +621,6 @@ export async function repl(args: ICliArgs): Promise<number> {
     gateLabel: initialGateLabel,
     logFile,
     resumed,
-    files,
     activeModelEntry,
     autoGate,
   } = await initReplSession(args);
@@ -609,6 +665,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       planMode,
       // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
       pausedWithEdit: session.hasDeferredGate,
+      activePlanId: session.getActivePlanId(),
       messages: [...session.messages],
     });
   };
@@ -620,26 +677,26 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   refreshUpdateCacheInBackground();
 
-  printHeader({
-    dir: args.dir,
-    id,
-    gateLabel,
-    files,
-    resumed,
-    model: modelInfo(provider.config),
-    updateNotice,
+  // Landing is seeded into PaneScreen after enter() — never print a banner into
+  // the primary buffer (it would flash, then get wiped).
+
+  const interactiveTty = process.stdin.isTTY && process.stdout.isTTY;
+  const rejectPane = paneConsoleRejectReason({
+    stdinTty: process.stdin.isTTY,
+    stdoutTty: process.stdout.isTTY,
+    rows: process.stdout.rows > 0 ? process.stdout.rows : 0,
   });
 
-  maybePrintNoConfigHint(args.dir, resumed);
+  if (rejectPane !== null) {
+    process.stderr.write(`${rejectPane}\n`);
 
-  // Pin an editable input row only on a real TTY tall enough to host the bar.
-  // In that mode readline does line-EDITING but must not RENDER (we paint the
-  // row ourselves), so it gets a discard sink for output; otherwise it writes to
-  // stdout as before (pipes, small terminals — behaviour unchanged).
-  const useInputRow =
-    process.stdin.isTTY &&
-    process.stdout.isTTY &&
-    process.stdout.rows >= MIN_ROWS;
+    return 1;
+  }
+
+  // Interactive TTY always hosts the pane console (height gated above). Readline
+  // does line-EDITING but must not RENDER — we paint via PaneScreen. Pipes use
+  // plain stdout (no panes).
+  const useInputRow = interactiveTty;
 
   // In editor mode, do NOT create readline — the editor owns stdin exclusively.
   // In fallback mode (non-TTY or basicInput), readline is the only consumer.
@@ -700,23 +757,11 @@ export async function repl(args: ICliArgs): Promise<number> {
   // (@file/image expansion still apply — it is not sent byte-for-byte verbatim).
   let awaitingUserAnswer = false;
   // The current interactive mode (Shift+Tab cycles it; /plan toggles it). Kept in
-  // sync with `planMode`; shown as a chip in the status bar.
+  // sync with `planMode`; shown as a chip in the pane footer.
   let currentModeId = planMode ? "plan" : "normal";
 
   session.setPlanMode(planMode);
-
-  if (planMode) {
-    const chip = paint("◆ plan mode (default)", STYLE.brand + STYLE.bold, true);
-    const body = paint(
-      "— I'll explore and propose a plan; reply",
-      STYLE.dim,
-      true
-    );
-    const approve = paint("approve", STYLE.green + STYLE.bold, true);
-    const tail = paint("to build", STYLE.dim, true);
-
-    process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
-  }
+  maybeWritePlanModeIntro(planMode);
 
   // Model-driven delegation: the orchestrator can spawn read-only specialist
   // subagents via the `spawn_agent` tool — the user never names an agent.
@@ -761,9 +806,9 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Image capabilities: offer read_image/generate_image when their backends are
   // configured, and wire the inline preview for generated images. The preview
-  // emits the terminal's inline-image escape (iTerm2 today) via the StatusBar
-  // stream so the pinned bar re-anchors below it; unsupported terminal → no-op
-  // (the tool still reports the saved path).
+  // emits the terminal's inline-image escape (iTerm2 today) via the pane stream
+  // so it lands in scrollback; unsupported terminal → no-op (the tool still
+  // reports the saved path).
   // A small budget stops a runaway loop from flooding the scrollback. Re-applied
   // after /clear (like setSetupWeb/wireDelegation) since /clear rebuilds session.
   const imageProtocol = detectImageProtocol();
@@ -772,18 +817,39 @@ export async function repl(args: ICliArgs): Promise<number> {
   // consumed (described + cleared) on the next send by resolveImageInput.
   const pendingImages: string[] = [];
 
+  /** Pane-console chrome facade (overlays / agent tree / input). */
+  interface ILiveChrome {
+    hasChrome(): boolean;
+    setOverlay(lines: readonly string[]): void;
+    clearOverlay(): void;
+    setEditorOverlay(lines: readonly string[]): void;
+    clearEditorOverlay(): void;
+    setAgentTree(lines: readonly string[]): void;
+    clearAgentTree(): void;
+    setInput(line: string, cursor: number): void;
+    setEditor(
+      lines: readonly string[],
+      cursorRow: number,
+      cursorCol: number
+    ): void;
+  }
+
+  // Assigned once PaneScreen exists; pasteFromClipboard closes over it.
+  let liveChrome: ILiveChrome | null = null;
+
   // Ctrl+V in the editor: a clipboard IMAGE becomes a `[image #N]` chip + a pending
   // attachment (described on send); otherwise fall back to pasting clipboard text.
   // (Cmd+V is swallowed by the terminal — for text it arrives as a bracketed paste;
   // an image on the clipboard never reaches an in-terminal app, hence Ctrl+V.)
+  // Uses `liveChrome` (assigned after PaneScreen exists) for the hint.
   const pasteFromClipboard = async (): Promise<string | null> => {
     // Reading the clipboard shells out (osascript can take ~1s), so show a
     // transient hint above the input so the pause reads as "working", not hung.
     // (Install `pngpaste` to make it instant — the reader prefers it.)
-    const hinting = statusBar.active;
+    const hinting = liveChrome?.hasChrome() === true;
 
     if (hinting) {
-      statusBar.setEditorOverlay(["📋 reading clipboard…"]);
+      liveChrome?.setEditorOverlay(["📋 reading clipboard…"]);
     }
 
     try {
@@ -802,7 +868,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       return text.trim().length > 0 ? text : null;
     } finally {
       if (hinting) {
-        statusBar.clearEditorOverlay();
+        liveChrome?.clearEditorOverlay();
       }
     }
   };
@@ -821,12 +887,10 @@ export async function repl(args: ICliArgs): Promise<number> {
     const escape = renderInlineImage(base64, imageProtocol, { name });
 
     if (escape !== null) {
-      // Route through the StatusBar stream channel (NOT raw stdout): it commits the
-      // content to scrollback and re-anchors the pinned bar/input row at the cursor
-      // the terminal left below the image. A raw write left the bar's cursor
-      // tracking stale, so it painted over the image (overlapping text). Bracket
-      // with newlines so the image sits on its own committed lines.
-      statusBar.writeStream(`\n${escape}\n`);
+      // Route through the pane stream (NOT raw stdout) so the image lands in
+      // scrollback and the next paint keeps chrome intact. Bracket with newlines
+      // so the image sits on its own committed lines.
+      streamOut(`\n${escape}\n`);
     }
   };
 
@@ -902,9 +966,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     } finally {
       spinner.stop();
       active = null;
-      // Seal the agent card's `╰` bottom cap the moment streaming ends, so any
-      // post-turn hint (plan-mode notice, PLAN review, etc.) lands BELOW the card
-      // instead of inside it — which would break the rail. Idempotent.
+      // Close the agent card the moment streaming ends, so any post-turn hint
+      // (plan-mode notice, PLAN review, etc.) lands BELOW the card instead of
+      // inside it — which would break the rail. Idempotent.
       closeAgentTurn();
       resetTree(); // clear the live agent tree once the turn's delegation is done
     }
@@ -954,6 +1018,74 @@ export async function repl(args: ICliArgs): Promise<number> {
       return session.send(`${contextBlock}${composed}`, opts);
     });
 
+  const resolveApprovedPlan = (): IPlanDocument | null => {
+    const pending = session.takePendingPlan();
+
+    if (pending !== null) {
+      return persistPlanDocument(args.dir, pending);
+    }
+
+    const last = session.messages.at(-1);
+    const planText =
+      last?.role === "assistant" && typeof last.content === "string"
+        ? last.content
+        : "";
+    const seeded = seedWorklistFromPlan(
+      args.dir,
+      planText,
+      goalFromMessages(session.messages)
+    );
+
+    if (!seeded.ok) {
+      echo(`  ✗ ${seeded.error}\n`);
+
+      return null;
+    }
+
+    return seeded.plan;
+  };
+
+  const approveBoundPlan = async (): Promise<void> => {
+    const plan = resolveApprovedPlan();
+
+    if (plan === null) {
+      return;
+    }
+
+    session.setActivePlanId(plan.id);
+    syncWorklistPanel(plan);
+    echo(
+      `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
+    );
+    planMode = false;
+    planDiscussed = false;
+    session.setPlanMode(false);
+    await persist();
+    echo("  ✓ plan approved — implementing\n");
+    await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
+  };
+
+  const discussInPlanMode = async (line: string): Promise<void> => {
+    await runSend(line);
+    planDiscussed = true;
+
+    // present_plan already paints the card + approve footer mid-turn. Only
+    // nudge here for the legacy ## Plan heading path (no present_plan call).
+    const last = session.messages.at(-1);
+    const plannedHeading =
+      last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
+
+    if (plannedHeading && session.getPendingPlan() === null) {
+      const cols = panesLive()
+        ? paneScreen.mainInnerCols()
+        : process.stdout.columns > 0
+          ? process.stdout.columns
+          : 80;
+
+      echo(`\n${planHint(true, cols)}\n`);
+    }
+  };
+
   const dispatch = async (line: string): Promise<void> => {
     const route = classifyReplRoute(line, {
       planMode,
@@ -973,15 +1105,10 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    // GENERAL plan mode, approval: unlock the tools and implement the plan that
-    // is already the latest assistant message. Only an explicit approval word
-    // counts ("yes" may be answering one of the model's clarifying questions).
+    // GENERAL plan mode, approval: bind present_plan proposal (or fenced JSON
+    // fallback), unlock tools, implement. Only an explicit approval word counts.
     if (route === "plan-approval") {
-      planMode = false;
-      planDiscussed = false;
-      session.setPlanMode(false);
-      echo("  ✓ plan approved — implementing\n");
-      await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
+      await approveBoundPlan();
 
       return;
     }
@@ -989,14 +1116,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // GENERAL plan mode, discussion: the agent explores read-only, asks its
     // clarifying questions, and proposes/revises a plan. Stays in plan mode.
     if (route === "plan-discuss") {
-      await runSend(line);
-      planDiscussed = true;
-
-      const last = session.messages.at(-1);
-      const planned =
-        last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
-
-      echo(`\n${planHint(planned)}\n`);
+      await discussInPlanMode(line);
 
       return;
     }
@@ -1027,6 +1147,62 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Placeholder declarations; defined after runLine / editorControl are available.
   let handleHelp: () => Promise<void>;
   let openScaffold: () => Promise<void>;
+  // Assigned after the pane console exists (same pattern as handleHelp).
+  let handleCopy: () => void = () => undefined;
+
+  const clearConversation = async (): Promise<void> => {
+    // Rebuild the session with the current state (config is not reused;
+    // repl's /clear creates a fresh Session.create call)
+    const profile = resolveCliProfile(args.profile);
+    // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
+    // silently drop the deferred gate: the gate fires on mutation state (`edited`),
+    // not merely a dirty tree, so a fresh session would otherwise never re-validate
+    // the on-disk edit on a conversational send (WS-C).
+    const carryDeferredGate = session.hasDeferredGate;
+    const carryPlanId = session.getActivePlanId();
+
+    session = await Session.create({
+      provider,
+      cwd: args.dir,
+      files: session.scope,
+      accept: session.gate,
+      contextWindow,
+      report: makeReporter(logFile, id, id),
+      enableThinking: false,
+      // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
+      // on the TTY like the init session, so a piped REPL doesn't advertise a pause
+      // nobody can answer.
+      interactive: humanAtKeyboard(),
+      // Keep the SCOPED format janitor on across /clear — else the rebuilt session
+      // silently reverts to no formatting for the rest of the session.
+      coreFormat: true,
+      // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
+      // the last static command and stops picking up new framework packs. Withheld
+      // once a manual /gate has taken over (autoGateActive false), so the rebuild
+      // never silently re-arms the auto gate over the user's command.
+      ...autoGateCarry(autoGate, session.autoGateActive),
+      // Plain boolean (no branch): the constructor only seeds the flag when true.
+      pausedWithEdit: carryDeferredGate,
+      ...(profile === undefined ? {} : { profile }),
+      ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
+    });
+    wireDelegation(); // re-offer spawn_agent on the rebuilt session
+    wireImages(); // re-offer read_image/generate_image + preview on the rebuild
+    wirePlanRail();
+    // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
+    // chips), so their temp files are now orphaned.
+    void discardClipboardImages(pendingImages.splice(0));
+    session.setPlanMode(planMode); // a /clear must not silently drop the mode
+    planDiscussed = false;
+    // /clear rebuilds the Session, so the pending ask_user QUESTION is gone — drop the
+    // answer-routing flag. (The still-unvalidated EDIT behind that pause is not lost:
+    // it's carried into the new session via pausedWithEdit above, so its gate still
+    // fires on the first send.)
+    awaitingUserAnswer = false;
+    await persist();
+    clearScreen(); // wipe the visible terminal + scrollback, not just the state
+    echo("conversation cleared\n");
+  };
 
   // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
   // it can rebuild `session` (e.g. /clear) and reach config/persist.
@@ -1042,57 +1218,13 @@ export async function repl(args: ICliArgs): Promise<number> {
         await handleHelp();
         break;
 
-      case "clear": {
-        // Rebuild the session with the current state (config is not reused;
-        // repl's /clear creates a fresh Session.create call)
-        const profile = resolveCliProfile(args.profile);
-        // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
-        // silently drop the deferred gate: the gate fires on mutation state (`edited`),
-        // not merely a dirty tree, so a fresh session would otherwise never re-validate
-        // the on-disk edit on a conversational send (WS-C).
-        const carryDeferredGate = session.hasDeferredGate;
-
-        session = await Session.create({
-          provider,
-          cwd: args.dir,
-          files: session.scope,
-          accept: session.gate,
-          contextWindow,
-          report: makeReporter(logFile, id, id),
-          enableThinking: false,
-          // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
-          // on the TTY like the init session, so a piped REPL doesn't advertise a pause
-          // nobody can answer.
-          interactive: humanAtKeyboard(),
-          // Keep the SCOPED format janitor on across /clear — else the rebuilt session
-          // silently reverts to no formatting for the rest of the session.
-          coreFormat: true,
-          // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
-          // the last static command and stops picking up new framework packs. Withheld
-          // once a manual /gate has taken over (autoGateActive false), so the rebuild
-          // never silently re-arms the auto gate over the user's command.
-          ...autoGateCarry(autoGate, session.autoGateActive),
-          // Plain boolean (no branch): the constructor only seeds the flag when true.
-          pausedWithEdit: carryDeferredGate,
-          ...(profile === undefined ? {} : { profile }),
-        });
-        wireDelegation(); // re-offer spawn_agent on the rebuilt session
-        wireImages(); // re-offer read_image/generate_image + preview on the rebuild
-        // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
-        // chips), so their temp files are now orphaned.
-        void discardClipboardImages(pendingImages.splice(0));
-        session.setPlanMode(planMode); // a /clear must not silently drop the mode
-        planDiscussed = false;
-        // /clear rebuilds the Session, so the pending ask_user QUESTION is gone — drop the
-        // answer-routing flag. (The still-unvalidated EDIT behind that pause is not lost:
-        // it's carried into the new session via pausedWithEdit above, so its gate still
-        // fires on the first send.)
-        awaitingUserAnswer = false;
-        await persist();
-        clearScreen(); // wipe the visible terminal + scrollback, not just the state
-        process.stdout.write("conversation cleared\n");
+      case "copy":
+        handleCopy();
         break;
-      }
+
+      case "clear":
+        await clearConversation();
+        break;
 
       case "compact": {
         // Compaction is a full model round-trip (can take many seconds). Drive the
@@ -1155,16 +1287,41 @@ export async function repl(args: ICliArgs): Promise<number> {
       case "setup": {
         const { runSetup } = await import("../setup/run-setup");
 
-        // runSetup prints its own apply/cancel summary — don't add a second,
-        // possibly-misleading line (it would claim success even on cancel).
-        await runSetup({
-          cwd: args.dir,
-          yes: false,
-          color: process.stdout.isTTY,
-          // The REPL editor/readline owns stdin — don't let the wizard pause it
-          // on exit (that would quit the whole process).
-          manageInput: false,
-        });
+        // Same suspend + overlay pattern as `/config`: without it, setup opens a
+        // nested alt-screen (fights PaneScreen) and Enter races the editor.
+        editorControl?.suspend();
+        editorControl?.setInputInert(true);
+
+        try {
+          // runSetup prints its own apply/cancel summary — don't add a second,
+          // possibly-misleading line (it would claim success even on cancel).
+          await runSetup({
+            cwd: args.dir,
+            yes: false,
+            color: process.stdout.isTTY,
+            // The REPL editor/readline owns stdin — don't let the wizard pause it
+            // on exit (that would quit the whole process).
+            manageInput: false,
+            out: (s) => {
+              streamOut(s);
+            },
+            view: {
+              render: (lines) => {
+                chrome.setOverlay(lines);
+              },
+              close: () => {
+                chrome.clearOverlay();
+              },
+            },
+            columns: transcriptCols(),
+            viewportRows: overlayBudget(),
+          });
+        } finally {
+          editorControl?.setInputInert(false);
+          editorControl?.resume();
+          editorControl?.getBuffer().setText("");
+        }
+
         break;
       }
 
@@ -1271,8 +1428,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     return false;
   };
 
-  // Current state as the status surface sees it — shared by the pinned bar and
-  // the inline fallback so both show identical content.
+  // Current state as the status surface sees it — pane footer and plain prompt.
   const statusInfo = (): IStatusInfo => ({
     model: modelInfo(provider.config).model,
     contextTokens: session.contextTokens,
@@ -1288,9 +1444,195 @@ export async function repl(args: ICliArgs): Promise<number> {
       : {}),
   });
 
-  // Pinned bottom status bar when we're on a real terminal; otherwise the bar is
-  // inactive and `prompt()` falls back to the inline status line (pipes, --log).
-  const statusBar = new StatusBar(process.stdout, true, true, useInputRow);
+  // Pane console — the only interactive UI on a TTY.
+  const paneScreen = new PaneScreen(process.stdout);
+  let exitCode = 0;
+
+  /** Main-pane content width (or full tty when panes are not live). Menus,
+   *  bubbles, and hairlines must use this — full stdout.columns punches through
+   *  the side panel. */
+  const transcriptCols = (): number => {
+    if (paneScreen.active) {
+      return Math.max(20, paneScreen.mainInnerCols());
+    }
+
+    const cols = process.stdout.columns;
+
+    return cols > 0 ? cols : 80;
+  };
+
+  /** Max overlay rows — pane chrome budget when live, else tty rows. */
+  const overlayBudget = (): number => {
+    if (paneScreen.active) {
+      return paneScreen.overlayBudgetRows();
+    }
+
+    const rows = process.stdout.rows;
+
+    return rows > 0 ? rows : 24;
+  };
+
+  /** True while the alt-screen pane console owns the terminal. */
+  const panesLive = (): boolean => paneScreen.active;
+
+  // Overlays / agent tree / editor → PaneScreen only.
+  const chrome: ILiveChrome = {
+    hasChrome: () => panesLive(),
+    setOverlay(lines) {
+      if (panesLive()) {
+        paneScreen.setOverlay(lines);
+      }
+    },
+    clearOverlay() {
+      if (panesLive()) {
+        paneScreen.clearOverlay();
+      }
+    },
+    setEditorOverlay(lines) {
+      if (panesLive()) {
+        paneScreen.setOverlay(lines);
+      }
+    },
+    clearEditorOverlay() {
+      if (panesLive()) {
+        paneScreen.clearOverlay();
+      }
+    },
+    setAgentTree(lines) {
+      if (panesLive()) {
+        paneScreen.setAgentTree(lines);
+      }
+    },
+    clearAgentTree() {
+      if (panesLive()) {
+        paneScreen.clearAgentTree();
+      }
+    },
+    setInput(line, cursor) {
+      if (panesLive()) {
+        paneScreen.setInput({
+          lines: [line],
+          cursorRow: 0,
+          cursorCol: cursor,
+        });
+      }
+    },
+    setEditor(lines, cursorRow, cursorCol) {
+      if (panesLive()) {
+        paneScreen.setInput({ lines, cursorRow, cursorCol });
+      }
+    },
+  };
+
+  liveChrome = chrome;
+
+  const syncPaneChrome = (): void => {
+    if (!panesLive()) {
+      return;
+    }
+
+    paneScreen.setStatus(statusInfo());
+  };
+
+  /** Keep pane footer metrics in sync. */
+  const refreshStatus = (): void => {
+    syncPaneChrome();
+  };
+
+  /** Dump transcript to the primary buffer for copy, then re-enter panes. */
+  const dumpPanesTranscript = (): void => {
+    if (!panesLive()) {
+      return;
+    }
+
+    const transcript = paneScreen.dumpTranscript();
+
+    paneScreen.leave();
+    process.stdout.write(
+      (transcript.length > 0 ? `${transcript}\n` : "") +
+        "(transcript dumped above for copy)\n"
+    );
+
+    if (paneScreen.enter()) {
+      syncPaneChrome();
+    }
+  };
+
+  handleCopy = (): void => {
+    if (panesLive()) {
+      dumpPanesTranscript();
+    } else {
+      process.stdout.write("(nothing to dump — pane TUI is not active)\n");
+    }
+  };
+
+  /** Paint the Tasks rail from the session-bound plan (or empty-rail hints). */
+  const syncWorklistPanel = (plan: IPlanDocument | null): void => {
+    if (!panesLive()) {
+      return;
+    }
+
+    const cols = Math.max(12, paneScreen.panelInnerCols());
+    const maxPending = Math.max(4, paneScreen.panelListBudgetRows());
+
+    paneScreen.setPanel(
+      formatWorklistLines(plan, {
+        columns: cols,
+        maxPending,
+        color: true,
+      })
+    );
+    paneScreen.setWorklistBadge(worklistBadge(plan));
+
+    syncPaneChrome();
+  };
+
+  const wirePlanRail = (): void => {
+    session.setOnPlanChanged((plan) => {
+      syncWorklistPanel(plan);
+    });
+    session.setOnPlanPresented((plan) => {
+      planDiscussed = true;
+      const cols = panesLive()
+        ? paneScreen.mainInnerCols()
+        : process.stdout.columns > 0
+          ? process.stdout.columns
+          : 80;
+
+      echo(`\n${formatPlanProposal(plan, cols, true)}\n`);
+
+      // Preview in Tasks rail before approve (pending badge).
+      if (panesLive()) {
+        paneScreen.setPanel(
+          formatWorklistLines(plan, {
+            columns: Math.max(12, paneScreen.panelInnerCols()),
+            maxPending: Math.max(4, paneScreen.panelListBudgetRows()),
+            color: true,
+          })
+        );
+        paneScreen.setWorklistBadge(pendingPlanBadge(plan));
+        syncPaneChrome();
+      }
+
+      echo(`\n${planHint(true, cols)}\n`);
+    });
+  };
+
+  wirePlanRail();
+
+  /** Stream conversation text: main pane when live, else plain stdout (pipes). */
+  const streamOut = (text: string): void => {
+    if (panesLive()) {
+      paneScreen.appendMain(text);
+    } else {
+      process.stdout.write(text);
+    }
+  };
+
+  /** Raw terminal modes (bracketed paste, kitty keys) — never transcript. */
+  const writeTerm = (text: string): void => {
+    process.stdout.write(text);
+  };
 
   // --- live agent tree ------------------------------------------------------
   // When the orchestrator delegates (`spawn_agent`), its subagents render as a
@@ -1343,14 +1685,14 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   const repaintTree = (): void => {
-    if (!statusBar.active) {
+    if (!chrome.hasChrome()) {
       return;
     }
 
     const rows = agentTree.rows();
 
     if (rows.length === 0) {
-      statusBar.setAgentTree([]);
+      chrome.setAgentTree([]);
 
       return;
     }
@@ -1363,7 +1705,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       ...(focusedAgentId === null ? {} : { selectedId: focusedAgentId }),
     });
 
-    statusBar.setAgentTree([...tree, ...detailPane(rows)]);
+    chrome.setAgentTree([...tree, ...detailPane(rows)]);
   };
 
   const pushAgentOutput = (agentId: string, text: string): void => {
@@ -1392,10 +1734,9 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     if (id !== undefined && event.kind === "agent_spawned") {
       // Only DIVERT a subagent's output to the (invisible) detail buffer when the
-      // tree can actually render it. With the bar inactive (non-TTY / tiny
-      // terminal) we leave the sink unset so output routes to the parent/stdout
-      // and stays visible instead of being swallowed.
-      if (statusBar.active) {
+      // pane console can render the tree. Otherwise leave the sink unset so
+      // output routes to the parent/stdout and stays visible.
+      if (panesLive()) {
         outputRouter.setAgentSink(id, (t) => {
           pushAgentOutput(id, t);
         });
@@ -1462,14 +1803,14 @@ export async function repl(args: ICliArgs): Promise<number> {
     focusedAgentId = null;
     userPickedFocus = false;
     treeActive = false;
-    statusBar.clearAgentTree();
+    chrome.clearAgentTree();
   };
 
   observeEvents(feedTree);
 
   // Switch the interactive mode (via the extensible registry) and reflect it in
-  // the status bar. The single entry point for /plan, Shift+Tab, and startup —
-  // so `planMode`, `currentModeId`, and the bar never drift apart.
+  // the pane footer. The single entry point for /plan, Shift+Tab, and startup —
+  // so `planMode`, `currentModeId`, and the chrome never drift apart.
   const setMode = (id: string): void => {
     const mode = modeById(id);
 
@@ -1478,9 +1819,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     planMode = mode.id === "plan";
     planDiscussed = false;
 
-    if (statusBar.active) {
-      statusBar.update(statusInfo());
-    }
+    refreshStatus();
   };
 
   // `/plan` toggles between plan and normal. Extracted so the slash-command
@@ -1552,12 +1891,14 @@ export async function repl(args: ICliArgs): Promise<number> {
         setEnv,
         view: {
           render: (lines) => {
-            statusBar.setOverlay(lines, statusInfo());
+            chrome.setOverlay(lines);
           },
           close: () => {
-            statusBar.clearOverlay(statusInfo());
+            chrome.clearOverlay();
           },
         },
+        columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       });
     } finally {
       editorControl?.setInputInert(false);
@@ -1565,9 +1906,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       editorControl?.getBuffer().setText("");
     }
 
-    if (statusBar.active) {
-      statusBar.update(statusInfo());
-    }
+    refreshStatus();
 
     await persist();
   };
@@ -1581,17 +1920,32 @@ export async function repl(args: ICliArgs): Promise<number> {
   // wizard — the editor itself is created inside the loop's nested scope.
   let editorControl: IEditorHandle | null = null;
 
-  // Each agent turn renders as a left-accent card: a rounded `╭ <model>` cap, every
-  // body line prefixed with the `│ ` rail (wrapping inside it), and a `╰` cap when
-  // the turn ends. The cap is emitted once, on the turn's first streamed output.
-  // The card's content budget leaves the rail (2) + 2 spare columns, so no terminal
-  // — however it treats the right margin — ever wraps a row and drops the rail.
-  const railInnerWidth = (): number =>
-    (process.stdout.columns > 0 ? process.stdout.columns : 80) -
-    PROMPT_COLS -
-    2;
+  // Each agent turn: `┌AGENT┐` badge + hairline + dim model subheader, then every
+  // body line on the thin `│ ` rail (wrapping inside it). No bottom cap — spacing
+  // is a trailing blank. The cap is emitted once, on the turn's first streamed
+  // output. Content budget leaves the rail (2) + 2 spare columns so the terminal
+  // never hard-wraps a row and drops the rail.
+  // Prefer forge> width for the pane console (editor is built before enter(),
+  // so panesLive() is still false at construction time).
+  const promptGutterCols = (): number => FORGE_EDITOR_GUTTER;
+
+  /** Draft wrap width — pane input matches the agent card, not full tty. */
+  const editorColumns = (ttyCols: number): number => {
+    if (panesLive()) {
+      return Math.max(1, inputContentCols(paneScreen.mainInnerCols()));
+    }
+
+    return Math.max(1, ttyCols - promptGutterCols());
+  };
+
+  /** Content budget inside `│  …  │` (left gutter 3 + right rail 1). */
+  const railInnerWidth = (): number => agentRailInnerCols(transcriptCols());
   let agentTurnOpen = false;
-  let agentRail = makeAgentRail(agentBar(true), railInnerWidth);
+  let agentRail = makeAgentRail(
+    agentBar(true),
+    railInnerWidth,
+    agentRight(true)
+  );
 
   // Route streamed agent output through the bar so it scrolls above the pinned
   // input row; cleared on loop exit so later/headless writes go straight to stdout.
@@ -1599,11 +1953,19 @@ export async function repl(args: ICliArgs): Promise<number> {
     outputRouter.setParentSink((text): void => {
       if (!agentTurnOpen) {
         agentTurnOpen = true;
-        agentRail = makeAgentRail(agentBar(true), railInnerWidth); // fresh per turn
-        statusBar.writeStream(`\n${agentCardTop(statusInfo().model, true)}\n`);
+        agentRail = makeAgentRail(
+          agentBar(true),
+          railInnerWidth,
+          agentRight(true)
+        );
+        const cols = transcriptCols();
+
+        streamOut(
+          `\n${agentCardTop(true, cols)}\n${agentCardPadRow(true, cols)}\n`
+        );
       }
 
-      statusBar.writeStream(agentRail.feed(text));
+      streamOut(agentRail.feed(text));
     });
   }
 
@@ -1612,11 +1974,21 @@ export async function repl(args: ICliArgs): Promise<number> {
     agentTurnOpen = false;
   };
 
-  // Close the current agent card (rounded bottom cap) once its turn is done. A
+  // Close the current agent card (trailing blank) once its turn is done. A
   // no-op for turns that produced no streamed output (e.g. slash commands).
   const closeAgentTurn = (): void => {
     if (agentTurnOpen && useInputRow) {
-      statusBar.writeStream(`${agentCardBottom(true)}\n`);
+      const held = agentRail.flush();
+
+      if (held.length > 0) {
+        streamOut(held);
+      }
+
+      const cols = transcriptCols();
+
+      streamOut(
+        `${agentCardPadRow(true, cols)}\n${agentCardBottom(true, cols)}\n`
+      );
       agentTurnOpen = false;
     }
   };
@@ -1626,50 +1998,42 @@ export async function repl(args: ICliArgs): Promise<number> {
   const syncInput = (): void => {
     if (useInputRow && rl !== null) {
       setImmediate(() => {
-        statusBar.setInput(rl.line, rl.cursor);
+        chrome.setInput(rl.line, rl.cursor);
       });
     }
   };
 
-  // Echo a CLI-side line (queued-steer notice, etc.) into the scroll region so it
-  // doesn't clobber the pinned input row; plain write when the row isn't active.
+  // Echo a CLI-side line into pane scrollback when live; plain write otherwise.
   const echo = (text: string): void => {
-    if (useInputRow) {
-      statusBar.writeStream(text);
+    if (panesLive() || useInputRow) {
+      streamOut(text);
     } else {
       process.stdout.write(text);
     }
   };
 
-  // In the interactive REPL a readline prompt owns stdin for the WHOLE session, so
-  // the spinner's carriage-return inline write would clobber whatever the user is
-  // typing mid-turn — regardless of whether the pinned bar is active. So suppress
-  // the inline write unconditionally here: when the bar is up (≥5 rows) it shows the
-  // activity itself via statusInfo; on a sub-5-row TTY there's simply no inline
-  // spinner (correct — better silent than corrupting the input line). The default
-  // `() => true` gate still applies to any non-interactive spinner use.
+  // In the interactive REPL a readline/editor owns stdin for the WHOLE session, so
+  // the spinner's carriage-return inline write would clobber input mid-turn.
+  // Suppress it; activity shows via pane statusInfo instead.
   spinner.setInlineGate(() => false);
 
-  // A drag-resize fires SIGWINCH continuously while the terminal reflows. Painting
-  // the bar into that moving target strands copies of it (the multi-bar / stray-rule
-  // mess a circular corner-drag produced). So we DEBOUNCE: while resizes are still
-  // arriving we suppress ALL bar repaints (spinner ticks included) and repaint once,
-  // cleanly, only after the size settles (~120ms of quiet).
+  // Debounce SIGWINCH: suppress repaints mid-drag, then resize panes once settled.
   const RESIZE_SETTLE_MS = 120;
   let resizing = false;
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Repaint the bar on every spinner tick so tok/s and the context meter update
-  // live mid-turn (both read live session state) — but NOT during a resize storm.
+  // Pane footer + agent tree on every spinner tick — not during a resize storm.
   spinner.onTick(() => {
-    if (statusBar.active && !resizing) {
-      statusBar.update(statusInfo());
+    if (resizing) {
+      return;
+    }
 
-      // Advance the tree's spinner so running agent rows animate in step.
-      if (treeActive) {
-        treeFrame += 1;
-        repaintTree();
-      }
+    syncPaneChrome();
+
+    // Advance the tree's spinner so running agent rows animate in step.
+    if (treeActive) {
+      treeFrame += 1;
+      repaintTree();
     }
   });
 
@@ -1679,7 +2043,6 @@ export async function repl(args: ICliArgs): Promise<number> {
   // needed; the editor's resize ignores non-positive values regardless.
   const handleResize = (): void => {
     resizing = true;
-    statusBar.pauseForResize(); // buffer streamed output; draw nothing mid-storm
 
     if (resizeTimer !== null) {
       clearTimeout(resizeTimer);
@@ -1688,55 +2051,60 @@ export async function repl(args: ICliArgs): Promise<number> {
     resizeTimer = setTimeout(() => {
       resizing = false;
       resizeTimer = null;
-      statusBar.resize(statusInfo());
+      // Geometry first (no paint), then one chrome sync — avoids resize+status
+      // double frames on every SIGWINCH settle.
+      paneScreen.resize(process.stdout.rows, process.stdout.columns, {
+        paint: false,
+      });
+      syncPaneChrome();
       // The editor wraps/windows at the dimensions it was created with; without
       // this it keeps using the pre-resize size and can clip the current line.
       resizeEditor?.(process.stdout.columns, process.stdout.rows);
-      statusBar.flushStream(); // replay buffered output into the settled region
     }, RESIZE_SETTLE_MS);
   };
 
   process.stdout.on("resize", handleResize);
 
-  // Restore the terminal even on an unexpected exit (teardown is idempotent).
+  // Editor handle lives inside the prompt loop below; this ref lets the process
+  // exit hook tear down Kitty/modifyOtherKeys even on an unexpected exit.
+  // Without that cleanup the shell sees Ctrl+C as literal `;5;99~` junk.
+  let editorForExit: { close: () => void } | null = null;
+
+  // Restore the terminal even on an unexpected exit (leave/close are idempotent).
   process.on("exit", () => {
-    statusBar.teardown();
+    editorForExit?.close();
+    paneScreen.leave();
   });
 
-  // Wipe the visible terminal + scrollback (2J + 3J + home), re-pinning the status
-  // bar around it so its scroll region stays correct. Used by /clear so the screen
-  // is a clean slate, not just the conversation state.
+  // Wipe the visible terminal. Pane console: clear scrollback + repaint. Pipes:
+  // plain CSI wipe.
   const clearScreen = (): void => {
-    const wasActive = statusBar.active;
-
-    if (wasActive) {
-      statusBar.teardown();
-    }
-
-    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
-
-    if (wasActive) {
-      statusBar.install(statusInfo());
-    }
-  };
-
-  // The prompt. With the editable input row pinned it's always visible, so we
-  // just repaint the bar + row; with the bar (no input row) it shows the inline
-  // marker; otherwise it prints the inline status line above the marker.
-  const prompt = (): void => {
-    if (useInputRow) {
-      if (rl !== null) {
-        statusBar.setInput(rl.line, rl.cursor);
-      }
-
-      statusBar.update(statusInfo());
+    if (panesLive()) {
+      paneScreen.clear();
+      syncPaneChrome();
 
       return;
     }
 
-    if (statusBar.active) {
-      statusBar.update(statusInfo());
-      process.stdout.write("\n› ");
+    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  };
+
+  // The prompt. Pane console owns the bottom strip — refresh metrics only.
+  // Pipes / non-TTY: inline status + `›`.
+  const prompt = (): void => {
+    if (panesLive()) {
+      syncPaneChrome();
+
+      if (rl !== null) {
+        paneScreen.setInput({
+          lines: [rl.line],
+          cursorRow: 0,
+          cursorCol: rl.cursor,
+        });
+      } else {
+        // Editor mode: status may be unchanged (no dirty paint) — still park the caret.
+        paneScreen.rehomeCursor();
+      }
 
       return;
     }
@@ -1776,7 +2144,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       // never echoed to scrollback — record it ourselves so the transcript reads
       // naturally above the (now-cleared) input row.
       if (useInputRow) {
-        echo(`\n${userBubble(line, true, process.stdout.columns)}\n`);
+        echo(`\n${userBubble(line, true, transcriptCols())}\n`);
       }
 
       if (busy) {
@@ -1804,7 +2172,8 @@ export async function repl(args: ICliArgs): Promise<number> {
     // Handle one idle line (slash command or a message), then any queued follow-up.
     const runLine = async (line: string): Promise<void> => {
       busy = true;
-      beginAgentTurn(); // the agent's response opens a fresh "▌ <model>" block
+      paneScreen.setBusy(true);
+      beginAgentTurn(); // the agent's response opens a fresh closed AGENT card
 
       try {
         if (line.startsWith("/")) {
@@ -1828,6 +2197,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       } finally {
         closeAgentTurn(); // seal the agent card's bottom cap before re-prompting
         busy = false;
+        paneScreen.setBusy(false);
       }
 
       // A line typed in the gap after the last steer-drain becomes the next turn.
@@ -1882,15 +2252,19 @@ export async function repl(args: ICliArgs): Promise<number> {
                 suspend,
                 resume,
                 out: (s) => process.stdout.write(s),
+                columns: transcriptCols(),
+                viewportRows: overlayBudget(),
               })
             : openRecipePicker({
                 cwd: args.dir,
                 render: (lines) => {
-                  statusBar.setOverlay(lines, statusInfo());
+                  chrome.setOverlay(lines);
                 },
                 close: () => {
-                  statusBar.clearOverlay(statusInfo());
+                  chrome.clearOverlay();
                 },
+                columns: transcriptCols(),
+                viewportRows: overlayBudget(),
                 out: (s) => process.stdout.write(s),
                 runRecipe: (recipe) => {
                   if (recipe.gate !== undefined) {
@@ -1908,11 +2282,13 @@ export async function repl(args: ICliArgs): Promise<number> {
                 },
               }),
         render: (lines) => {
-          statusBar.setOverlay(lines, statusInfo());
+          chrome.setOverlay(lines);
         },
         close: () => {
-          statusBar.clearOverlay(statusInfo());
+          chrome.clearOverlay();
         },
+        columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       };
     };
 
@@ -1936,9 +2312,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         editorControl?.getBuffer().setText("");
       }
 
-      if (statusBar.active) {
-        statusBar.update(statusInfo());
-      }
+      refreshStatus();
     };
 
     // Open the in-REPL scaffold wizard (create a new project here), reachable as a
@@ -1960,11 +2334,23 @@ export async function repl(args: ICliArgs): Promise<number> {
           editorControl?.resume();
           editorControl?.getBuffer().setText("");
         },
-        out: (s) => process.stdout.write(s),
+        out: (s) => {
+          streamOut(s);
+        },
+        view: {
+          render: (lines) => {
+            chrome.setOverlay(lines);
+          },
+          close: () => {
+            chrome.clearOverlay();
+          },
+        },
+        columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       });
     };
 
-    // Helper: repaint the editor buffer to the status bar after palette insertion.
+    // Helper: repaint the editor buffer to the pane input after palette insertion.
     const repaintEditor = (handle: IEditorHandle): void => {
       const { line, col } = handle.getBuffer().getCursor();
       const lines = handle.getBuffer().getText().split("\n");
@@ -1988,7 +2374,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       // writeStream — writeStream treats its argument as conversation content, so
       // it would strand the editor frame in scrollback (a leftover "/" per palette
       // open). This mirrors the editor's renderEditor→setEditor callback.
-      statusBar.setEditor(
+      chrome.setEditor(
         frame.frame.split("\n"),
         frame.cursorRow,
         frame.cursorCol
@@ -2009,11 +2395,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       // query rides in the overlay title.
       const view: IPaletteView = {
         render: (lines) => {
-          statusBar.setOverlay(lines, statusInfo());
+          chrome.setOverlay(lines);
         },
         close: () => {
-          statusBar.clearOverlay(statusInfo());
+          chrome.clearOverlay();
         },
+        columns: transcriptCols(),
+        viewportRows: overlayBudget(),
       };
 
       try {
@@ -2061,12 +2449,10 @@ export async function repl(args: ICliArgs): Promise<number> {
           repaintEditor(editorHandle);
         }
 
-        if (useInputRow) {
-          statusBar.update(statusInfo());
+        refreshStatus();
 
-          if (rl !== null) {
-            syncInput();
-          }
+        if (useInputRow && rl !== null) {
+          syncInput();
         }
       }
     };
@@ -2096,15 +2482,15 @@ export async function repl(args: ICliArgs): Promise<number> {
           const rows = formatCompletionRows(
             items,
             selected,
-            process.stdout.columns,
+            transcriptCols(),
             process.stdout.isTTY
           );
 
-          statusBar.setInput(`${base}${query}`, base.length + query.length);
-          statusBar.setOverlay(rows, statusInfo());
+          chrome.setInput(`${base}${query}`, base.length + query.length);
+          chrome.setOverlay(rows);
         },
         close: (): void => {
-          statusBar.clearOverlay(statusInfo());
+          chrome.clearOverlay();
         },
       };
 
@@ -2130,12 +2516,10 @@ export async function repl(args: ICliArgs): Promise<number> {
           repaintEditor(editorHandle);
         }
 
-        if (useInputRow) {
-          statusBar.update(statusInfo());
+        refreshStatus();
 
-          if (rl !== null) {
-            syncInput();
-          }
+        if (useInputRow && rl !== null) {
+          syncInput();
         }
       }
     };
@@ -2211,26 +2595,91 @@ export async function repl(args: ICliArgs): Promise<number> {
         items: (query: string): readonly string[] =>
           filterFiles(completionFiles, query),
         render: (items: readonly string[], selected: number): void => {
-          statusBar.setEditorOverlay(
+          chrome.setEditorOverlay(
             formatCompletionRows(
               items,
               selected,
-              process.stdout.columns,
+              transcriptCols(),
               process.stdout.isTTY
             )
           );
         },
         clear: (): void => {
-          statusBar.clearEditorOverlay();
+          chrome.clearEditorOverlay();
         },
       };
+
+      // When panes are up, strip leftover SGR mouse reports before the editor
+      // sees them (clicks otherwise insert `[<0;98;13M` into the buffer).
+      const stdinDataWrappers = new Map<
+        (data: string) => void,
+        (data: string) => void
+      >();
+      // Hoisted — allocating a unicode RegExp per keystroke showed up in typing lag.
+      const mouseReportRe = new RegExp(
+        `${String.fromCharCode(27)}\\[<\\d+;\\d+;\\d+[Mm]`,
+        "gu"
+      );
 
       editorHandle = startEditor({
         stdin: {
           on: (event: string, cb: (data: string) => void) => {
-            process.stdin.on(event, cb);
+            if (event !== "data") {
+              process.stdin.on(event, cb);
+
+              return;
+            }
+
+            const wrapped = (data: string): void => {
+              if (!panesLive()) {
+                cb(data);
+
+                return;
+              }
+
+              // Mouse reports must hit PaneScreen BEFORE strip — wheel scrolls
+              // main/panel viewports; never let the host terminal scroll.
+              mouseReportRe.lastIndex = 0;
+              const reports = data.match(mouseReportRe) ?? [];
+
+              for (const report of reports) {
+                paneScreen.handleKey(report);
+              }
+
+              const cleaned = stripMouseReports(data);
+
+              if (cleaned.length === 0) {
+                return;
+              }
+
+              // Pane chrome keys (Ctrl+G / Esc / panel nav) never reach the editor.
+              const paneKeys =
+                cleaned === "\x07" ||
+                cleaned === "\x1b" ||
+                paneScreen.focusState.panelFocused;
+
+              if (paneKeys && paneScreen.handleKey(cleaned) === "handled") {
+                return;
+              }
+
+              cb(cleaned);
+            };
+
+            stdinDataWrappers.set(cb, wrapped);
+            process.stdin.on(event, wrapped);
           },
           removeListener: (event: string, cb: (data: string) => void) => {
+            if (event === "data") {
+              const wrapped = stdinDataWrappers.get(cb);
+
+              if (wrapped !== undefined) {
+                process.stdin.removeListener(event, wrapped);
+                stdinDataWrappers.delete(cb);
+
+                return;
+              }
+            }
+
             process.stdin.removeListener(event, cb);
           },
           setRawMode: (mode: boolean) => {
@@ -2245,33 +2694,34 @@ export async function repl(args: ICliArgs): Promise<number> {
             process.stdin.setEncoding("utf8");
           },
         },
-        out: (s: string) => {
-          statusBar.writeStream(s);
-        },
+        // Mode switches only — must NOT go through streamOut (that appends to
+        // the pane transcript and re-emits CSI on every paint).
+        out: writeTerm,
         // Multi-row editor rendering callback: paints to the pinned input area
         renderEditor: (
           lines: string[],
           cursorRow: number,
           cursorCol: number
         ) => {
-          statusBar.setEditor(lines, cursorRow, cursorCol);
+          chrome.setEditor(lines, cursorRow, cursorCol);
         },
-        // Reserve the `› ` prompt gutter the StatusBar paints in front of the
-        // editor block, so wrapping matches the visible width and the prompt row
-        // never exceeds `columns`.
-        columns: Math.max(1, process.stdout.columns - PROMPT_COLS),
-        rows: process.stdout.rows,
+        // Pane box = agent card width.
+        columns: editorColumns(process.stdout.columns),
+        // Editor reserves 3 rows internally; remainder = max draft visual lines
+        // the growing input box will show (then Enter clears → 1 line again).
+        rows: INPUT_INNER_ROWS_MAX + 3,
         openPalette,
         openFilePicker,
         completion: editorCompletion,
         pasteFromClipboard,
       });
 
-      resizeEditor = (columns, rows): void => {
-        editorHandle?.resize(Math.max(1, columns - PROMPT_COLS), rows);
+      resizeEditor = (columns, _rows): void => {
+        editorHandle?.resize(editorColumns(columns), INPUT_INNER_ROWS_MAX + 3);
       };
 
       editorControl = editorHandle;
+      editorForExit = editorHandle;
 
       editorHandle.onSubmit(submitLine);
       editorHandle.onInterrupt(() => {
@@ -2296,6 +2746,15 @@ export async function repl(args: ICliArgs): Promise<number> {
       // readline path at the keypress handler above). Consumed only while a tree
       // is active; otherwise the editor keeps the arrows for history/cursor.
       editorHandle.onNavigateTree((delta) => {
+        // Prefer pane scrollback when the pane console is up and the buffer
+        // is empty; otherwise the live agent tree keeps the arrows.
+        if (panesLive() && !treeActive) {
+          // Empty prompt: ↑/↓ scroll the main transcript only (never the window).
+          paneScreen.scrollMain(delta < 0 ? 1 : -1);
+
+          return true;
+        }
+
         if (!treeActive) {
           return false;
         }
@@ -2311,13 +2770,66 @@ export async function repl(args: ICliArgs): Promise<number> {
     rl?.on("close", () => {
       closed = true;
       editorHandle?.close();
-      statusBar.teardown();
+      paneScreen.leave();
       observeEvents(null); // stop feeding the agent tree once the REPL is gone
       maybeFinish();
     });
 
-    // Pin the bar before the first turn so it's visible while that turn streams.
-    statusBar.install(statusInfo());
+    // Enter alt-screen before any primary-buffer paint so scrollback is untouched.
+    const seedPaneLanding = (panes: PaneScreen): void => {
+      panes.setHeader({ cwd: args.dir, sessionId: id });
+      syncPaneChrome();
+      panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
+
+      // Tasks rail first — it shrinks mainInnerCols. Replay MUST use that width
+      // (full stdout.columns paints cards that rewrap and shatter box rails).
+      const planId = session.getActivePlanId();
+      const plan = planId !== null ? loadPlan(args.dir, planId) : null;
+
+      syncWorklistPanel(plan);
+
+      if (updateNotice !== null) {
+        panes.appendMain(`${updateNotice}\n`);
+      }
+
+      if (resumed !== null) {
+        const speaker = modelInfo(provider.config).model;
+        const columns = panes.mainInnerCols();
+
+        for (const message of resumed.messages) {
+          if (isEphemeralUserInject(message)) {
+            continue;
+          }
+
+          panes.appendMain(
+            renderMessage(message, { color: true, speaker, columns })
+          );
+        }
+      }
+    };
+
+    if (interactiveTty) {
+      if (!paneScreen.enter()) {
+        const reason = paneConsoleRejectReason({
+          stdinTty: true,
+          stdoutTty: true,
+          rows: process.stdout.rows > 0 ? process.stdout.rows : 0,
+        });
+
+        process.stderr.write(
+          `${reason ?? `tsforge: could not enter pane console (need ≥ ${String(PANE_MIN_ROWS)} rows)`}\n`
+        );
+        exitCode = 1;
+        closed = true;
+        editorHandle?.close();
+        maybeFinish();
+
+        return;
+      }
+
+      seedPaneLanding(paneScreen);
+      resizeEditor?.(process.stdout.columns, process.stdout.rows);
+    }
 
     if (args.task.length > 0) {
       void runLine(args.task); // sent as the first message; prompts when done
@@ -2326,9 +2838,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   });
 
-  statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
+  paneScreen.leave();
   process.stdout.off("resize", handleResize); // don't pin the REPL closure
   outputRouter.setParentSink(null); // later/headless writes go straight to stdout again
 
-  return 0;
+  return exitCode;
 }

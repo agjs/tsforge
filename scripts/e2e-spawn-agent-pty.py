@@ -184,10 +184,10 @@ def main():
     # Editor mode (the default): the live agent tree renders in the pinned region.
     pid, master = spawn_tsforge(port, {}, cwd=work, home=home)
     try:
-        read_until(master, lambda b: "◆ plan" in b, 60)
+        read_until(master, lambda b: " PLAN " in b, 60)
         # Switch to normal mode (Shift+Tab, editor) so the orchestrator acts.
         os.write(master, b"\x1b[Z")
-        _, buf = read_until(master, lambda b: "◆ normal" in b, 15)
+        _, buf = read_until(master, lambda b: " NORMAL " in b, 15)
 
         os.write(master, b"Explain how AgentScheduler caps concurrency.\r")
 

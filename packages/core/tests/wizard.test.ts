@@ -149,7 +149,7 @@ describe("wizard render (no color)", () => {
 
     expect(frame).toContain("Step 1 of 2 · Naming");
     expect(frame).toContain("312 interfaces scanned");
-    expect(frame).toContain("› bare PascalCase");
+    expect(frame).toContain("▸ bare PascalCase");
     expect(frame).toContain("recommended");
     expect(frame).toContain("enter select");
   });
@@ -241,6 +241,59 @@ describe("runWizard interactive teardown", () => {
       // ...and it forwards to the original listener (restoration really happened).
       fake.emit("keypress", undefined, { name: "down" });
       expect(preexistingCalls).toBe(1);
+    } finally {
+      Object.defineProperty(process, "stdin", {
+        value: realStdin,
+        configurable: true,
+      });
+    }
+  });
+
+  test("view mode paints host overlay and never opens a nested alt-screen", async () => {
+    const fake = new FakeStdin();
+    const realStdin = process.stdin;
+    const renders: string[][] = [];
+    let closed = 0;
+    const writes: string[] = [];
+
+    Object.defineProperty(process, "stdin", {
+      value: fake,
+      configurable: true,
+    });
+
+    try {
+      const done = runWizard(STEPS, false, {
+        manageInput: false,
+        out: (s) => {
+          writes.push(s);
+        },
+        view: {
+          render: (lines) => {
+            renders.push([...lines]);
+          },
+          close: () => {
+            closed += 1;
+          },
+        },
+      });
+
+      expect(renders.length).toBe(1);
+      expect(renders[0]?.some((l) => l.includes("▸ bare PascalCase"))).toBe(
+        true
+      );
+      // Nested alt-screen would fight PaneScreen — view mode must stay on host chrome.
+      expect(writes.some((w) => w.includes("?1049h"))).toBe(false);
+
+      fake.emit("keypress", undefined, { name: "down" });
+      expect(renders.length).toBe(2);
+      expect(renders[1]?.some((l) => l.includes("▸ I-prefix"))).toBe(true);
+
+      fake.emit("keypress", undefined, { name: "escape" });
+      const state = await done;
+
+      expect(state.status).toBe("cancel");
+      expect(closed).toBe(1);
+      expect(writes.some((w) => w.includes("?1049l"))).toBe(false);
     } finally {
       Object.defineProperty(process, "stdin", {
         value: realStdin,

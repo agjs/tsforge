@@ -8,6 +8,17 @@ import type { ITokenUsage } from "../inference";
 import { clampRatio } from "../lib/ratio";
 import type { ILoopEvent } from "./loop.types";
 
+/** Checklist tools — withheld until a session binds activePlanId. */
+const TASK_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TOOL_NAME.taskList,
+  TOOL_NAME.taskFocus,
+  TOOL_NAME.taskComplete,
+  TOOL_NAME.taskUncomplete,
+]);
+
+/** Propose-plan tool — only useful in plan mode (approve binds the proposal). */
+const PRESENT_PLAN_NAME = TOOL_NAME.presentPlan;
+
 /** The minimal shape shared by advertised tools and MCP tool schemas. */
 interface INamedTool {
   readonly function: { readonly name: string; readonly description?: string };
@@ -58,15 +69,28 @@ export function offeredToolsFor<T extends INamedTool, U extends INamedTool>(
   tools: readonly T[],
   planMode: boolean,
   mcpSchemas: readonly U[],
-  wiring: readonly IToolWiring[] = []
+  wiring: readonly IToolWiring[] = [],
+  offerTaskTools = false
 ): (T | U)[] {
+  const scoped = tools.filter((t) => {
+    if (!offerTaskTools && TASK_TOOL_NAMES.has(t.function.name)) {
+      return false;
+    }
+
+    // present_plan only while planning — after approve it's noise.
+    if (!planMode && t.function.name === PRESENT_PLAN_NAME) {
+      return false;
+    }
+
+    return true;
+  });
   const base = planMode
-    ? tools.filter(
+    ? scoped.filter(
         (t) =>
           READ_ONLY_TOOL_NAMES.has(t.function.name) ||
           t.function.name === TOOL_NAME.run
       )
-    : [...tools];
+    : [...scoped];
 
   const offered = mcpSchemas.length > 0 ? [...base, ...mcpSchemas] : base;
 

@@ -71,3 +71,10 @@ export interface IWizardState {
   readonly text: Readonly<Record<string, string>>;
   readonly status: "active" | "apply" | "cancel";
 }
+
+/** Host-owned paint surface for an in-REPL / pane overlay (no nested alt-screen).
+ *  Mirrors `IConfigMenuView` so wizards share chrome with `/config`. */
+export interface IWizardView {
+  render(lines: readonly string[]): void;
+  close(): void;
+}

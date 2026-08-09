@@ -2,6 +2,7 @@ import { scanRepo, recommendConventions } from "../infer-rules/scan";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { IScanReport } from "../infer-rules/scan.types";
 import { runWizard } from "../render/wizard";
+import type { IWizardView } from "../render/wizard.types";
 import {
   buildSteps,
   configPreview,
@@ -21,6 +22,13 @@ export interface IRunSetupOptions {
   /** FALSE when launched from the REPL (the editor/readline owns stdin) so the
    *  wizard doesn't pause stdin on exit and quit the process. Default true. */
   readonly manageInput?: boolean;
+  /** Host chrome overlay (pane main). When set, the wizard skips its nested
+   *  alt-screen and paints through the REPL chrome instead. */
+  readonly view?: IWizardView;
+  /** Overlay width. Prefer main-pane inner cols when the pane console is live. */
+  readonly columns?: number;
+  /** Max overlay rows. Prefer pane chrome budget when panes are live. */
+  readonly viewportRows?: number;
 }
 
 const SAFETY_NOTE =
@@ -113,6 +121,12 @@ export async function runSetup(opts: IRunSetupOptions): Promise<number> {
     ...(opts.manageInput === undefined
       ? {}
       : { manageInput: opts.manageInput }),
+    ...(opts.view === undefined ? {} : { view: opts.view }),
+    ...(opts.out === undefined ? {} : { out: opts.out }),
+    ...(opts.columns === undefined ? {} : { columns: opts.columns }),
+    ...(opts.viewportRows === undefined
+      ? {}
+      : { viewportRows: opts.viewportRows }),
     extra: (state) =>
       `${configPreview(selectionsToConventions(state))}\n\n${SAFETY_NOTE}`,
   });

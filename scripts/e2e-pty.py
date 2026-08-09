@@ -12,8 +12,8 @@ resize-reflow (that needs a real terminal emulator) — that stays the iTerm2 su
 
 Scenario: the plan-first lifecycle.
   boot (plan mode default) -> ask for a write
-    -> model returns a `## Plan` (no tools); assert NO file written (read-only)
-  'approve' -> model returns a `create` tool call
+    -> model returns a fenced JSON plan (no tools); assert NO file written (read-only)
+  'approve' -> harness binds the plan; model returns a `create` tool call
     -> assert the file is written with the right content, tools were unlocked
 
 Run: python3 scripts/e2e-pty.py
@@ -40,6 +40,10 @@ def _decide(messages):
     """The whole scenario logic — pick the response from the conversation state."""
     last = messages[-1] if messages else {}
     if last.get("role") == "tool":
+        tool_text = last.get("content") or ""
+        # present_plan result — stop and wait for the human; do not create yet.
+        if "Plan presented" in tool_text or "awaiting approve" in tool_text.lower():
+            return content_chunks("Plan is ready — approve to build.")
         # The create already ran; end the drive loop with a plain final answer.
         return content_chunks("Done — created src/sum.ts.")
 
@@ -49,9 +53,18 @@ def _decide(messages):
     if "plan is APPROVED" in joined:
         return toolcall_chunks("create", {"file": "src/sum.ts", "content": SUM_BODY})
 
-    return content_chunks(
-        "## Plan\n\n1. Create `src/sum.ts` exporting "
-        "`sum(a: number, b: number): number` that returns `a + b`.\n"
+    # Product path: present_plan paints the PLAN card (type approve footer).
+    return toolcall_chunks(
+        "present_plan",
+        {
+            "goal": "Add sum helper",
+            "items": [
+                {
+                    "title": "Create src/sum.ts",
+                    "detail": "Export sum(a,b) returning a+b",
+                }
+            ],
+        },
     )
 
 
@@ -81,7 +94,13 @@ def scenario_plan_lifecycle(port):
             b"Create a new file src/sum.ts exporting a sum(a,b) that returns a+b.\r",
         )
         got, buf = read_until(
-            master, lambda b: "reply to refine" in b or "## Plan" in b, 60, buf
+            master,
+            lambda b: "type approve" in b.lower()
+            or "plan is ready" in b.lower()
+            or "Create src/sum.ts" in b
+            or "Add sum helper" in b,
+            60,
+            buf,
         )
         wrote_early = os.path.exists(target)
         print(f"  [{'PASS' if got else 'FAIL'}] model returned a plan in plan mode")
@@ -122,18 +141,18 @@ def scenario_mode_cycle(port):
     ok = True
     pid, master, _ = spawn(port, {})  # editor mode (no BASIC_INPUT)
     try:
-        got, _ = read_until(master, lambda b: "◆ plan" in b, 60)
-        print(f"  [{'PASS' if got else 'FAIL'}] status bar shows the ◆ plan chip (default)")
+        got, _ = read_until(master, lambda b: " PLAN " in b, 60)
+        print(f"  [{'PASS' if got else 'FAIL'}] status bar shows the PLAN chip (default)")
         ok &= got
 
         os.write(master, b"\x1b[Z")  # Shift+Tab
-        got, _ = read_until(master, lambda b: "◆ normal" in b, 15)
-        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> ◆ normal")
+        got, _ = read_until(master, lambda b: " NORMAL " in b, 15)
+        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> NORMAL")
         ok &= got
 
         os.write(master, b"\x1b[Z")  # Shift+Tab again
-        got, _ = read_until(master, lambda b: "◆ plan" in b, 15)
-        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> ◆ plan (cycles back)")
+        got, _ = read_until(master, lambda b: " PLAN " in b, 15)
+        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> PLAN (cycles back)")
         ok &= got
     finally:
         reap(pid, master)

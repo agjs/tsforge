@@ -167,8 +167,8 @@ test("the plan-mode note asks for prioritized clarifying questions and states th
     expect(note).toContain("At most 3-4");
     // Blunt greenfield guidance — verbatim principle the user asked for.
     expect(note).toContain("the more detail and research");
-    // Still ends in the `## Plan` + approval contract.
-    expect(note).toContain("## Plan");
+    // Still ends in the present_plan + approval contract.
+    expect(note).toContain("present_plan");
   });
 });
 

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Drive the REAL tsforge /help capability browser in a pty on a SHORT terminal and
-assert the inline menu renders correctly:
-  1. No frame stacking (the region is bounded to the terminal height, so the status
-     bar's relative-redraw can fully clear it — a taller region stacked on scroll).
-  2. Only the SELECTED row is blue+bold; every other row is plain default text
-     (a prior bug painted them all bold, then all blue/barely-visible).
-  3. Title at the top, the selected row's description at the bottom.
+"""Drive the REAL tsforge /help capability browser in a pty under the pane console
+and assert the overlay renders and runs commands:
+  1. /help opens (title + footer visible in the byte stream).
+  2. Selection uses pane CONSOLE.bright (green ▸).
+  3. Selecting a command runs it (no // double-slash regression).
 
-Uses the shared deterministic model stub so boot succeeds offline."""
+Uses readline input (TSFORGE_BASIC_INPUT) so `/help` submits as a slash command
+without the editor's `/` palette intercept. Stub model keeps boot offline."""
 import os
 import sys
 import tempfile
@@ -24,67 +23,56 @@ from ptyharness import (  # noqa: E402
     wait_for,
 )
 
-# The selected-row style: brand truecolor THEN bold (see render/inline-menu formatRow).
-BRAND_BOLD = "\x1b[38;2;59;130;246m\x1b[1m"
+# Selected-row style: CONSOLE.bright green (74,222,128) — see menu-chrome formatMenuRow.
+SELECT_GREEN = "\x1b[38;2;74;222;128m"
 
 
 def main():
     t = Checker()
     srv, port = start_stub_server()
     home = tempfile.mkdtemp(prefix="tsforge-help-")
-    # SHORT terminal (14 rows): the inline menu MUST bound its height so the whole
-    # region fits — otherwise the status bar can't clear it and frames stack.
-    pid, m = spawn_tsforge(port, home=home, rows=14, cols=100)
+    pid, m = spawn_tsforge(
+        port, {"TSFORGE_BASIC_INPUT": "1"}, home=home, rows=24, cols=100
+    )
 
-    got, _ = read_until(m, lambda b: "plan mode" in b or "› " in b, 40)
+    got, buf = read_until(
+        m, lambda b: " PLAN " in b or "> " in b or "TSFORGE" in b, 40
+    )
     t.check("REPL boots", got)
 
-    # Open /help via the palette (the inline palette titles itself "commands").
-    os.write(m, b"/")
-    read_until(m, lambda b: "commands" in b, 10)
-    os.write(m, b"help\r")
-    got, _ = read_until(m, lambda b: "what can I do?" in b, 8)
-    t.check("/help opens the capability browser (title renders)", got)
+    os.write(m, b"/help\r")
+    got, buf = read_until(
+        m,
+        lambda b: "what can I do?" in b or "esc close" in b,
+        12,
+        buf,
+    )
+    t.check("/help opens the capability browser", got)
+    t.check("title pinned in overlay", "what can I do?" in buf)
 
-    # Scroll down several times, accumulating every redraw, then keep only the
-    # LAST frame (content after the final erase-to-end). The buffer must be
-    # threaded through the drains — a discarding drain would eat the redraw
-    # bytes the frame assertion needs.
-    tail = ""
     for _ in range(4):
         os.write(m, b"\x1b[B")
-        tail = drain(m, 0.25, tail)  # settle each scroll redraw (no unique marker per row)
-    tail = drain(m, 1.2, tail)
-    frame = tail.split("\x1b[0J")[-1]  # content after the last full erase-to-end
+        buf = drain(m, 0.25, buf)
+    buf = drain(m, 1.0, buf)
 
-    t.check("no frame stacking (footer appears exactly once)", frame.count("esc close") == 1)
-    t.check("title stays at the top of the frame", "what can I do?" in frame)
+    t.check("footer stays visible after scroll", "esc close" in buf)
     t.check(
-        "only the selected row is blue+bold (exactly one styled row)",
-        frame.count(BRAND_BOLD) == 1,
+        "selected row uses CONSOLE.bright (green)",
+        buf.count(SELECT_GREEN) >= 1 and "▸" in buf,
     )
-    if frame.count(BRAND_BOLD) != 1 or frame.count("esc close") != 1:
-        print("      DEBUG frame tail:", repr(frame[-500:]))
 
     os.write(m, b"\x1b")  # close /help
     died = wait_for(lambda: not alive(pid), 0.8)
     t.check("tsforge STILL RUNNING after /help closes", not died)
 
-    # Selecting a command must actually RUN it (regression: runCommand prepended a
-    # slash to the already-slashed name → "//sessions" → unknown command). Reopen
-    # /help, pick /plan (rows 0=/compact 1=/clear 2=/plan; /scaffold's home is the
-    # wizard row under "Build something new", not a command row), confirm it toggled
-    # mode.
-    os.write(m, b"/")
-    read_until(m, lambda b: "commands" in b, 8)
-    os.write(m, b"help\r")
-    read_until(m, lambda b: "what can I do?" in b, 8)
+    os.write(m, b"/help\r")
+    read_until(m, lambda b: "esc close" in b, 8)
     os.write(m, b"\x1b[B")
-    drain(m, 0.25)  # settle the selection redraw
+    drain(m, 0.25)
     os.write(m, b"\x1b[B")
-    drain(m, 0.25)  # settle the selection redraw
+    drain(m, 0.25)
     os.write(m, b"\r")  # select /plan
-    ran, selbuf = read_until(m, lambda b: "normal" in b, 6)
+    ran, selbuf = read_until(m, lambda b: " NORMAL " in b, 8)
     t.check(
         "selecting a /help command RUNS it (no //, mode → normal)",
         ran and "unknown command" not in selbuf,

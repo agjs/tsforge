@@ -4,9 +4,12 @@ import { isRecord } from "../../lib/guards";
 import type { IStep } from "../../browser";
 import type { IFeature, IGreenfieldState } from "./greenfield.types";
 
-/** The greenfield state directory under the project's `.tsforge/`. */
-export function greenfieldDir(cwd: string): string {
-  return join(cwd, ".tsforge", "greenfield");
+/**
+ * State directory under the project's `.tsforge/`.
+ * Defaults to `"greenfield"`; worklist runs pass `"worklist"`.
+ */
+export function greenfieldDir(cwd: string, stateName = "greenfield"): string {
+  return join(cwd, ".tsforge", stateName);
 }
 
 /**
@@ -100,16 +103,16 @@ function parseHandoff(handoff: unknown): IFeature["handoff"] | null {
   };
 }
 
-function featuresPath(cwd: string): string {
-  return join(greenfieldDir(cwd), "features.json");
+function featuresPath(cwd: string, stateName = "greenfield"): string {
+  return join(greenfieldDir(cwd, stateName), "features.json");
 }
 
-function specPath(cwd: string): string {
-  return join(greenfieldDir(cwd), "spec.md");
+function specPath(cwd: string, stateName = "greenfield"): string {
+  return join(greenfieldDir(cwd, stateName), "spec.md");
 }
 
-function progressPath(cwd: string): string {
-  return join(greenfieldDir(cwd), "progress.md");
+function progressPath(cwd: string, stateName = "greenfield"): string {
+  return join(greenfieldDir(cwd, stateName), "progress.md");
 }
 
 /** Coerce one parsed JSON value into an IFeature, dropping it (→ null) when it
@@ -157,11 +160,14 @@ function toFeature(value: unknown): IFeature | null {
 
 /** Read the persisted greenfield state, or null when none exists yet / it's
  *  unreadable (a corrupt file degrades to "start fresh", never a crash). */
-export async function loadState(cwd: string): Promise<IGreenfieldState | null> {
+export async function loadState(
+  cwd: string,
+  stateName = "greenfield"
+): Promise<IGreenfieldState | null> {
   let parsed: unknown;
 
   try {
-    parsed = JSON.parse(await readFile(featuresPath(cwd), "utf8"));
+    parsed = JSON.parse(await readFile(featuresPath(cwd, stateName), "utf8"));
   } catch {
     return null;
   }
@@ -183,23 +189,37 @@ export async function loadState(cwd: string): Promise<IGreenfieldState | null> {
  *  start: a corrupt features.json on a tree that was already built into would look
  *  "fresh" and let a caller re-capture a CONTAMINATED baseline (a false-green). Err
  *  toward resume — presence ⇒ resume, only true absence ⇒ fresh. */
-export async function hasState(cwd: string): Promise<boolean> {
-  return Bun.file(featuresPath(cwd)).exists();
+export async function hasState(
+  cwd: string,
+  stateName = "greenfield"
+): Promise<boolean> {
+  return Bun.file(featuresPath(cwd, stateName)).exists();
 }
 
 /** Persist the feature checklist as pretty JSON (diff-friendly, model-resistant). */
 export async function saveState(
   cwd: string,
-  state: IGreenfieldState
+  state: IGreenfieldState,
+  stateName = "greenfield"
 ): Promise<void> {
-  await mkdir(greenfieldDir(cwd), { recursive: true });
-  await writeFile(featuresPath(cwd), `${JSON.stringify(state, null, 2)}\n`);
+  await mkdir(greenfieldDir(cwd, stateName), { recursive: true });
+  await writeFile(
+    featuresPath(cwd, stateName),
+    `${JSON.stringify(state, null, 2)}\n`
+  );
 }
 
 /** Write the human-readable spec (the planner's high-level sprints). */
-export async function writeSpec(cwd: string, spec: string): Promise<void> {
-  await mkdir(greenfieldDir(cwd), { recursive: true });
-  await writeFile(specPath(cwd), spec.endsWith("\n") ? spec : `${spec}\n`);
+export async function writeSpec(
+  cwd: string,
+  spec: string,
+  stateName = "greenfield"
+): Promise<void> {
+  await mkdir(greenfieldDir(cwd, stateName), { recursive: true });
+  await writeFile(
+    specPath(cwd, stateName),
+    spec.endsWith("\n") ? spec : `${spec}\n`
+  );
 }
 
 /** Render the checklist as a human-readable progress report. Pure (testable). */
@@ -235,8 +255,9 @@ export function renderProgress(state: IGreenfieldState): string {
 /** Write progress.md from the current state. */
 export async function writeProgress(
   cwd: string,
-  state: IGreenfieldState
+  state: IGreenfieldState,
+  stateName = "greenfield"
 ): Promise<void> {
-  await mkdir(greenfieldDir(cwd), { recursive: true });
-  await writeFile(progressPath(cwd), renderProgress(state));
+  await mkdir(greenfieldDir(cwd, stateName), { recursive: true });
+  await writeFile(progressPath(cwd, stateName), renderProgress(state));
 }

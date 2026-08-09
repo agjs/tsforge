@@ -171,6 +171,32 @@ describe("StatusBar with input row", () => {
     expect(screen.rowsContaining("qwen3.6-27b")).toBe(1);
   });
 
+  test("setWorklist renders checklist lines and still keeps exactly one status bar", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    bar.setWorklist(["worklist  1/3 done", "→ [ ] Second item"]);
+
+    const screen = render(term);
+
+    expect(screen.text()).toContain("worklist  1/3 done");
+    expect(screen.text()).toContain("→ [ ] Second item");
+    expect(screen.rowsContaining("qwen3.6-27b")).toBe(1);
+
+    bar.setWorklist(["worklist  2/3 done", "→ [x] Second item"]);
+    const after = render(term);
+
+    expect(after.text()).toContain("worklist  2/3 done");
+    expect(after.rowsContaining("qwen3.6-27b")).toBe(1);
+
+    bar.clearWorklist();
+    const cleared = render(term);
+
+    expect(cleared.text()).not.toContain("worklist  2/3 done");
+    expect(cleared.rowsContaining("qwen3.6-27b")).toBe(1);
+  });
+
   test("teardown erases the live region and shows the cursor", () => {
     const term = new FakeTerm(true, 24, 80);
     const bar = withInput(term);

@@ -35,6 +35,14 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // classified `read_file` so it's allowed in every mode (incl. plan). Absent here it
   // would classify `unknown` → deny before the handler runs (the check/script DOA class).
   [TOOL_NAME.askUser]: "read_file",
+  // Checklist tools mutate only `.tsforge/worklist/plans/*.json` (not source). List is a
+  // pure read; focus/complete/uncomplete classify like a low-risk edit so default mode
+  // allows them. Absent here → `unknown` → deny (same DOA class as ask_user/check).
+  [TOOL_NAME.taskList]: "read_file",
+  [TOOL_NAME.taskFocus]: "edit_file",
+  [TOOL_NAME.taskComplete]: "edit_file",
+  [TOOL_NAME.taskUncomplete]: "edit_file",
+  [TOOL_NAME.presentPlan]: "read_file",
   // `pull_conventions` is a pure read-only lookup of the injected convention library — it mutates
   // nothing, so it classifies `read_file` (allowed in every mode). Absent here it classified
   // `unknown` → deny before the handler ran, so a model's pull was silently denied in non-interactive
