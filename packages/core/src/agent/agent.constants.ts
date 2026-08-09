@@ -819,23 +819,37 @@ export const TASK_UNCOMPLETE_TOOL = {
 const PLAN_ITEM_SCHEMA = {
   type: "object",
   properties: {
-    title: { type: "string", description: "Short actionable item title." },
+    title: {
+      type: "string",
+      description:
+        "Short actionable title (e.g. Create src/notes.ts). Not vague prose.",
+    },
     detail: {
       type: "string",
-      description: "Optional prose / notes for this item.",
+      description:
+        "Optional acceptance prose for this item (not a gate command).",
     },
     files: {
       type: "array",
       items: { type: "string" },
-      description: "Optional file/path hints.",
+      description:
+        "Optional relative paths this item touches — prefer 1–3; split if more.",
     },
     verify: {
       type: "string",
-      description: "Optional verify hint (not executed as a gate).",
+      description:
+        "Optional verify hint for humans/AI (e.g. covers search). Not executed as a gate.",
+    },
+    kind: {
+      type: "string",
+      enum: ["investigate", "create", "modify", "test"],
+      description:
+        "Optional advisory kind — investigate|create|modify|test. Not an execution mode.",
     },
     children: {
       type: "array",
-      description: "Optional nested items (same shape).",
+      description:
+        "Optional nested items (same shape). Prefer parent feature + children; nest sibling tests under impl.",
       items: { type: "object" },
     },
   },
@@ -847,7 +861,14 @@ export const PRESENT_PLAN_TOOL = {
   function: {
     name: TOOL_NAME.presentPlan,
     description:
-      "Present the structured plan for human approval. Call this when the plan is ready — do NOT dump JSON into the chat. The harness validates the tree and renders it in the UI. Items are work units (files/features) — do NOT add a checklist item for running tests/lint/the gate; the harness gate validates every task_complete. The human replies with refinements (revise via another present_plan) or approve/go/lgtm. Does not write files or unlock editing until they approve.",
+      "Present the structured plan for human approval. Call when ready — do NOT dump JSON into chat. " +
+      "Decompose for execution: contracts/types before implementation before sibling tests; " +
+      "one outcome per item; files 1–3 paths when known (split by module boundary); " +
+      "parent + children over one mega-item; NEVER an item for run tests/lint/the gate " +
+      "(harness gate validates every task_complete); verify is a hint only; " +
+      "kind may be investigate|create|modify|test (advisory). " +
+      "Human replies with refinements (another present_plan) or approve/go/lgtm. " +
+      "Does not write files or unlock editing until they approve.",
     parameters: {
       type: "object",
       properties: {
@@ -857,7 +878,8 @@ export const PRESENT_PLAN_TOOL = {
         },
         items: {
           type: "array",
-          description: "Non-empty nested checklist (title required per node).",
+          description:
+            "Non-empty nested checklist. Order: contracts → impl → tests when applicable.",
           items: PLAN_ITEM_SCHEMA,
         },
         plan: {

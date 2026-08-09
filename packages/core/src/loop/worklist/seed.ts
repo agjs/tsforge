@@ -3,12 +3,21 @@
  * The model emits fenced JSON; the harness only extracts, validates, and persists.
  */
 import type {
+  ChecklistItemKind,
   IChecklistItem,
   IChecklistItemDraft,
   IPlanDocument,
   IPlanDraft,
 } from "./checklist.types";
 import { savePlan } from "./checklist-store";
+
+function parseKind(v: unknown): ChecklistItemKind | undefined {
+  if (v === "investigate" || v === "create" || v === "modify" || v === "test") {
+    return v;
+  }
+
+  return undefined;
+}
 
 export type SeedWorklistResult =
   | { readonly ok: true; readonly plan: IPlanDocument }
@@ -88,6 +97,7 @@ function normalizeItem(draft: IChecklistItemDraft): IChecklistItem | null {
     ...(typeof draft.verify === "string" && draft.verify.trim().length > 0
       ? { verify: draft.verify }
       : {}),
+    ...(draft.kind !== undefined ? { kind: draft.kind } : {}),
     ...(typeof draft.blockedReason === "string" &&
     draft.blockedReason.trim().length > 0
       ? { blockedReason: draft.blockedReason }
@@ -121,6 +131,8 @@ function parseDraftItem(raw: unknown): IChecklistItemDraft | null {
     }
   }
 
+  const kind = parseKind(raw.kind);
+
   return {
     ...(typeof raw.id === "string" ? { id: raw.id } : {}),
     title: raw.title,
@@ -136,6 +148,7 @@ function parseDraftItem(raw: unknown): IChecklistItemDraft | null {
       ? { files: raw.files }
       : {}),
     ...(typeof raw.verify === "string" ? { verify: raw.verify } : {}),
+    ...(kind !== undefined ? { kind } : {}),
     ...(typeof raw.blockedReason === "string"
       ? { blockedReason: raw.blockedReason }
       : {}),

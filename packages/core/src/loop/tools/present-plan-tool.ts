@@ -1,4 +1,5 @@
 import { countOpen } from "../worklist/checklist-store";
+import { advisePlanDecomposition } from "../worklist/plan-advice";
 import { planDocumentFromUnknown } from "../worklist/seed";
 import type { IPlanDocument } from "../worklist/checklist.types";
 import { reject, type IToolContext } from "./tool-context";
@@ -61,6 +62,7 @@ export function doPresentPlan(
 
   const open = countOpen(plan.items);
   const tops = plan.items.length;
+  const advice = advisePlanDecomposition(plan);
 
   ctx.report({
     kind: "tool",
@@ -68,10 +70,18 @@ export function doPresentPlan(
     message: `present_plan: ${tops} top-level · ${String(open)} open — awaiting approve`,
   });
 
-  return (
+  const base =
     `Plan presented to the human (${String(tops)} top-level item(s), ` +
     `${String(open)} open). Do NOT paste the JSON into chat again. ` +
     "Wait for them to approve (approve/go/lgtm) or reply with refinements — " +
-    "then call present_plan again with the revised plan."
+    "then call present_plan again with the revised plan.";
+
+  if (advice.length === 0) {
+    return base;
+  }
+
+  return (
+    `${base}\n\nDecomposition advice (optional revise via present_plan):\n` +
+    advice.map((w) => `- ${w}`).join("\n")
   );
 }
