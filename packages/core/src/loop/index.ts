@@ -80,6 +80,7 @@ export {
   PLAN_APPROVED_NOTE,
   checklistOpenNudge,
   isEphemeralUserInject,
+  isHarnessUserInject,
   filterGateStream,
   type ISessionConfig,
   type ISendResult,

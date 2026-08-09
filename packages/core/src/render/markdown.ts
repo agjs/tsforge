@@ -101,7 +101,7 @@ export function highlightCode(
 }
 
 /** Cheap inline styling for one streamed prose line — `#` headings and
- *  `**bold**` brighten, `code` spans use brand light. No-op without color. */
+ *  `**bold**` brighten; `` `code` `` stays zinc (no sky-blue brand). */
 export function styleInline(line: string, color: boolean): string {
   if (!color) {
     return line;
@@ -118,6 +118,6 @@ export function styleInline(line: string, color: boolean): string {
       paint(t, STYLE.bold, color)
     )
     .replace(/`([^`]+)`/g, (_m: string, t: string) =>
-      paint(t, STYLE.brandLight, color)
+      paint(t, STYLE.chromeLight + STYLE.bold, color)
     );
 }

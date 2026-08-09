@@ -24,7 +24,7 @@ function approveChip(): string {
   );
 }
 
-/** The post-turn plan-mode footer — filled PLAN badge + orange rail, matching
+/** The post-turn plan-mode footer — outlined PLAN badge + orange rail, matching
  *  the agent-console plan strip. `ready` = plan proposed (nudge build);
  *  otherwise still exploring. */
 export function planHint(ready: boolean, columns?: number): string {

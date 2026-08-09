@@ -317,8 +317,8 @@ function statusChip(status: string, color: boolean): string {
 }
 
 /**
- * Compact filled mode pill — plan uses the amber plan accent; normal stays quiet
- * chrome. Same language as the PLAN role badge, sized for the top strip.
+ * Compact outlined mode chip — plan uses the amber accent; normal stays light
+ * chrome. Same language as the role badges (accent fg, no fill).
  */
 function modeChip(mode: string, color: boolean): string {
   const id = mode.trim().toLowerCase();
@@ -329,10 +329,10 @@ function modeChip(mode: string, color: boolean): string {
   }
 
   if (id === "plan") {
-    return `${STYLE.planBg}${STYLE.ink}${STYLE.bold}${label}${RESET}`;
+    return `${STYLE.plan}${STYLE.bold}${label}${RESET}`;
   }
 
-  return `${STYLE.chromeBg}${STYLE.chromeInk}${label}${RESET}`;
+  return `${STYLE.chromeLight}${label}${RESET}`;
 }
 
 function ctxPct(info: IStatusInfo): number {

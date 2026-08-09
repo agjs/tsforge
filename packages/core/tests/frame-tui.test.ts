@@ -904,7 +904,7 @@ describe("PaneScreen", () => {
     expect(text).toContain("Tasks");
     expect(text).toContain("0/2");
     expect(text).toContain("PLAN.md");
-    expect(text).toContain("[>]");
+    expect(text).toContain("[∙]");
     // Sticky title owns chrome; body is goal + hairline + tree (no TASKS label).
     expect(text).not.toMatch(/(?:^|\n)\s*TASKS\s*(?:\n|$)/mu);
     // Word-aware wrap + inset-matched budget — no mid-word clip at the rail edge.

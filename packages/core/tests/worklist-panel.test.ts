@@ -54,10 +54,28 @@ describe("formatWorklistLines", () => {
     expect(text[2]).toBe("");
     expect(text.every((l) => l !== "PLAN" && l !== "TASKS")).toBe(true);
     expect(text).toContain("├─ [✓] First");
-    expect(text).toContain("├─ [>] Second");
+    expect(text).toContain("├─ [∙] Second");
     expect(text).toContain("│  └─ [ ] Child");
     expect(text).toContain("└─ [ ] Third");
     expect(text).not.toContain("complete");
+  });
+
+  test("current mark spins when currentFrame is set", () => {
+    const p = plan(
+      [{ id: "a", title: "Add clear command", status: "active" }],
+      "g",
+      "a"
+    );
+    const idle = plain(
+      formatWorklistLines(p, { columns: 36, color: false })
+    ).join("\n");
+    const spin = plain(
+      formatWorklistLines(p, { columns: 36, color: false, currentFrame: 0 })
+    ).join("\n");
+
+    expect(idle).toContain("[∙] Add clear command");
+    expect(spin).toContain("[⠋] Add clear command");
+    expect(spin).not.toContain("[∙]");
   });
 
   test("soft-wraps long goal — no mid-word clip", () => {
@@ -162,7 +180,7 @@ describe("formatWorklistLines", () => {
     );
 
     expect(
-      lines.some((l) => l.includes(CONSOLE.bright) && l.includes("[>]"))
+      lines.some((l) => l.includes(CONSOLE.bright) && l.includes("[∙]"))
     ).toBe(true);
     expect(
       lines.some((l) => l.includes(CONSOLE.bright) && l.includes("Now"))

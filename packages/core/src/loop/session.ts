@@ -441,26 +441,7 @@ export function checklistOpenNudge(opts: {
   return `${base} Continue with the next open item (task_focus / task_complete).`;
 }
 
-/**
- * Per-turn checklist injects / Phase B nudges are real model context, but they
- * must not paint as USER cards on `--continue` — the Tasks rail already owns
- * that UI. Kept in session history for the model; filtered from transcript replay.
- */
-export function isEphemeralUserInject(message: {
-  readonly role: string;
-  readonly content: string;
-}): boolean {
-  if (message.role !== "user") {
-    return false;
-  }
-
-  const content = message.content;
-
-  return (
-    content.startsWith("[checklist — session plan ") ||
-    content.startsWith("Gate is GREEN but the approved checklist")
-  );
-}
+export { isEphemeralUserInject, isHarnessUserInject } from "./harness-inject";
 
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;

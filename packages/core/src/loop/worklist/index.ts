@@ -27,6 +27,7 @@ export {
   formatPlanProposal,
   worklistBadge,
   pendingPlanBadge,
+  currentTaskMark,
 } from "./panel";
 export type { IFormatWorklistLinesOptions } from "./panel";
 export type { IWorklistItem, IParseWorklistOptions } from "./worklist.types";
