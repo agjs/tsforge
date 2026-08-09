@@ -73,9 +73,31 @@ describe("formatWorklistLines", () => {
     const text = plain(lines).join("\n");
 
     expect(text).toContain("Harden");
-    expect(text).toContain("handling");
     expect(text).not.toMatch(/tiny not$/mu);
     expect(plain(lines).length).toBeGreaterThan(2);
+  });
+
+  test("clamps a novel-length goal to 3 lines with ellipsis", () => {
+    const goal = Array.from({ length: 40 }, (_, i) => `word${String(i)}`).join(
+      " "
+    );
+    const lines = formatWorklistLines(
+      plan([{ id: "a", title: "Item", status: "pending" }], goal),
+      { columns: 24, color: false }
+    );
+    const beforeRule = [];
+
+    for (const line of plain(lines)) {
+      if (/^─+$/u.test(line)) {
+        break;
+      }
+
+      beforeRule.push(line);
+    }
+
+    expect(beforeRule.length).toBe(3);
+    expect(beforeRule[2]?.endsWith("…")).toBe(true);
+    expect(plain(lines).join("\n")).toContain("Item");
   });
 
   test("color mode paints done glyphs green", () => {

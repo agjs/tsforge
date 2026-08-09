@@ -180,6 +180,24 @@ function clip(text: string, max: number): string {
   return sliceToWidth(text, max).text;
 }
 
+/** Soft-wrap then keep at most `maxLines`; last kept line ends with … if truncated. */
+function wrapClamped(text: string, budget: number, maxLines: number): string[] {
+  const parts = wrapWords(text, budget);
+
+  if (parts.length <= maxLines) {
+    return parts;
+  }
+
+  const kept = parts.slice(0, maxLines);
+  const last = kept[maxLines - 1] ?? "";
+  const ellipsisBudget = Math.max(1, budget - 1);
+  const head = clip(last, ellipsisBudget).replace(/\s+$/u, "");
+
+  kept[maxLines - 1] = `${head}…`;
+
+  return kept;
+}
+
 function pushHardBroken(word: string, budget: number, lines: string[]): string {
   let rest = word;
 
@@ -444,7 +462,8 @@ export function formatWorklistLines(
   const goal = plan.goal.trim();
 
   if (goal.length > 0) {
-    for (const part of wrapWords(goal, columns)) {
+    // Cap so a novel-length goal cannot crowd out the checklist.
+    for (const part of wrapClamped(goal, columns, 3)) {
       lines.push(paint(part, CONSOLE.soft, color));
     }
 
