@@ -265,11 +265,11 @@ function paintBody(part: string, kind: ItemKind, color: boolean): string {
   }
 
   if (kind === "done") {
-    return paint(part, CONSOLE.soft, true);
+    return paint(part, CONSOLE.muted, true);
   }
 
   if (kind === "current") {
-    return paint(part, CONSOLE.fg, true);
+    return paint(part, CONSOLE.bright, true);
   }
 
   if (kind === "blocked") {
@@ -295,7 +295,7 @@ function kindOf(item: IChecklistItem, activeItemId: string | null): ItemKind {
   return "pending";
 }
 
-/** One item: tree connector + status mark + wrapped title. */
+/** One item: muted tree connector + status mark + wrapped title. */
 function formatItemLines(
   item: IChecklistItem,
   kind: ItemKind,
@@ -308,6 +308,7 @@ function formatItemLines(
   const glyph = GLYPH[kind];
   const painted = paintGlyph(glyph, kind, color);
   const prefix = treePrefix(ancestorsOpen, isLast);
+  const prefixPainted = paint(prefix, CONSOLE.muted, color);
   const leadPlain = `${prefix}${glyph} `;
   const leadCols = displayWidth(leadPlain);
   const budget = Math.max(4, columns - leadCols);
@@ -316,7 +317,7 @@ function formatItemLines(
     const body = paintBody(part, kind, color);
 
     return i === 0
-      ? `${prefix}${painted} ${body}`
+      ? `${prefixPainted}${painted} ${body}`
       : `${" ".repeat(leadCols)}${body}`;
   });
 
@@ -421,7 +422,8 @@ function walkChecklist(
 }
 
 /**
- * Tasks-rail body lines — labeled plan goal + nested checklist tree.
+ * Tasks-rail body — soft goal lead-in, hairline, then the checklist tree.
+ * Sticky `Tasks N/M` owns the chrome; no repeated PLAN/TASKS labels in body.
  */
 export function formatWorklistLines(
   plan: IPlanDocument | null,
@@ -441,20 +443,14 @@ export function formatWorklistLines(
   const lines: string[] = [];
   const goal = plan.goal.trim();
 
-  // Section labels breathe: blank under PLAN / TASKS; count lives only in the
-  // sticky Tasks title (avoid a second 4/4 in the body).
-  lines.push(paint("PLAN", CONSOLE.bright, color));
-  lines.push("");
-
   if (goal.length > 0) {
     for (const part of wrapWords(goal, columns)) {
-      lines.push(paint(part, CONSOLE.fg, color));
+      lines.push(paint(part, CONSOLE.soft, color));
     }
-  }
 
-  lines.push("");
-  lines.push(paint("TASKS", CONSOLE.soft, color));
-  lines.push("");
+    lines.push(paint("─".repeat(columns), CONSOLE.rule, color));
+    lines.push("");
+  }
 
   const pending = { shown: 0, hidden: 0 };
 

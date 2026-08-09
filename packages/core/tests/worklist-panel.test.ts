@@ -29,7 +29,7 @@ function plain(lines: readonly string[]): string[] {
 }
 
 describe("formatWorklistLines", () => {
-  test("labels PLAN/TASKS and draws parent→child tree with status marks", () => {
+  test("soft goal + hairline + tree — no body PLAN/TASKS labels", () => {
     const lines = formatWorklistLines(
       plan(
         [
@@ -49,17 +49,15 @@ describe("formatWorklistLines", () => {
     );
     const text = plain(lines);
 
-    expect(text[0]).toBe("PLAN");
-    expect(text[1]).toBe("");
-    expect(text).toContain("PLAN.md");
-    expect(text).toContain("TASKS");
-    expect(text).not.toContain("TASKS  1/4");
-    expect(text[text.indexOf("TASKS") - 1]).toBe("");
-    expect(text[text.indexOf("TASKS") + 1]).toBe("");
+    expect(text[0]).toBe("PLAN.md");
+    expect(text[1]).toMatch(/^─+$/);
+    expect(text[2]).toBe("");
+    expect(text.every((l) => l !== "PLAN" && l !== "TASKS")).toBe(true);
     expect(text).toContain("├─ [✓] First");
     expect(text).toContain("├─ [>] Second");
     expect(text).toContain("│  └─ [ ] Child");
     expect(text).toContain("└─ [ ] Third");
+    expect(text).not.toContain("complete");
   });
 
   test("soft-wraps long goal — no mid-word clip", () => {
@@ -119,25 +117,23 @@ describe("formatWorklistLines", () => {
     ]);
   });
 
-  test("completed plan: blanks around sections, count only in sticky header", () => {
+  test("all done: no complete/All done footer — sticky 4/4 is enough", () => {
     const text = plain(
       formatWorklistLines(plan([{ id: "a", title: "A", status: "done" }]), {
         color: false,
       })
     );
-    const tasksIdx = text.indexOf("TASKS");
 
-    expect(text[0]).toBe("PLAN");
-    expect(text[1]).toBe("");
-    expect(tasksIdx).toBeGreaterThan(0);
-    expect(text[tasksIdx - 1]).toBe("");
-    expect(text[tasksIdx + 1]).toBe("");
+    expect(text[0]).toBe("g");
+    expect(text[1]).toMatch(/^─+$/);
     expect(text.some((l) => l.includes("[✓] A"))).toBe(true);
+    expect(text).not.toContain("complete");
     expect(text).not.toContain("All done.");
+    expect(text.every((l) => l !== "PLAN" && l !== "TASKS")).toBe(true);
     expect(text.every((l) => !/\d+\/\d+/u.test(l))).toBe(true);
   });
 
-  test("color mode paints current mark bright and body fg (not cyan)", () => {
+  test("color mode paints current bright (not cyan)", () => {
     const lines = formatWorklistLines(
       plan([{ id: "a", title: "Now", status: "active" }], "g", "a"),
       { columns: 36, color: true }
@@ -146,9 +142,9 @@ describe("formatWorklistLines", () => {
     expect(
       lines.some((l) => l.includes(CONSOLE.bright) && l.includes("[>]"))
     ).toBe(true);
-    expect(lines.some((l) => l.includes(CONSOLE.fg) && l.includes("Now"))).toBe(
-      true
-    );
+    expect(
+      lines.some((l) => l.includes(CONSOLE.bright) && l.includes("Now"))
+    ).toBe(true);
     expect(lines.every((l) => !l.includes("38;2;125;211;252"))).toBe(true);
     expect(lines.every((l) => !l.includes("38;2;34;211;238"))).toBe(true);
   });
