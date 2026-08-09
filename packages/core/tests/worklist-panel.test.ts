@@ -50,10 +50,39 @@ describe("formatWorklistLines", () => {
     const text = plain(lines);
 
     expect(text[0]).toBe("PLAN.md");
-    expect(text).toContain("✓ First");
+    expect(text).toContain("☑ First");
     expect(text).toContain("▸ Second");
     expect(text.some((l) => l.includes("Child"))).toBe(true);
-    expect(text).toContain("○ Third");
+    expect(text).toContain("☐ Third");
+  });
+
+  test("soft-wraps long goal — no mid-word clip", () => {
+    const goal =
+      "Harden and extend the tiny notes CLI with delete, atomic saves, and corrupt JSON handling";
+    const lines = formatWorklistLines(
+      plan(
+        [{ id: "a", title: "Make saveNotes atomic", status: "pending" }],
+        goal
+      ),
+      { columns: 28, color: false }
+    );
+    const text = plain(lines).join("\n");
+
+    expect(text).toContain("Harden");
+    expect(text).toContain("handling");
+    expect(text).not.toMatch(/tiny not$/mu);
+    expect(plain(lines).length).toBeGreaterThan(2);
+  });
+
+  test("color mode paints done glyphs green", () => {
+    const lines = formatWorklistLines(
+      plan([{ id: "a", title: "Done item", status: "done" }]),
+      { columns: 36, color: true }
+    );
+
+    expect(
+      lines.some((l) => l.includes(CONSOLE.green) && l.includes("☑"))
+    ).toBe(true);
   });
 
   test("shows verify on focused row", () => {

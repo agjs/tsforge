@@ -29,11 +29,15 @@ export interface IFormatWorklistLinesOptions {
 
 type ItemKind = "done" | "current" | "pending" | "blocked";
 
+/**
+ * Single-cell Unicode status marks (no SVG — pane TUI has no reliable image
+ * layer). Color carries most of the meaning; glyphs stay width-1.
+ */
 const GLYPH: Record<ItemKind, string> = {
-  done: "✓",
+  done: "☑",
   current: "▸",
-  pending: "○",
-  blocked: "!",
+  pending: "☐",
+  blocked: "⚠",
 };
 
 const CONT_INDENT = "  ";
@@ -113,7 +117,7 @@ export function formatPlanProposal(
     for (const item of nodes) {
       const pad = "  ".repeat(depth);
 
-      push(`${pad}○ ${item.title}`);
+      push(`${pad}${GLYPH.pending} ${item.title}`);
 
       if (item.detail !== undefined && item.detail.trim().length > 0) {
         push(`${pad}  ${item.detail.trim()}`);
@@ -203,6 +207,10 @@ function paintGlyph(glyph: string, kind: ItemKind, color: boolean): string {
     return glyph;
   }
 
+  if (kind === "done") {
+    return paint(glyph, CONSOLE.green, true);
+  }
+
   if (kind === "current") {
     return paint(glyph, CONSOLE.bright, true);
   }
@@ -219,12 +227,16 @@ function paintBody(part: string, kind: ItemKind, color: boolean): string {
     return part;
   }
 
+  if (kind === "done") {
+    return paint(part, CONSOLE.muted, true);
+  }
+
   if (kind === "current") {
     return paint(part, CONSOLE.bright, true);
   }
 
   if (kind === "blocked") {
-    return part;
+    return paint(part, CONSOLE.warn, true);
   }
 
   return paint(part, CONSOLE.muted, true);
@@ -268,10 +280,12 @@ function formatItemLines(
       : `${nest}${CONT_INDENT}${body}`;
   });
 
-  for (const extra of extras) {
-    const clipped = clip(extra, Math.max(4, columns - nest.length - 2));
+  const extraBudget = Math.max(4, columns - nest.length - CONT_INDENT.length);
 
-    lines.push(paint(`${nest}${CONT_INDENT}${clipped}`, CONSOLE.muted, color));
+  for (const extra of extras) {
+    for (const part of wrapWords(extra, extraBudget)) {
+      lines.push(paint(`${nest}${CONT_INDENT}${part}`, CONSOLE.muted, color));
+    }
   }
 
   return lines;
@@ -385,7 +399,9 @@ export function formatWorklistLines(
   const goal = plan.goal.trim();
 
   if (goal.length > 0) {
-    lines.push(paint(clip(goal, columns), CONSOLE.muted, color));
+    for (const part of wrapWords(goal, columns)) {
+      lines.push(paint(part, CONSOLE.meta, color));
+    }
   }
 
   const pending = { shown: 0, hidden: 0 };
