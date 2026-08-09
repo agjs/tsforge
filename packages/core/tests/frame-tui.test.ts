@@ -665,7 +665,7 @@ describe("PaneScreen", () => {
     expect(panes.handleKey("\x1b[<0;98;13m")).toBe("handled");
   });
 
-  test("wheel over main scrolls transcript; wheel over panel scrolls rail only", () => {
+  test("wheel over main scrolls transcript; wheel over panel scrolls rail only", async () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);
 
@@ -683,6 +683,9 @@ describe("PaneScreen", () => {
 
     // Main column: wheel must not move the input band.
     expect(panes.handleKey("\x1b[<64;10;5M")).toBe("handled");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(findPromptRow(term.text(), 24, 100)).toBe(expectedPromptRow(24));
 
     // Panel column: scroll rail — early PANEL lines leave the viewport.
@@ -694,6 +697,43 @@ describe("PaneScreen", () => {
     expect(after.text()).toMatch(/PANEL_\d+/);
     expect(findPromptRow(term.text(), 24, 100)).toBe(expectedPromptRow(24));
     expect(after.row(expectedPromptRow(24)).length).toBeGreaterThan(0);
+  });
+
+  test("wheel scroll stays fast on a large transcript (no full-frame thrash)", async () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+
+    const bulk = Array.from(
+      { length: 2_000 },
+      (_, i) => `line-${String(i)}-${"x".repeat(60)}`
+    ).join("\n");
+
+    panes.appendMain(`${bulk}\n`);
+    panes.setPanel(
+      Array.from({ length: 30 }, (_, i) =>
+        i === 0 ? "worklist  0/29" : `PANEL_${String(i)}`
+      )
+    );
+
+    term.writes = [];
+    const t0 = performance.now();
+
+    for (let i = 0; i < 80; i += 1) {
+      expect(panes.handleKey("\x1b[<64;10;5M")).toBe("handled");
+    }
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    // Full invalidate+paint per notch used to multi‑hundred-ms here on a
+    // warm 2k-line wrap cache; body patch + coalesce must stay interactive.
+    expect(performance.now() - t0).toBeLessThan(120);
+    // Coalesced: one (or a few) writes — not one full frame per wheel event.
+    expect(term.writes.length).toBeLessThan(10);
+    expect(term.writes.length).toBeGreaterThan(0);
   });
 
   test("preserves SGR in appended main text", () => {

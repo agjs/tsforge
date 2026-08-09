@@ -75,8 +75,8 @@ describe("handleMouseKey", () => {
     };
 
     expect(handleMouseKey("\x1b[<64;12;4M", d)).toBe("handled");
-    expect(wheels).toEqual([{ delta: 3, col: 12 }]);
+    expect(wheels).toEqual([{ delta: 1, col: 12 }]);
     expect(handleMouseKey("\x1b[<65;80;4M", d)).toBe("handled");
-    expect(wheels[1]).toEqual({ delta: -3, col: 80 });
+    expect(wheels[1]).toEqual({ delta: -1, col: 80 });
   });
 });

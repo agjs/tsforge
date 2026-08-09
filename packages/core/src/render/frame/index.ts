@@ -21,8 +21,13 @@ export {
   stripMouseReports,
   parseMouseReport,
   extractMouseReports,
+  createMouseCsiFilter,
 } from "./ansi-plain";
-export type { IMouseReport } from "./ansi-plain";
+export type {
+  IMouseReport,
+  IMouseCsiFeed,
+  IMouseCsiFilter,
+} from "./ansi-plain";
 export { fitAnsiLine } from "./fit-line";
 export { withOpaqueBg } from "./opaque-bg";
 export {

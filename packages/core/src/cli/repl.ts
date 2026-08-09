@@ -85,7 +85,7 @@ import {
   renderAgentTree,
   AgentTreeModel,
   PaneScreen,
-  stripMouseReports,
+  createMouseCsiFilter,
   canUsePaneTui,
   PANE_MIN_ROWS,
   INPUT_INNER_ROWS_MAX,
@@ -2636,17 +2636,37 @@ export async function repl(args: ICliArgs): Promise<number> {
         },
       };
 
-      // When panes are up, strip leftover SGR mouse reports before the editor
-      // sees them (clicks otherwise insert `[<0;98;13M` into the buffer).
+      // When panes are up, reassemble SGR mouse reports across stdin chunks
+      // before the editor sees them. A split report otherwise peels off ESC and
+      // types `[<65;96;52M` into the prompt (and wheel feels insane).
       const stdinDataWrappers = new Map<
         (data: string) => void,
         (data: string) => void
       >();
-      // Hoisted — allocating a unicode RegExp per keystroke showed up in typing lag.
-      const mouseReportRe = new RegExp(
-        `${String.fromCharCode(27)}\\[<\\d+;\\d+;\\d+[Mm]`,
-        "gu"
-      );
+      const mouseCsi = createMouseCsiFilter();
+      let mouseCsiFlushTimer: ReturnType<typeof setTimeout> | null = null;
+      const ESC_HOLD_MS = 35;
+
+      const deliverCleaned = (
+        cleaned: string,
+        cb: (data: string) => void
+      ): void => {
+        if (cleaned.length === 0) {
+          return;
+        }
+
+        // Pane chrome keys (Ctrl+G / Esc / panel nav) never reach the editor.
+        const paneKeys =
+          cleaned === "\x07" ||
+          cleaned === "\x1b" ||
+          paneScreen.focusState.panelFocused;
+
+        if (paneKeys && paneScreen.handleKey(cleaned) === "handled") {
+          return;
+        }
+
+        cb(cleaned);
+      };
 
       editorHandle = startEditor({
         stdin: {
@@ -2658,38 +2678,35 @@ export async function repl(args: ICliArgs): Promise<number> {
             }
 
             const wrapped = (data: string): void => {
+              if (mouseCsiFlushTimer !== null) {
+                clearTimeout(mouseCsiFlushTimer);
+                mouseCsiFlushTimer = null;
+              }
+
               if (!panesLive()) {
+                mouseCsi.reset();
                 cb(data);
 
                 return;
               }
 
-              // Mouse reports must hit PaneScreen BEFORE strip — wheel scrolls
-              // main/panel viewports; never let the host terminal scroll.
-              mouseReportRe.lastIndex = 0;
-              const reports = data.match(mouseReportRe) ?? [];
+              // Mouse reports hit PaneScreen before anything reaches the editor.
+              const fed = mouseCsi.feed(data);
 
-              for (const report of reports) {
+              for (const report of fed.reports) {
                 paneScreen.handleKey(report);
               }
 
-              const cleaned = stripMouseReports(data);
+              deliverCleaned(fed.cleaned, cb);
 
-              if (cleaned.length === 0) {
-                return;
+              if (fed.holding) {
+                mouseCsiFlushTimer = setTimeout(() => {
+                  mouseCsiFlushTimer = null;
+                  const flushed = mouseCsi.flush();
+
+                  deliverCleaned(flushed.cleaned, cb);
+                }, ESC_HOLD_MS);
               }
-
-              // Pane chrome keys (Ctrl+G / Esc / panel nav) never reach the editor.
-              const paneKeys =
-                cleaned === "\x07" ||
-                cleaned === "\x1b" ||
-                paneScreen.focusState.panelFocused;
-
-              if (paneKeys && paneScreen.handleKey(cleaned) === "handled") {
-                return;
-              }
-
-              cb(cleaned);
             };
 
             stdinDataWrappers.set(cb, wrapped);

@@ -8,12 +8,15 @@ export function stripSgr(text: string): string {
 /**
  * Drop SGR mouse-report sequences (`CSI < btn ; x ; y M/m`). Used when mouse
  * tracking is on (or leftover from a prior session) so clicks don't insert
- * garbage into the editor buffer.
+ * garbage into the editor buffer. Also strips orphaned tails (`[<…M`) when the
+ * leading ESC was already consumed by a prior chunk.
  */
 export function stripMouseReports(text: string): string {
   const esc = String.fromCharCode(27);
 
-  return text.replace(new RegExp(`${esc}\\[<\\d+;\\d+;\\d+[Mm]`, "gu"), "");
+  return text
+    .replace(new RegExp(`${esc}\\[<\\d+;\\d+;\\d+[Mm]`, "gu"), "")
+    .replace(/\[<\d+;\d+;\d+[Mm]/gu, "");
 }
 
 /** One SGR mouse report (`CSI < btn ; col ; row M|m`), 1-based col/row. */
@@ -57,4 +60,122 @@ export function extractMouseReports(text: string): IMouseReport[] {
   }
 
   return out;
+}
+
+export interface IMouseCsiFeed {
+  /** Complete reports (always with leading ESC) for PaneScreen.handleKey. */
+  readonly reports: readonly string[];
+  /** Bytes safe to hand the editor / focus keys. */
+  readonly cleaned: string;
+  /** True when a trailing ESC/CSI mouse prefix is held for the next chunk. */
+  readonly holding: boolean;
+}
+
+export interface IMouseCsiFilter {
+  feed(chunk: string): IMouseCsiFeed;
+  /** Emit held bytes as cleaned (Esc timeout / teardown). */
+  flush(): IMouseCsiFeed;
+  reset(): void;
+}
+
+const ESC = String.fromCharCode(27);
+const FULL_REPORT = new RegExp(`^${ESC}\\[<\\d+;\\d+;\\d+[Mm]`, "u");
+const ORPHAN_REPORT = /^\[<\d+;\d+;\d+[Mm]/u;
+/** Prefix that can still grow into a full `\x1b[<b;x;yM` (or orphan without ESC). */
+const HOLD_PREFIX = new RegExp(
+  `^(?:${ESC}(?:\\[(?:<(?:\\d+(?:;(?:\\d+(?:;\\d*)?)?)?)?)?)?|\\[<(?:\\d+(?:;(?:\\d+(?:;\\d*)?)?)?)?)$`,
+  "u"
+);
+
+function isMouseHold(rest: string): boolean {
+  return rest.length > 0 && HOLD_PREFIX.test(rest);
+}
+
+/**
+ * Reassemble SGR mouse reports that arrive split across stdin chunks.
+ * Without this, a lone ESC is peeled off and `[<65;96;52M` is typed into the
+ * prompt — the exact garbage users see while scrolling the pane TUI.
+ */
+export function createMouseCsiFilter(): IMouseCsiFilter {
+  let pending = "";
+
+  const empty = (): IMouseCsiFeed => ({
+    reports: [],
+    cleaned: "",
+    holding: false,
+  });
+
+  const run = (input: string): IMouseCsiFeed => {
+    const reports: string[] = [];
+    let cleaned = "";
+    let i = 0;
+
+    while (i < input.length) {
+      const rest = input.slice(i);
+      const full = FULL_REPORT.exec(rest);
+
+      if (full !== null) {
+        reports.push(full[0]);
+        i += full[0].length;
+        continue;
+      }
+
+      const orphan = ORPHAN_REPORT.exec(rest);
+
+      if (orphan !== null) {
+        reports.push(`${ESC}${orphan[0]}`);
+        i += orphan[0].length;
+        continue;
+      }
+
+      if (isMouseHold(rest)) {
+        pending = rest;
+        break;
+      }
+
+      cleaned += rest[0] ?? "";
+      i += 1;
+    }
+
+    return {
+      reports,
+      cleaned,
+      holding: pending.length > 0,
+    };
+  };
+
+  return {
+    feed(chunk: string): IMouseCsiFeed {
+      const input = pending + chunk;
+
+      pending = "";
+
+      return run(input);
+    },
+    flush(): IMouseCsiFeed {
+      if (pending.length === 0) {
+        return empty();
+      }
+
+      // Incomplete mouse prefix after timeout — drop it (never type into prompt).
+      // A bare ESC is a real Escape keypress.
+      const held = pending;
+
+      pending = "";
+
+      if (held === ESC) {
+        return { reports: [], cleaned: ESC, holding: false };
+      }
+
+      if (held.startsWith(ESC) && !held.includes("<")) {
+        // `\x1b` or `\x1b[` that never became a mouse report — pass through.
+        return { reports: [], cleaned: held, holding: false };
+      }
+
+      return empty();
+    },
+    reset(): void {
+      pending = "";
+    },
+  };
 }
