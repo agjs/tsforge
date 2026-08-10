@@ -16,10 +16,10 @@ test("read-only-spin: detects N consecutive read-only turns and re-steers before
 
   try {
     // A model that only calls read/search tools (run steps) without ever editing.
-    // With READONLY_STREAK_LIMIT=12 and MAX_READONLY_RECOVERIES=2:
-    // - Turn 12: re-steer (recovery 1), reset streak
-    // - Turn 24 (12 more): re-steer (recovery 2), reset streak
-    // - Turn 36 (12 more): hit MAX_READONLY_RECOVERIES → stop with readonly-spin
+    // With READONLY_STREAK_LIMIT=12, hot streak after resteer, MAX_READONLY_RECOVERIES=2:
+    // - Turn 12: re-steer (recovery 1), streak stays hot (limit-1)
+    // - Turn 13: re-steer (recovery 2)
+    // - Turn 14: recoveries exhausted → stop with readonly-spin
     // This should happen well before maxTurns=40.
     const readonlySteps = Array.from({ length: 40 }, () =>
       runStep("cat /dev/null")
@@ -48,12 +48,12 @@ test("read-only-spin: resets streak when a tool call touches an editable file", 
     // Verify the streak resets on edit by checking we can read far beyond the
     // limit WITHOUT hitting readonly-spin IF there's an edit in between. Create
     // a sequence that would hit readonly-spin if streak didn't reset:
-    // - Turns 1-11: read-only (streak 1-11, under limit)
+    // - Turns 1-11: read-only (streak under limit of 12)
     // - Turn 12: edit (reset streak to 0)
-    // - Turns 13-23: read-only (streak 1-11 after reset, under limit)
+    // - Turns 13-23: read-only (under limit again)
     // - Turn 24: edit (reset again)
-    // - Turns 25+: read-only (would eventually hit limit if not reset, but stop early)
-    // If streak DIDN'T reset on edits, turn 23 would already be at 22 (past limit of 12).
+    // - Turns 25+: a few more reads, then stop
+    // If streak DIDN'T reset on edits, turn 12 would already trip the spin.
     const steps = [
       ...Array.from({ length: 11 }, () => runStep("cat /dev/null")),
       createStep("x.txt", "x"), // turn 12: reset streak

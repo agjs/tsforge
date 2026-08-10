@@ -1,3 +1,5 @@
+import { isRecord } from "../lib/guards";
+
 /**
  * Cost-ordered tool-call repair ladder for open-model reliability.
  *
@@ -14,7 +16,7 @@
  *
  * The ladder (cost-ordered, earliest-win):
  *
- *  L0: null-drop, autolink-unwrap — lossless, always safe. Applied first.
+ *  L0: nested-args unwrap, null-drop, autolink-unwrap — lossless, always safe.
  *
  *  L1: schema coercion — against the tool's declared params:
  *      - stringified arrays: '["a"]' → ["a"] (when param type is array)
@@ -39,6 +41,41 @@ export interface IRepairResult {
   readonly feedback?: string; // targeted error text for the re-ask path
 }
 
+/** Keys models nest real tool params under (double-wrapped tool-call args). */
+const NESTED_ARG_KEYS: readonly string[] = ["arguments", "args", "parameters"];
+
+/**
+ * Top-level keys that mean "this object already IS the tool payload" — if any
+ * are present beside a nested bag, we leave the nest alone (don't smash).
+ * Includes history-stub flags so `{ arguments: { _harnessArgsOmitted } }`
+ * (Ledgerkit: 34× have{arguments}) still peels for history-meta.
+ */
+const TOOL_PAYLOAD_HINT_KEYS: ReadonlySet<string> = new Set([
+  "file",
+  "path",
+  "filename",
+  "filepath",
+  "filePath",
+  "content",
+  "contents",
+  "body",
+  "text",
+  "code",
+  "source",
+  "oldString",
+  "newString",
+  "old_string",
+  "new_string",
+  "edits",
+  "command",
+  "input",
+  "hash",
+  "_harnessArgsOmitted",
+  "contentMeta",
+  "oldStringMeta",
+  "newStringMeta",
+]);
+
 /**
  * Run the repair ladder on args that failed schema validation. Returns
  * the repaired args, a list of applied repair names (for telemetry), whether
@@ -50,7 +87,7 @@ export function repairArgs(args: Record<string, unknown>): IRepairResult {
   const applied: string[] = [];
   let out = args;
 
-  // L0: Lossless repairs (null-drop, autolink-unwrap).
+  // L0: Lossless repairs (nested unwrap, null-drop, autolink-unwrap).
   out = applyL0(out, applied);
 
   // L1: Schema coercion (stringified arrays, numbers, booleans, markdown fences).
@@ -77,9 +114,10 @@ function applyL0(
   args: Record<string, unknown>,
   applied: string[]
 ): Record<string, unknown> {
+  const unwrapped = unwrapNestedToolArgs(args, applied);
   const out: Record<string, unknown> = {};
 
-  for (const [key, value] of Object.entries(args)) {
+  for (const [key, value] of Object.entries(unwrapped)) {
     if (value === null || value === undefined) {
       applied.push(`drop-null:${key}`);
       continue;
@@ -99,6 +137,56 @@ function applyL0(
   }
 
   return out;
+}
+
+/**
+ * DeepSeek (and friends) sometimes emit `{ arguments: { file, content } }` —
+ * the tool-call envelope nested again inside `arguments`. Promote the inner
+ * object when the outer shell has no real payload keys of its own.
+ */
+export function unwrapNestedToolArgs(
+  args: Record<string, unknown>,
+  applied: string[]
+): Record<string, unknown> {
+  for (const key of NESTED_ARG_KEYS) {
+    const nested = args[key];
+
+    if (!isRecord(nested)) {
+      continue;
+    }
+
+    const nestHasPayload = Object.keys(nested).some((k) =>
+      TOOL_PAYLOAD_HINT_KEYS.has(k)
+    );
+
+    if (!nestHasPayload) {
+      continue;
+    }
+
+    const topHasPayload = Object.keys(args).some(
+      (k) => k !== key && TOOL_PAYLOAD_HINT_KEYS.has(k)
+    );
+
+    if (topHasPayload) {
+      continue;
+    }
+
+    applied.push(`unwrap-nested:${key}`);
+
+    return nested;
+  }
+
+  return args;
+}
+
+/**
+ * Peel one nested tool-call envelope for gating (history-meta) without
+ * telemetry. parseOrRepair still runs unwrap on the raw args for repair logs.
+ */
+export function peelNestedToolArgs(
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  return unwrapNestedToolArgs(args, []);
 }
 
 const AUTO_LINK = /^\[([^\]]+)\]\(([^)]+)\)$/;

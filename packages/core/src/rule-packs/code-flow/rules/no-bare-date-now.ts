@@ -11,8 +11,24 @@ export interface INoBareDateNowOptions {
   readonly allowedPaths?: readonly string[];
 }
 
+/**
+ * Paths where bare Date/Math.random are expected — the project's clock/rng util.
+ * Matched via substring on the normalized filename (see fileMatchesAllowlist).
+ * Empty used to be the default, which made EVERY greenfield `src/time.ts` fail
+ * and sent models hunting for a non-existent "gate allowedPaths" knob.
+ */
+const DEFAULT_ALLOWED_PATHS: readonly string[] = [
+  "/time.ts",
+  "/time/",
+  "/clock.ts",
+  "/clock/",
+  "/now.ts",
+  "/random.ts",
+  "/rng.ts",
+];
+
 const DEFAULTS: Required<INoBareDateNowOptions> = {
-  allowedPaths: [],
+  allowedPaths: DEFAULT_ALLOWED_PATHS,
 };
 
 function fileMatchesAllowlist(
@@ -89,13 +105,13 @@ export const noBareDateNowRule = createRule<
     ],
     messages: {
       bareDateNow:
-        "Direct `Date.now()` is non-deterministic. Import the project's `now()` util instead (or add the file to this rule's `allowedPaths` if it IS the util).",
+        "Direct `Date.now()` is non-deterministic. Call the project's `now()` util from a clock file (`time.ts` / `clock.ts` / `now.ts`) instead — do not dig into harness/gate config.",
       bareNewDate:
-        "Direct `new Date()` (no args) is non-deterministic. Import the project's `now()` util and pass the millisecond timestamp explicitly, or add the file to `allowedPaths`.",
+        "Direct `new Date()` (no args) is non-deterministic. Call the project's `now()` util from a clock file (`time.ts` / `clock.ts` / `now.ts`) instead — do not dig into harness/gate config.",
       bareDateConstructor:
-        "Direct `Date()` (no args) is non-deterministic. Import the project's `now()` util and pass the millisecond timestamp explicitly, or add the file to `allowedPaths`.",
+        "Direct `Date()` (no args) is non-deterministic. Call the project's `now()` util from a clock file (`time.ts` / `clock.ts` / `now.ts`) instead — do not dig into harness/gate config.",
       bareMathRandom:
-        "Direct `Math.random()` is non-deterministic. Import the project's random util (which can be seeded in tests) instead, or add the file to `allowedPaths`.",
+        "Direct `Math.random()` is non-deterministic. Call a project rng util (`random.ts` / `rng.ts` / clock file) instead — do not dig into harness/gate config.",
     },
   },
   defaultOptions: [DEFAULTS],

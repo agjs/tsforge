@@ -584,3 +584,189 @@ test("create refuses to overwrite an existing VALID locale JSON file (no create 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("create rejects harness omit markers so they never land on disk", async () => {
+  const dir = await tmp({});
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+  };
+
+  try {
+    const msg = await doCreate(
+      {
+        file: "poison.ts",
+        content:
+          '<harness:content-omitted bytes="12" sha256="deadbeefcafe" — THIS IS NOT FILE CONTENTS>',
+      },
+      ctx
+    );
+
+    expect(msg).toContain("harness history marker");
+    expect(msg).toContain("NOT");
+    expect(await Bun.file(join(dir, "poison.ts")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit rejects harness omit markers in newString", async () => {
+  const dir = await tmp({ "a.ts": "export const x = 1;\n" });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+  };
+
+  try {
+    const msg = await doEdit(
+      {
+        file: "a.ts",
+        oldString: "export const x = 1;",
+        newString: "[applied; on disk — THIS IS NOT FILE CONTENTS]",
+      },
+      ctx
+    );
+
+    expect(msg).toContain("harness history marker");
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(
+      "export const x = 1;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("create rejects history stub args (contentMeta / _harnessArgsOmitted)", async () => {
+  const dir = await tmp({});
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+  };
+
+  try {
+    const viaLegacyMeta = await doCreate(
+      {
+        file: "a.ts",
+        contentMeta: { omitted: true, bytes: 12, sha256: "deadbeefcafe" },
+      },
+      ctx
+    );
+    const viaFlag = await doCreate(
+      { file: "b.ts", _harnessArgsOmitted: true },
+      ctx
+    );
+
+    expect(viaLegacyMeta).toContain("history stub");
+    expect(viaFlag).toContain("history stub");
+    expect(await Bun.file(join(dir, "a.ts")).exists()).toBe(false);
+    expect(await Bun.file(join(dir, "b.ts")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("create rejects nested history stub under arguments (Ledgerkit bypass)", async () => {
+  const dir = await tmp({});
+  const reports: string[] = [];
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: (e) => {
+      reports.push(e.message);
+    },
+  };
+
+  try {
+    const nestedFile = await doCreate(
+      {
+        arguments: {
+          _harnessArgsOmitted: true,
+          file: "nested.ts",
+        },
+      },
+      ctx
+    );
+    const nestedOmitOnly = await doCreate(
+      { arguments: { _harnessArgsOmitted: true } },
+      ctx
+    );
+
+    expect(nestedFile).toContain("history stub");
+    expect(nestedOmitOnly).toContain("history stub");
+    expect(nestedFile).not.toContain("malformed args");
+    expect(reports.some((m) => m.includes("create:history-meta"))).toBe(true);
+    expect(await Bun.file(join(dir, "nested.ts")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit rejects nested history stub under arguments", async () => {
+  const dir = await tmp({ "a.ts": " const x = 1;\n" });
+  const reports: string[] = [];
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: (e) => {
+      reports.push(e.message);
+    },
+  };
+
+  try {
+    const msg = await doEdit(
+      {
+        arguments: {
+          _harnessArgsOmitted: true,
+          file: "a.ts",
+        },
+      },
+      ctx
+    );
+
+    expect(msg).toContain("history stub");
+    expect(msg).not.toContain("malformed args");
+    expect(reports.some((m) => m.includes("edit:history-meta"))).toBe(true);
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain("const x = 1");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit rejects harness omit markers inside edits[] batch", async () => {
+  const dir = await tmp({ "a.ts": "one\ntwo\n" });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+  };
+
+  try {
+    const msg = await doEdit(
+      {
+        file: "a.ts",
+        edits: [
+          { oldString: "one", newString: "1" },
+          {
+            oldString: "two",
+            newString: '<harness:content-omitted bytes="3" sha256="abc">',
+          },
+        ],
+      },
+      ctx
+    );
+
+    expect(msg).toContain("harness history marker");
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe("one\ntwo\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

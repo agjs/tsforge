@@ -29,6 +29,8 @@ export const DEFAULT_TEMPERATURE = 0.2;
  * the re-steering exhausts all recoveries. Shared by interactive (session.ts)
  * and headless (run.ts) drivers. Mirrored in each if sharing requires deep refactors.
  */
+/** Consecutive read-only tool turns before soft re-steer; recoveries then park.
+ *  Post-resteer, Session/run force write-only tools — text nudge alone is not enough. */
 export const READONLY_STREAK_LIMIT = 12;
 export const MAX_READONLY_RECOVERIES = 2;
 

@@ -112,6 +112,10 @@ import {
   type MetaBaseline,
 } from "../meta-rules";
 import { runWriteGuard } from "./write-guard";
+import {
+  pruneEphemeralToolResidue,
+  upsertGateFeedback,
+} from "./context-hygiene";
 
 /**
  * The shared turn primitives — one tool-using-conversation step and the
@@ -315,6 +319,11 @@ export const BUILD_NUDGE =
  *  spreads). Always-present and mutable: the Session flips these mid-run
  *  (plan mode, per-send signal, setupWeb wiring). */
 export interface ILoopCtxTool {
+  /**
+   * Extra absolute dirs allowed for read/run/search beyond cwd (see
+   * {@link IToolContext.extraRoots}). Default absent/`[]`.
+   */
+  extraRoots?: readonly string[];
   /** The build ADAPTER's convention library (injected seam). Spread into every
    *  IToolContext (so `pull_conventions` reads it) and read by the reactive PUSH
    *  (`injectFeedback`). Absent ⇒ no stack conventions. Keeps stack CONTENT out of
@@ -348,6 +357,8 @@ export interface ILoopCtxTool {
    *  enforce on this set, so they cover what the agent wrote regardless of git.
    *  Shared BY REFERENCE with the tool context. */
   touched?: Set<string>;
+  /** Successful `read` paths this send — survey grace for readonly-spin. */
+  surveyed?: Set<string>;
   /** Wired by the interactive CLI: run one read-only specialist subagent (the
    *  `spawn_agent` tool). Threaded into the tool context. */
   spawnAgent?: SpawnAgentFn;
@@ -728,11 +739,16 @@ async function runOneToolCall(
     recordTouched(ctx, mutated);
   }
 
+  const toolContent = `${result}${feedback}`;
+
   ctx.messages.push({
     role: "tool",
-    content: `${result}${feedback}`,
+    content: toolContent,
     toolCallId: callKey(call, index),
   });
+
+  // create/edit arg bodies age out in pruneEphemeralToolResidue (not here) —
+  // immediate stubs were mistaken for on-disk source.
 
   return touchedEditable;
 }
@@ -1116,8 +1132,8 @@ function changedSince(
 /** Max auto-fixed files to name in the notice before eliding. */
 const MAX_AUTOFIX_NAMED = 20;
 
-/** Tell the model what the janitor just changed, so it re-reads before editing and
- *  doesn't waste turns re-fixing formatting/imports (or edit stale text → reject). */
+/** Tell the model which files the janitor reformatted so the next edit anchors
+ *  on disk, not pre-format text. */
 function autoFixNotice(files: string[]): string {
   const shown = files.slice(0, MAX_AUTOFIX_NAMED).join(", ");
   const more =
@@ -1125,12 +1141,7 @@ function autoFixNotice(files: string[]): string {
       ? ` (+${String(files.length - MAX_AUTOFIX_NAMED)} more)`
       : "";
 
-  return (
-    `NOTE: automatic fixers (prettier, eslint --fix, organize-imports, TS quick-fixes) ` +
-    `just reformatted/fixed and SAVED these files: ${shown}${more}. Those style/import/` +
-    `formatting fixes are DONE — do not redo them. Their on-disk text now DIFFERS from ` +
-    `what you wrote, so \`read\` a file before editing it. Fix ONLY the errors below.`
-  );
+  return `NOTE: auto-fixed ${shown}${more} — re-read before edit; fix only errors below.`;
 }
 
 /**
@@ -1497,7 +1508,14 @@ export async function evaluateGate(
 export async function runCheckGate(ctx: ILoopCtx): Promise<ICheckOutcome> {
   const { passed, errors, output, autoFixed } = await evaluateGate(ctx, 0);
 
-  return { passed, errors, output, autoFixed };
+  return {
+    passed,
+    errors,
+    output,
+    autoFixed,
+    command: ctx.task.accept,
+    packs: ctx.gate.stackProfile?.packs ?? [],
+  };
 }
 
 /** Pure helper: derive the handoff ask string from the final steer message and
@@ -2225,7 +2243,8 @@ export async function injectFeedback(
     ctx.task,
     ctx.cwd,
     metaViolations,
-    state.focusError ?? null
+    state.focusError ?? null,
+    ctx.gate.stackProfile?.packs ?? []
   );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
   // A pending steer (the model stalled) leads the feedback so it can't be missed.
@@ -2292,10 +2311,13 @@ export async function injectFeedback(
   // cognitive-complexity ceiling — see that helper for the full reasoning.
   const { rotation, banner } = rotationEmit(state, gateErrors.length);
 
-  ctx.messages.push({
-    role: "user",
-    content: `${rotation}${banner}${steer}${notice}${feedback}${how}`,
-  });
+  // One live gate-feedback user slot (replace prior settle walls — do not append forever).
+  upsertGateFeedback(
+    ctx.messages,
+    `${rotation}${banner}${steer}${notice}${feedback}${how}`
+  );
+  // A new settle supersedes per-write guard blasts still sitting on create/edit tool results.
+  pruneEphemeralToolResidue(ctx.messages);
 }
 
 /** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :

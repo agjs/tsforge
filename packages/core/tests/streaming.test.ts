@@ -46,7 +46,7 @@ test("streams reasoning + content tokens and assembles tool calls", async () => 
   // tool call starts (so a long tool generation isn't silent) — but NOT the raw
   // tool-call JSON, which lands as a structured create/edit event elsewhere.
   expect(streamed).toContain("thinking…hello");
-  expect(streamed).toContain("✎ edit");
+  expect(streamed).toContain("✎ edit"); // edit keeps the pencil glyph
   expect(streamed).not.toContain('"file"');
   expect(r.content).toBe("hello");
   expect(r.toolCalls).toEqual([{ name: "edit", arguments: { file: "a.ts" } }]);
@@ -77,7 +77,7 @@ test("surfaces live progress (path + size heartbeat) as a big create streams", a
 
   // The file path appears as soon as it's parseable, then a size heartbeat — so a
   // minutes-long generation is never silent. The raw arg JSON is still NOT dumped.
-  expect(streamed).toContain("✎ → src/C.tsx");
+  expect(streamed).toContain("✚ → src/C.tsx");
   expect(streamed).toContain("KB streamed");
   expect(streamed).not.toContain('"content"');
 });

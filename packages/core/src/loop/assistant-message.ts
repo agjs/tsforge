@@ -1,4 +1,19 @@
-import type { IChatMessage, IModelResponse } from "../inference";
+import type { IChatMessage, IModelResponse, IToolCall } from "../inference";
+
+/**
+ * History owns its tool-call args. Provider responses (and test `scripted()`
+ * fixtures) must not share mutable argument objects with message history —
+ * `pruneEphemeralToolResidue` rewrites aged create/edit args in place, which
+ * otherwise poisons the next run that reuses the same scripted step
+ * (`tool_rejected:create:history-meta` after a prior TDD red run).
+ */
+function cloneToolCalls(calls: readonly IToolCall[]): IToolCall[] {
+  return calls.map((tc) => ({
+    id: tc.id,
+    name: tc.name,
+    arguments: { ...tc.arguments },
+  }));
+}
 
 /** Build the assistant history message to record after a model call, carrying
  *  `reasoningContent` when the model produced it (DeepSeek's thinking mode requires it
@@ -33,7 +48,7 @@ export function assistantMessage(res: IModelResponse): IChatMessage {
   return {
     role: "assistant",
     content: res.content,
-    toolCalls: res.toolCalls,
+    toolCalls: cloneToolCalls(res.toolCalls),
     ...reasoning,
   };
 }

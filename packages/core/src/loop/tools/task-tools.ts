@@ -13,6 +13,7 @@ import {
   uncompleteItemInPlan,
   updateItemFieldsInPlan,
 } from "../worklist/checklist-store";
+import { formatGateIdentity } from "../gate-visibility";
 import { reject, str, type IToolContext } from "./tool-context";
 
 type TaskMutateTool =
@@ -64,7 +65,7 @@ function persistAndNotify(
   planId: string,
   plan: IPlanDocument,
   tool: TaskMutateTool
-): string {
+): void {
   savePlan(ctx.cwd, plan);
   ctx.onPlanChanged?.(plan);
   ctx.report({
@@ -72,8 +73,6 @@ function persistAndNotify(
     task: ctx.task,
     message: `${tool}: plan ${planId} updated`,
   });
-
-  return formatPlanTree(plan);
 }
 
 /** List the session-bound plan tree (status is tools-only; this is the mirror). */
@@ -137,15 +136,13 @@ export function doTaskFocus(
     return reject(ctx, "task_focus", result.error);
   }
 
-  const tree = persistAndNotify(ctx, bound.planId, result.plan, "task_focus");
+  persistAndNotify(ctx, bound.planId, result.plan, "task_focus");
   const item = findItem(result.plan.items, id);
 
   return [
     `focused: ${item?.title ?? id}`,
     item?.verify !== undefined ? `verify hint: ${item.verify}` : "",
     item?.detail !== undefined ? `detail: ${item.detail}` : "",
-    "",
-    tree,
   ]
     .filter((line) => line.length > 0)
     .join("\n");
@@ -212,11 +209,13 @@ export async function doTaskComplete(
       gate.errors.length > 5
         ? ` (+${String(gate.errors.length - 5)} more)`
         : "";
+    const identity = formatGateIdentity(gate.command, gate.packs);
+    const first = sample.length > 0 ? ` First: ${sample}${more}` : "";
 
     return reject(
       ctx,
       "task_complete",
-      `gate RED (${String(gate.errors.length)} error(s)) — item stays open. Fix, then task_complete again.${sample.length > 0 ? ` First: ${sample}${more}` : ""}`
+      `gate RED (${String(gate.errors.length)} error(s)) — item stays open. Fix, then task_complete again.${first}\n${identity}`
     );
   }
 
@@ -226,7 +225,10 @@ export async function doTaskComplete(
     return reject(ctx, "task_complete", result.error);
   }
 
-  return persistAndNotify(ctx, bound.planId, result.plan, "task_complete");
+  persistAndNotify(ctx, bound.planId, result.plan, "task_complete");
+  const item = findItem(result.plan.items, id);
+
+  return `completed: ${item?.title ?? id}`;
 }
 
 /** Re-open a done item. */
@@ -266,7 +268,10 @@ export function doTaskUncomplete(
     return reject(ctx, "task_uncomplete", result.error);
   }
 
-  return persistAndNotify(ctx, bound.planId, result.plan, "task_uncomplete");
+  persistAndNotify(ctx, bound.planId, result.plan, "task_uncomplete");
+  const item = findItem(result.plan.items, id);
+
+  return `reopened: ${item?.title ?? id}`;
 }
 
 /** Append a discovered checklist item (root or under parent_id). */
@@ -310,9 +315,9 @@ export function doTaskAdd(
     return reject(ctx, "task_add", result.error);
   }
 
-  const tree = persistAndNotify(ctx, bound.planId, result.plan, "task_add");
+  persistAndNotify(ctx, bound.planId, result.plan, "task_add");
 
-  return [`added: ${title} (${result.id})`, "", tree].join("\n");
+  return `added: ${title} (${result.id})`;
 }
 
 /** Edit fields on an existing item (not status). */
@@ -384,8 +389,8 @@ export function doTaskUpdate(
     return reject(ctx, "task_update", result.error);
   }
 
-  const tree = persistAndNotify(ctx, bound.planId, result.plan, "task_update");
+  persistAndNotify(ctx, bound.planId, result.plan, "task_update");
   const item = findItem(result.plan.items, id);
 
-  return [`updated: ${item?.title ?? id}`, "", tree].join("\n");
+  return `updated: ${item?.title ?? id}`;
 }

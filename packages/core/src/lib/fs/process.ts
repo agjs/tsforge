@@ -63,7 +63,12 @@ export async function runShellCommand(
   command: string,
   opts: IShellRunOptions = {}
 ): Promise<IShellRun> {
-  return runArgvCommand(cwd, ["sh", "-c", command], opts);
+  // Prefer pipefail when the shell supports it (bash/zsh) so
+  // `bun test 2>&1 | cat` reports the runner's exit, not cat's 0.
+  // dash (Debian /bin/sh) rejects `set -o pipefail` — probe in a subshell first.
+  const withPipefail = `(set -o pipefail) 2>/dev/null && set -o pipefail; ${command}`;
+
+  return runArgvCommand(cwd, ["sh", "-c", withPipefail], opts);
 }
 
 /**

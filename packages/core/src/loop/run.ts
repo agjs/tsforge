@@ -3,10 +3,16 @@ import type {
   IChatMessage,
   IModelResponse,
   IProvider,
+  ITokenUsage,
   IToolCall,
 } from "../inference";
 import { assistantMessage } from "./assistant-message";
 import { usageEvent } from "./model-call";
+import {
+  autoCompactPct,
+  compactConversation,
+  pruneEphemeralToolResidue,
+} from "./context-hygiene";
 import {
   validate,
   type ErrorParser,
@@ -24,6 +30,12 @@ import {
   READONLY_STREAK_LIMIT,
   MAX_READONLY_RECOVERIES,
 } from "./loop.constants";
+import {
+  nextReadonlyStreak,
+  streakAfterReadonlyResteer,
+  toolCallsAttemptWrite,
+  WRITE_FORCE_TOOL_NAMES,
+} from "./readonly-spin";
 import type {
   IRunResult,
   IRunOptions,
@@ -167,6 +179,27 @@ async function consolidateLessons(
   }
 }
 
+/** Narrow headless tool schemas to the write-force set (post-readonly-resteer). */
+function writeForceToolsOrAll(tools: readonly unknown[]): unknown[] {
+  const forced = tools.filter((tool) => {
+    if (typeof tool !== "object" || tool === null || !("function" in tool)) {
+      return false;
+    }
+
+    const fn = tool.function;
+
+    return (
+      typeof fn === "object" &&
+      fn !== null &&
+      "name" in fn &&
+      typeof fn.name === "string" &&
+      WRITE_FORCE_TOOL_NAMES.has(fn.name)
+    );
+  });
+
+  return forced.length > 0 ? forced : [...tools];
+}
+
 /** Assemble per-call completion options, leaving optional knobs unset when absent. */
 function completionOptionsFor(args: {
   tools: unknown[];
@@ -177,11 +210,12 @@ function completionOptionsFor(args: {
   ttsrManager: TtsrManager | null;
   report: Reporter;
   taskId: string;
+  toolChoice?: "auto" | "required";
 }): Parameters<IProvider["complete"]>[1] {
   return {
     tools: args.tools,
     temperature: args.temperature,
-    toolChoice: "auto",
+    toolChoice: args.toolChoice ?? "auto",
     ...(args.enableThinking === undefined
       ? {}
       : { enableThinking: args.enableThinking }),
@@ -322,9 +356,9 @@ function handleReadonlyRetry(args: {
   args.messages.push({
     role: "user",
     content:
-      "You have made many tool calls in a row WITHOUT writing any file — only reading " +
-      "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
-      "ONE file to make concrete progress. No more reads. No prose.",
+      "STOP READING. You already have enough context — further reads will be rejected. " +
+      "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
+      "with real file contents NOW. Do not call read, run, or search.",
   });
 
   return {
@@ -390,23 +424,29 @@ async function processToolCallTurn(args: {
   action: "continue" | "retry" | "check-gate" | IRunResult;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  forceWriteNext: boolean;
 }> {
   const touchedEditable = await runToolCalls(
     args.toolCalls,
     args.ctx,
     args.state
   );
+  const updatedStreak = nextReadonlyStreak({
+    previous: args.readonlyStreak,
+    progressed: touchedEditable,
+    attemptedWrite: toolCallsAttemptWrite(args.toolCalls),
+  });
 
   // Read-only-spin guard: consecutive read-only turns without edits.
-  if (touchedEditable) {
+  if (updatedStreak === 0) {
     return {
-      action: "check-gate",
+      action: touchedEditable ? "check-gate" : "continue",
       readonlyStreak: 0,
       readonlyRecoveries: args.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
-  const updatedStreak = args.readonlyStreak + 1;
   const spin = readonlySpinStop({
     readonlyStreak: updatedStreak,
     readonlyRecoveries: args.readonlyRecoveries,
@@ -422,8 +462,9 @@ async function processToolCallTurn(args: {
   if (spin.action === "retry") {
     return {
       action: "retry",
-      readonlyStreak: 0,
+      readonlyStreak: streakAfterReadonlyResteer(READONLY_STREAK_LIMIT),
       readonlyRecoveries: spin.readonlyRecoveries,
+      forceWriteNext: true,
     };
   }
 
@@ -432,6 +473,7 @@ async function processToolCallTurn(args: {
       action: spin.action,
       readonlyStreak: updatedStreak,
       readonlyRecoveries: spin.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -439,6 +481,7 @@ async function processToolCallTurn(args: {
     action: "continue",
     readonlyStreak: updatedStreak,
     readonlyRecoveries: args.readonlyRecoveries,
+    forceWriteNext: false,
   };
 }
 
@@ -463,6 +506,7 @@ async function handleModelResponse(args: {
   action: "continue" | IRunResult;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  forceWriteNext: boolean;
 }> {
   // TTSR interrupt: continue without settling gate
   if (args.res.ttsrFired !== undefined) {
@@ -482,6 +526,7 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -497,6 +542,7 @@ async function handleModelResponse(args: {
       action: looped,
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -535,6 +581,7 @@ async function handleModelResponse(args: {
         action: settled,
         readonlyStreak: args.readonlyStreak,
         readonlyRecoveries: args.readonlyRecoveries,
+        forceWriteNext: false,
       };
     }
 
@@ -545,6 +592,7 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -560,12 +608,13 @@ async function handleModelResponse(args: {
     taskStart: args.taskStart,
   });
 
-  // Re-steering: continue without gate
+  // Re-steering: continue without gate — next turn write-forces.
   if (tool.action === "retry") {
     return {
       action: "continue",
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      forceWriteNext: tool.forceWriteNext,
     };
   }
 
@@ -579,6 +628,7 @@ async function handleModelResponse(args: {
       },
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -596,6 +646,7 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -619,6 +670,7 @@ async function handleModelResponse(args: {
       },
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      forceWriteNext: false,
     };
   }
 
@@ -626,7 +678,54 @@ async function handleModelResponse(args: {
     action: "continue",
     readonlyStreak: tool.readonlyStreak,
     readonlyRecoveries: tool.readonlyRecoveries,
+    forceWriteNext: false,
   };
+}
+
+/** Mid-drive compact for the headless loop when prompt tokens cross the window.
+ *  Returns true when a compact ran (caller should clear stale lastUsage). */
+async function maybeHeadlessAutoCompact(args: {
+  messages: IChatMessage[];
+  ctx: ILoopCtx;
+  provider: IProvider;
+  report: Reporter;
+  taskId: string;
+  lastUsage: ITokenUsage | undefined;
+  contextWindow: number | undefined;
+  autoCompactAt: number;
+}): Promise<boolean> {
+  if (args.lastUsage === undefined || args.contextWindow === undefined) {
+    return false;
+  }
+
+  const pct = autoCompactPct(
+    args.lastUsage.promptTokens,
+    args.contextWindow,
+    args.autoCompactAt
+  );
+
+  if (pct === undefined) {
+    return false;
+  }
+
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message: `⊙ context ~${pct}% full — auto-compacting to free room`,
+  });
+
+  const compacted = await compactConversation(args.messages, args.provider);
+
+  args.messages.splice(0, args.messages.length, ...compacted.messages);
+  args.ctx.messages = args.messages;
+
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message: `⊙ compacted ${compacted.before} → ${compacted.after} messages`,
+  });
+
+  return true;
 }
 
 /** The main turn loop: call the model repeatedly, handle responses with guard checks,
@@ -647,10 +746,15 @@ async function runMainLoop(args: {
   ctx: ILoopCtx;
   state: ILoopState;
   finish: (result: IRunResult) => Promise<IRunResult>;
+  contextWindow?: number;
+  autoCompactAt?: number;
 }): Promise<IRunResult> {
   let readonlyStreak = 0;
   let readonlyRecoveries = 0;
+  let forceWriteNext = false;
+  let lastUsage: ITokenUsage | undefined;
   const taskStart = performance.now();
+  const autoCompactAt = args.autoCompactAt ?? 0.8;
 
   for (let turn = 1; turn <= args.maxTurns; turn += 1) {
     const turnStart = performance.now();
@@ -666,6 +770,22 @@ async function runMainLoop(args: {
       });
     }
 
+    pruneEphemeralToolResidue(args.messages);
+    const didCompact = await maybeHeadlessAutoCompact({
+      messages: args.messages,
+      ctx: args.ctx,
+      provider: args.provider,
+      report: args.report,
+      taskId: args.taskId,
+      lastUsage,
+      contextWindow: args.contextWindow,
+      autoCompactAt,
+    });
+
+    if (didCompact) {
+      lastUsage = undefined;
+    }
+
     args.report({
       kind: "cycle",
       task: args.taskId,
@@ -677,7 +797,19 @@ async function runMainLoop(args: {
 
     // R1 Phase A: when pendingDiagnosisSteer is set, advertise NO tools (empty array)
     // so the model can only produce text (the diagnosis), not tool calls.
-    const callTools = hasPendingDiagnosis(args.state) ? [] : args.tools;
+    // After readonly-spin re-steer: write-only tools + required tool_choice.
+    // Cleared below when handled.forceWriteNext is assigned for the next turn.
+    const writeForce = forceWriteNext;
+
+    let callTools: unknown[] = hasPendingDiagnosis(args.state)
+      ? []
+      : args.tools;
+    let toolChoice: "auto" | "required" = "auto";
+
+    if (writeForce && callTools.length > 0) {
+      callTools = writeForceToolsOrAll(callTools);
+      toolChoice = "required";
+    }
 
     // R2 per-call model overrides (temperature, reasoning effort) — applied to the
     // NEXT main-loop turn only, then cleared. Auxiliary calls stay on defaults.
@@ -701,6 +833,7 @@ async function runMainLoop(args: {
         ttsrManager: args.ttsrManager,
         report: args.report,
         taskId: args.taskId,
+        toolChoice,
       })
     );
 
@@ -709,6 +842,7 @@ async function runMainLoop(args: {
     // builds — did not, so a build log carried no token record at all and a
     // collapsing prefix-cache ratio had nowhere to show up.
     if (res.usage !== undefined) {
+      lastUsage = res.usage;
       args.report(
         usageEvent({
           task: args.taskId,
@@ -727,6 +861,7 @@ async function runMainLoop(args: {
     // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)
     // tool_calls so the history has no dangling `tool_calls` (strict APIs 400 otherwise).
     args.messages.push(assistantMessage(res));
+    pruneEphemeralToolResidue(args.messages);
 
     // Every model call advances cooldown accounting — including interrupted
     // ones, otherwise repeatGap rules mis-count after a TTSR retry.
@@ -751,6 +886,7 @@ async function runMainLoop(args: {
 
     readonlyStreak = handled.readonlyStreak;
     readonlyRecoveries = handled.readonlyRecoveries;
+    forceWriteNext = handled.forceWriteNext;
 
     if (handled.action !== "continue") {
       return args.finish(handled.action);
@@ -1003,5 +1139,11 @@ export async function runTask(
     ctx,
     state,
     finish,
+    ...(opts.contextWindow === undefined
+      ? {}
+      : { contextWindow: opts.contextWindow }),
+    ...(opts.autoCompactAt === undefined
+      ? {}
+      : { autoCompactAt: opts.autoCompactAt }),
   });
 }

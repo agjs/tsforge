@@ -79,14 +79,9 @@ function destructiveLocaleRejection(
     removed.length > 8 ? `, +${String(removed.length - 8)} more` : "";
 
   return (
-    `edit ${file} REJECTED: this edit DELETES ${String(removed.length)} translation ` +
-    `key(s) YOU added earlier this build (${shown}${more}). Do NOT delete translations ` +
-    `you authored to clear the \`i18n-locale-keys-used\` "unused" check — that ships a ` +
-    `hollow app ` +
-    `(a list-only page with no form, confirmation, or success/error messages). WIRE ` +
-    `THEM UP instead: build the UI that uses them — form field labels, the create/edit/` +
-    `delete buttons, the delete confirmation, and success/error toasts rendered via ` +
-    `t("features.<entity>.<key>"). Keep the keys; add the code that references them.`
+    `edit ${file} REJECTED: deletes ${String(removed.length)} translation key(s) ` +
+    `you added this build (${shown}${more}). Do NOT delete them to clear unused-key ` +
+    `lint — WIRE them up with \`t("features…")\` instead.`
   );
 }
 
@@ -128,9 +123,8 @@ export function makeBoringstackEditGuard(): EditGuard {
       return {
         reason: "i18n-invalid-json",
         message:
-          `edit ${file} REJECTED: this edit left the locale file as invalid JSON. ` +
-          `Fix the JSON syntax and KEEP every feature translation key — do not drop ` +
-          `keys while "cleaning up". A locale file must always parse.`,
+          `edit ${file} REJECTED: invalid JSON. Fix syntax and keep every ` +
+          `feature translation key.`,
       };
     }
 

@@ -113,3 +113,22 @@ test("a quick command still returns its output and does not report a timeout", a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("pipefail keeps a failing left-hand command's exit through | cat", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-proc-pipefail-"));
+
+  try {
+    const masked = await runShellCommand(dir, "false | cat", {
+      timeoutMs: 5000,
+    });
+
+    // Without pipefail this would be 0 (cat). With it, false's 1 survives.
+    expect(masked.exitCode).toBe(1);
+
+    const ok = await runShellCommand(dir, "true | cat", { timeoutMs: 5000 });
+
+    expect(ok.exitCode).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -318,6 +318,50 @@ export function isPlanApproval(line: string): boolean {
  *  ORDERING is unit-testable without the readline loop. */
 export type ReplRoute = "answer" | "plan-approval" | "plan-discuss" | "normal";
 
+/** Shared gate for "this line should bind the pending plan", not chat/steer text.
+ *  `hasPendingPlan` covers present_plan (including after Shift+Tab left plan mode);
+ *  `planMode && planDiscussed` covers the legacy ## Plan text path. */
+export function wantsPlanApproval(
+  line: string,
+  state: {
+    readonly planMode: boolean;
+    readonly planDiscussed: boolean;
+    readonly awaitingAnswer: boolean;
+    readonly hasPendingPlan: boolean;
+  }
+): boolean {
+  if (state.awaitingAnswer || !isPlanApproval(line)) {
+    return false;
+  }
+
+  return state.hasPendingPlan || (state.planMode && state.planDiscussed);
+}
+
+/** Peel plan-approvals out of a mid-run steer queue (pure — REPL binds after abort). */
+export function peelSteerQueue(
+  lines: readonly string[],
+  state: {
+    readonly planMode: boolean;
+    readonly planDiscussed: boolean;
+    readonly awaitingAnswer: boolean;
+    readonly hasPendingPlan: boolean;
+  }
+): { readonly steer: string[]; readonly approve: boolean } {
+  const steer: string[] = [];
+  let approve = false;
+
+  for (const line of lines) {
+    if (wantsPlanApproval(line, state)) {
+      approve = true;
+      continue;
+    }
+
+    steer.push(line);
+  }
+
+  return { steer, approve };
+}
+
 /** Decide the route for a free-text line. `awaitingAnswer` (the session paused on
  *  `ask_user`) is checked FIRST and unconditionally → the line is the ANSWER, so
  *  "go"/"approve" replies to the model's question and CANNOT be mistaken for a plan
@@ -330,13 +374,22 @@ export function classifyReplRoute(
     readonly planMode: boolean;
     readonly planDiscussed: boolean;
     readonly awaitingAnswer: boolean;
+    /** present_plan proposal waiting on disk-bind; optional for older call sites. */
+    readonly hasPendingPlan?: boolean;
   }
 ): ReplRoute {
   if (state.awaitingAnswer) {
     return "answer";
   }
 
-  if (state.planMode && state.planDiscussed && isPlanApproval(line)) {
+  if (
+    wantsPlanApproval(line, {
+      planMode: state.planMode,
+      planDiscussed: state.planDiscussed,
+      awaitingAnswer: false,
+      hasPendingPlan: state.hasPendingPlan === true,
+    })
+  ) {
     return "plan-approval";
   }
 
@@ -929,6 +982,36 @@ export async function repl(args: ICliArgs): Promise<number> {
   let lastElapsedMs = 0;
   let lastStatus = "ready";
 
+  // Set when the user types approve mid-turn (or it was drained from the steer
+  // queue). Must NOT be injected as chat — that leaves plan mode on, withholds
+  // task_* tools, and poisons the Tasks rail (seen live on Ledgerkit).
+  let pendingPlanApprove = false;
+
+  const approvalRouteState = (): {
+    planMode: boolean;
+    planDiscussed: boolean;
+    awaitingAnswer: boolean;
+    hasPendingPlan: boolean;
+  } => ({
+    planMode,
+    planDiscussed,
+    awaitingAnswer: awaitingUserAnswer,
+    hasPendingPlan: session.getPendingPlan() !== null,
+  });
+
+  /** Pull queued lines for steer; peel plan-approvals out to bind after abort. */
+  const drainSteerQueue = (): string[] => {
+    const drained = pending.splice(0, pending.length);
+    const peeled = peelSteerQueue(drained, approvalRouteState());
+
+    if (peeled.approve) {
+      pendingPlanApprove = true;
+      active?.abort();
+    }
+
+    return [...peeled.steer];
+  };
+
   // Run one user-driven exchange: fresh abort controller, time it, record the
   // outcome for the status line, persist. `run` gets the live signal + a steer
   // drain so in-flight user messages reach the model.
@@ -948,7 +1031,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     try {
       const result = await run({
         signal: active.signal,
-        steer: () => pending.splice(0, pending.length),
+        steer: drainSteerQueue,
       });
 
       lastTurns = result.turns;
@@ -1087,11 +1170,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   const dispatch = async (line: string): Promise<void> => {
-    const route = classifyReplRoute(line, {
-      planMode,
-      planDiscussed,
-      awaitingAnswer: awaitingUserAnswer,
-    });
+    const route = classifyReplRoute(line, approvalRouteState());
 
     // WS-C: the previous send paused on `ask_user`, so this line is the ANSWER — send it
     // as an ordinary message BEFORE plan-approval routing, so "go"/"approve" replies to
@@ -2181,6 +2260,12 @@ export async function repl(args: ICliArgs): Promise<number> {
           if (editorHandle !== null) {
             editorHandle.close();
           }
+        } else if (wantsPlanApproval(line, approvalRouteState())) {
+          // Bind the plan — do not steer "approve" into the model (that keeps
+          // plan mode locked and never offers task_* tools).
+          pendingPlanApprove = true;
+          active?.abort();
+          echo("  ↳ approving plan — stopping this turn\n");
         } else {
           pending.push(line);
           echo("  ↳ queued (steers the next turn)\n");
@@ -2221,6 +2306,15 @@ export async function repl(args: ICliArgs): Promise<number> {
         closeAgentTurn(); // seal the agent card's bottom cap before re-prompting
         busy = false;
         paneScreen.setBusy(false);
+      }
+
+      // Mid-run approve aborted the discuss turn — bind + implement before any
+      // other queued steer line.
+      if (pendingPlanApprove) {
+        pendingPlanApprove = false;
+        void runLine("approve");
+
+        return;
       }
 
       // A line typed in the gap after the last steer-drain becomes the next turn.

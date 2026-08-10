@@ -11,6 +11,7 @@ import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME } from "./agent.constants";
 import { toEdits, toCreate } from "./tools";
 import { ruleHelp } from "../loop/feedback";
 import { DEFAULT_TEMPERATURE } from "../loop/loop.constants";
+import { summarizeGateCommand } from "../loop/gate-visibility";
 
 /**
  * The errors the agent can actually act on: those in its editable files (plus
@@ -282,7 +283,7 @@ function buildMessages(
   const user = [
     `Task ${ctx.task.id} (cycle ${ctx.cycle}).`,
     intent,
-    `Acceptance command: ${ctx.task.accept}`,
+    `Acceptance command: ${summarizeGateCommand(ctx.task.accept)}`,
     `Editable files: ${ctx.task.files.join(", ")}`,
     `Editable file contents:\n${editableText}`,
     contextText,

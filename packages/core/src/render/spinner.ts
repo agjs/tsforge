@@ -109,6 +109,10 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
 export function spinnerPhase(event: ILoopEvent): string | null {
   if (event.kind === "token") {
     if (event.channel === "tool") {
+      if (/\bread\b/u.test(event.message)) {
+        return "reading";
+      }
+
       return "writing";
     }
 
@@ -121,6 +125,10 @@ export function spinnerPhase(event: ILoopEvent): string | null {
 
   if (event.kind === "tool" && /install/i.test(event.message)) {
     return "installing deps";
+  }
+
+  if (event.kind === "tool" && /^read\b/u.test(event.message)) {
+    return "reading";
   }
 
   return event.kind === "cycle" ? "thinking" : null;

@@ -27,12 +27,14 @@ const MIN_LINE_LEN = 6;
 /** ≤ this many distinct lines across the window ⇒ near-exact repetition. */
 const MAX_DISTINCT = 3;
 /** ≥ this many lines sharing a 4-word prefix ⇒ templated repetition. */
-const PREFIX_MATCH = 20;
+const PREFIX_MATCH = 12;
 const PREFIX_WORDS = 4;
 /** A line this long, repeated verbatim `GLOBAL_REPEAT_LIMIT` times anywhere in
  *  the stream, is a loop — long lines don't recur exactly in real prose/code. */
 const LONG_LINE_LEN = 20;
-const GLOBAL_REPEAT_LIMIT = 5;
+/** Was 5 — local models often stutter the same "Let me check…" line 3–4 times
+ *  before a tool call; trip earlier so the CLI doesn't paint a wall of repeats. */
+const GLOBAL_REPEAT_LIMIT = 3;
 
 /** Markers that the model has started emitting STRUCTURED tool calls into the
  *  content channel — a server tool-call-parser mismatch (e.g. atlas-spark's

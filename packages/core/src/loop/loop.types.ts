@@ -205,6 +205,11 @@ export interface IRunOptions {
   /** Pristine-scaffold meta-rule baseline subtracted from each cycle's violations,
    *  so a run is graded only on meta violations it INTRODUCES. */
   metaBaseline?: MetaBaseline;
+  /** Model context window (tokens). When set with usage from prior turns, the
+   *  headless loop auto-compacts mid-drive once prompt tokens cross the threshold. */
+  contextWindow?: number;
+  /** Fraction of `contextWindow` that triggers mid-drive auto-compaction (default 0.8). */
+  autoCompactAt?: number;
 }
 
 export interface ISpecResult {

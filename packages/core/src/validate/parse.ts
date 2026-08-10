@@ -159,8 +159,63 @@ function eslintFileItems(file: unknown): IErrorItem[] {
  * is missed. Run BOTH and union: their formats don't overlap (tsc-text vs JSON),
  * and only one is ever present at a time, so this is lossless either way.
  */
+/**
+ * Structured failures from bun test / vitest / jest output — failures only.
+ * Used by brownfield gates so `bun test` is not a 500-char opaque blob.
+ */
+export function parseTestFailures(output: string): IErrorItem[] {
+  const items: IErrorItem[] = [];
+  let file = "";
+
+  for (const line of output.split("\n")) {
+    const bunFile = /^\s*(.+?\.(?:test|spec)\.[cm]?[jt]sx?):\s*$/u.exec(line);
+
+    if (bunFile?.[1] !== undefined) {
+      file = bunFile[1];
+      continue;
+    }
+
+    const fail = /^\s*\(fail\)\s+(.+)$/u.exec(line);
+
+    if (fail?.[1] !== undefined) {
+      const title = fail[1].trim();
+      const key = file.length > 0 ? `${file}:${title}` : title;
+
+      items.push({
+        key,
+        ...(file.length > 0 ? { file } : {}),
+        rule: "bun-test",
+        message: title,
+      });
+      continue;
+    }
+
+    const vitestFail =
+      /^\s*FAIL\s+(.+?\.(?:test|spec)\.[cm]?[jt]sx?)\s*(.*)$/u.exec(line);
+
+    if (vitestFail?.[1] !== undefined) {
+      const f = vitestFail[1];
+      const rest = (vitestFail[2] ?? "").trim();
+      const message = rest.length > 0 ? rest : "test failed";
+
+      items.push({
+        key: `${f}:${message}`,
+        file: f,
+        rule: "vitest",
+        message,
+      });
+    }
+  }
+
+  return items;
+}
+
 export function combinedParser(output: string): IErrorItem[] {
-  const merged = [...parseTsc(output), ...parseEslintJson(output)];
+  const merged = [
+    ...parseTsc(output),
+    ...parseEslintJson(output),
+    ...parseTestFailures(output),
+  ];
   const seen = new Set<string>();
 
   return merged.filter((e) => {
@@ -178,8 +233,12 @@ export function combinedParser(output: string): IErrorItem[] {
 export function parserFor(command: string): ErrorParserFn {
   const hasTsc = /\btsc\b/.test(command);
   const hasEslint = /\beslint\b/.test(command);
+  const hasTest =
+    /\bbun\s+test\b/.test(command) ||
+    /\bvitest\b/.test(command) ||
+    /\bjest\b/.test(command);
 
-  // A chained tsc+eslint gate needs the combined parser (see above).
+  // A chained tsc+eslint(+tests) gate needs the combined parser (see above).
   if (hasTsc && hasEslint) {
     return combinedParser;
   }
@@ -188,8 +247,20 @@ export function parserFor(command: string): ErrorParserFn {
     return parseEslintJson;
   }
 
+  if (hasTsc && hasTest) {
+    return (output) => [...parseTsc(output), ...parseTestFailures(output)];
+  }
+
   if (hasTsc) {
     return parseTsc;
+  }
+
+  if (hasTest) {
+    return (output) => {
+      const items = parseTestFailures(output);
+
+      return items.length > 0 ? items : genericErrors(output);
+    };
   }
 
   return genericErrors;

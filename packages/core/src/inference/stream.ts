@@ -15,6 +15,24 @@ import {
 } from "./wire";
 import { StreamGuard } from "./stream-guard";
 
+/** Keep in sync with `toolGlyph` in render/box — no import (avoids inference↔render). */
+const STREAM_TOOL_GLYPH: Readonly<Record<string, string>> = {
+  read: "◎",
+  search: "⌕",
+  symbol_search: "⌕",
+  find_references: "⌕",
+  run: "→",
+  script: "→",
+  create: "✚",
+  scaffold_ui: "✚",
+  edit: "✎",
+  edit_lines: "✎",
+};
+
+function streamToolGlyph(name: string): string {
+  return STREAM_TOOL_GLYPH[name] ?? "●";
+}
+
 interface IStreamDelta {
   content?: string;
   reasoning?: string;
@@ -322,7 +340,7 @@ function emitToolProgress(
 
     if (path !== undefined) {
       call.pathShown = true;
-      onToken(`\n  ✎ → ${path}`, "tool");
+      onToken(`\n  ${streamToolGlyph(call.name)} → ${path}`, "tool");
     }
   }
 
@@ -376,7 +394,7 @@ function processToolCallDelta(
   // throttled size heartbeat; the file lands as a clean create/edit event on run.
   if (typeof fn.name === "string" && fn.name.length > 0) {
     if (existing.name.length === 0) {
-      onToken(`\n  ✎ ${fn.name}…`, "tool");
+      onToken(`\n  ${streamToolGlyph(fn.name)} ${fn.name}…`, "tool");
     }
 
     existing.name = fn.name;

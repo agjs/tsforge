@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import {
   isEphemeralUserInject,
+  isGateFeedbackInject,
   isHarnessUserInject,
 } from "../src/loop/harness-inject";
 import { checklistOpenNudge } from "../src/loop/session";
@@ -41,6 +42,24 @@ describe("isEphemeralUserInject", () => {
   });
 });
 
+describe("isGateFeedbackInject", () => {
+  test("matches settle acceptance walls only", () => {
+    expect(
+      isGateFeedbackInject({
+        role: "user",
+        content:
+          "The acceptance command still fails:\n- boom\n\nFix your editable files and run it again.",
+      })
+    ).toBe(true);
+    expect(
+      isGateFeedbackInject({
+        role: "user",
+        content: "You started repeating yourself. STOP — do not re-explain",
+      })
+    ).toBe(false);
+  });
+});
+
 describe("isHarnessUserInject", () => {
   test("flags NEAR-GREEN / gate-feedback injects (not human speech)", () => {
     expect(
@@ -71,6 +90,17 @@ describe("isHarnessUserInject", () => {
       isHarnessUserInject({
         role: "user",
         content: "Your plan is APPROVED — saved as this session's checklist",
+      })
+    ).toBe(true);
+  });
+
+  test("flags Detected packs: activation notice", () => {
+    expect(
+      isHarnessUserInject({
+        role: "user",
+        content:
+          "Detected packs: env-access, generic-ts (newly activated: env-access). " +
+          "The task-contract Check: line now matches this live gate.",
       })
     ).toBe(true);
   });

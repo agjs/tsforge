@@ -135,10 +135,10 @@ test("channels are tracked independently", () => {
   const guard = new StreamGuard();
   let tripped = false;
 
-  // Alternate the same loop line across two channels, 4 times EACH (8 total).
-  // If the channels aggregated, 8 ≥ the global repeat limit would trip; tracked
-  // independently, 4-per-channel stays under it, so it must NOT trip.
-  for (let i = 0; i < 8; i += 1) {
+  // Alternate the same loop line across two channels, 2 times EACH (4 total).
+  // Global limit is 3 per channel — 2 stays under; if channels aggregated, 4
+  // would trip.
+  for (let i = 0; i < 4; i += 1) {
     const channel = i % 2 === 0 ? "content" : "reasoning";
 
     tripped =
@@ -146,4 +146,14 @@ test("channels are tracked independently", () => {
   }
 
   expect(tripped).toBe(false);
+});
+
+test("trips after three exact long-line repeats (not five)", () => {
+  expect(
+    feed([
+      "The gate flags src/time.ts itself. Let me check the config.",
+      "The gate flags src/time.ts itself. Let me check the config.",
+      "The gate flags src/time.ts itself. Let me check the config.",
+    ])
+  ).toBe(true);
 });

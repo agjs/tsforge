@@ -859,6 +859,25 @@ describe("PaneScreen", () => {
     expect(screen.text()).toContain("item-a");
   });
 
+  test("pending plan badge ·N paints Tasks header as 0/N (not blank 0/0)", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 80);
+
+    panes.enter();
+    panes.setWorklistBadge("·13");
+    panes.setPanel(["Shiphold", "────────", "", "├─ [ ] Scaffold"]);
+    panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
+
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(term.text());
+    const text = screen.text();
+
+    expect(text).toContain("Tasks");
+    expect(text).toContain("0/13");
+    expect(text).not.toMatch(/Tasks\s+0\/0/u);
+  });
+
   test("Tasks rail shows wrapped checklist with adaptive panel width", () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);

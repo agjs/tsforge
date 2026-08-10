@@ -182,6 +182,314 @@ function condenseEslintJson(output: string): string | null {
   );
 }
 
+// ─── L2: bun test / vitest / jest ────────────────────────────────────────────
+
+/** True when the command or output looks like a JS/TS unit-test runner. */
+function looksLikeTestRunner(ctx: ICondenseCtx): boolean {
+  const cmd = ctx.command.toLowerCase();
+
+  if (
+    /\bbun\s+test\b/.test(cmd) ||
+    /\bvitest\b/.test(cmd) ||
+    /\bjest\b/.test(cmd) ||
+    /\bnpm\s+(test|run\s+test)\b/.test(cmd) ||
+    /\byarn\s+test\b/.test(cmd) ||
+    /\bpnpm\s+test\b/.test(cmd)
+  ) {
+    return true;
+  }
+
+  // Shape fallback when the command is a package script wrapping the runner.
+  return (
+    /\(\s*pass\s*\)|\(\s*fail\s*\)/i.test(ctx.output) ||
+    /\bFAIL\b.+\n/.test(ctx.output) ||
+    /\bTests:\s+\d+\s+failed/i.test(ctx.output) ||
+    /\bTest Files\s+\d+\s+failed/i.test(ctx.output)
+  );
+}
+
+/** True when a line is a fail header that should pull following assertion context. */
+function isTestFailHeader(line: string): boolean {
+  return (
+    /\(fail\)/i.test(line) ||
+    /^\s*FAIL\s/u.test(line) ||
+    /^\s*●\s/u.test(line) ||
+    /Unhandled error between tests/i.test(line)
+  );
+}
+
+/** Footer counts from bun/vitest/jest — last match wins (summary is at the end). */
+function parseTestFooter(output: string): {
+  pass: number | null;
+  fail: number | null;
+  errors: number | null;
+} {
+  let pass: number | null = null;
+  let fail: number | null = null;
+  let errors: number | null = null;
+
+  for (const m of output.matchAll(/^\s*(\d+)\s+pass\b/gim)) {
+    const n = Number(m[1]);
+
+    if (Number.isFinite(n)) {
+      pass = n;
+    }
+  }
+
+  for (const m of output.matchAll(/^\s*(\d+)\s+fail\b/gim)) {
+    const n = Number(m[1]);
+
+    if (Number.isFinite(n)) {
+      fail = n;
+    }
+  }
+
+  for (const m of output.matchAll(/^\s*(\d+)\s+errors?\b/gim)) {
+    const n = Number(m[1]);
+
+    if (Number.isFinite(n)) {
+      errors = n;
+    }
+  }
+
+  const jestPass = /Tests:\s+(\d+)\s+passed/i.exec(output);
+  const jestFail = /Tests:\s+(?:\d+\s+passed,\s*)?(\d+)\s+failed/i.exec(output);
+
+  if (jestPass?.[1] !== undefined) {
+    const n = Number(jestPass[1]);
+
+    if (Number.isFinite(n)) {
+      pass = n;
+    }
+  }
+
+  if (jestFail?.[1] !== undefined) {
+    const n = Number(jestFail[1]);
+
+    if (Number.isFinite(n)) {
+      fail = n;
+    }
+  }
+
+  return { pass, fail, errors };
+}
+
+/** True when a line is assertion / code-frame / stack context for a fail. */
+function isFailDetailLine(line: string): boolean {
+  return (
+    line.trim().length === 0 ||
+    /^\s*(Expected|Received|error:|AssertionError|Caused by:|at\s)/u.test(
+      line
+    ) ||
+    /^\s*\^+/u.test(line) ||
+    /^\s*\d+\s+\|/u.test(line) ||
+    /^\s*[+\-<>|]/u.test(line) ||
+    line.includes("expect(")
+  );
+}
+
+/** Keep assertion / expected / stack lines under a fail header (vitest/jest). */
+function keepFailContext(lines: readonly string[], start: number): Set<number> {
+  const keep = new Set<number>([start]);
+
+  for (let j = start + 1; j < Math.min(start + 12, lines.length); j += 1) {
+    const next = lines[j] ?? "";
+
+    if (isFailDetailLine(next)) {
+      keep.add(j);
+    } else if (/\(pass\)|\(fail\)|^\s*FAIL\s|^\s*✓|^\s*×/u.test(next)) {
+      break;
+    } else if (keep.has(j - 1) && next.startsWith(" ")) {
+      keep.add(j);
+    } else {
+      break;
+    }
+  }
+
+  return keep;
+}
+
+/**
+ * Bun prints the code frame + `error:` + Expected/Received *above* `(fail)`,
+ * then the `(fail) name` footer. Looking only downward dropped the assertion
+ * (Shiphold dogfood: model saw "1 fail" with no Expected/Received and spun).
+ *
+ * Anchor on the nearest `error:` above `(fail)`, then include the contiguous
+ * code-frame above it and every line through the fail header — so wrapped
+ * `Received: [ … ]` arrays are kept even when middle lines are just `]`.
+ */
+function keepFailContextAbove(
+  lines: readonly string[],
+  failAt: number
+): Set<number> {
+  let errorAt = -1;
+
+  for (let j = failAt - 1; j >= Math.max(0, failAt - 40); j -= 1) {
+    const prev = lines[j] ?? "";
+
+    if (
+      /\(pass\)|\(fail\)/i.test(prev) ||
+      /^\s*FAIL\s/u.test(prev) ||
+      /^bun test\b/i.test(prev)
+    ) {
+      break;
+    }
+
+    if (/^\s*error:/u.test(prev)) {
+      errorAt = j;
+      break;
+    }
+  }
+
+  if (errorAt < 0) {
+    return new Set<number>();
+  }
+
+  let start = errorAt;
+
+  for (let j = errorAt - 1; j >= Math.max(0, errorAt - 24); j -= 1) {
+    const prev = lines[j] ?? "";
+
+    if (
+      /^\s*\d+\s+\|/u.test(prev) ||
+      /^\s*\^+/u.test(prev) ||
+      prev.includes("expect(")
+    ) {
+      start = j;
+      continue;
+    }
+
+    break;
+  }
+
+  const keep = new Set<number>();
+
+  for (let j = start; j < failAt; j += 1) {
+    keep.add(j);
+  }
+
+  return keep;
+}
+
+function isStructuredFailLine(line: string): boolean {
+  return (
+    /\(fail\)/i.test(line) ||
+    /^\s*FAIL\s/u.test(line) ||
+    /^\s*●\s/u.test(line) ||
+    /^\s*✕\s/u.test(line) ||
+    /^\s*×\s/u.test(line) ||
+    /Unhandled error between tests/i.test(line)
+  );
+}
+
+/** Line indexes to keep for a red test summary (fail headers + preload dumps). */
+function collectTestFailLines(lines: readonly string[]): Set<number> {
+  const keep = new Set<number>();
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isTestFailHeader(lines[i] ?? "")) {
+      for (const idx of keepFailContextAbove(lines, i)) {
+        keep.add(idx);
+      }
+
+      for (const idx of keepFailContext(lines, i)) {
+        keep.add(idx);
+      }
+    }
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/Unhandled error between tests/i.test(lines[i] ?? "")) {
+      continue;
+    }
+
+    keep.add(i);
+
+    for (let j = i + 1; j < Math.min(i + 16, lines.length); j += 1) {
+      const next = lines[j] ?? "";
+
+      if (/^\s*\d+\s+(pass|fail|errors?)\b/i.test(next)) {
+        break;
+      }
+
+      keep.add(j);
+    }
+  }
+
+  return keep;
+}
+
+function formatRedTestHead(
+  footer: { pass: number | null; fail: number | null; errors: number | null },
+  failLineCount: number,
+  passCount: number
+): string {
+  const failN = footer.fail ?? failLineCount;
+  const errN = footer.errors ?? 0;
+  const passN = footer.pass ?? passCount;
+  const parts: string[] = [];
+
+  if (failN > 0) {
+    parts.push(`${String(failN)} fail`);
+  }
+
+  if (errN > 0) {
+    parts.push(`${String(errN)} errors`);
+  }
+
+  if (passN > 0) {
+    parts.push(`${String(passN)} pass elided`);
+  }
+
+  return parts.length > 0 ? `tests ✗ — ${parts.join(", ")}` : "tests ✗";
+}
+
+/**
+ * Failures-only view of a unit-test run. Pass lists and timing ceremony are
+ * dropped — the model acts on failures, not 400 green rows. Green → one line.
+ *
+ * Must NOT trust exitCode alone: models often append `| cat`, which masks a
+ * failing runner's status. Footer `N fail` / preload "Unhandled error" win.
+ */
+export function condenseTestRunner(ctx: ICondenseCtx): string | null {
+  if (!looksLikeTestRunner(ctx)) {
+    return null;
+  }
+
+  const lines = ctx.output.split("\n");
+  const footer = parseTestFooter(ctx.output);
+  const passCount = (ctx.output.match(/\(pass\)/gi) ?? []).length;
+  const failLines = lines.filter(isStructuredFailLine);
+  const footerFailed =
+    (footer.fail !== null && footer.fail > 0) ||
+    (footer.errors !== null && footer.errors > 0);
+  const hasFailSignal = failLines.length > 0 || footerFailed;
+  const keep = collectTestFailLines(lines);
+
+  if (ctx.exitCode === 0 && !hasFailSignal) {
+    const n =
+      footer.pass !== null
+        ? String(footer.pass)
+        : passCount > 0
+          ? String(passCount)
+          : "?";
+
+    return `tests ✓ — ${n} pass (pass list elided)`;
+  }
+
+  if (keep.size === 0 && !hasFailSignal) {
+    return null;
+  }
+
+  const body = lines
+    .filter((_, i) => keep.has(i))
+    .join("\n")
+    .trim();
+  const head = formatRedTestHead(footer, failLines.length, passCount);
+
+  return body.length > 0 ? `${head}\n${body}` : head;
+}
+
 // ─── L2: vite build ──────────────────────────────────────────────────────────
 
 /**
@@ -456,6 +764,7 @@ function truncate(output: string, maxChars: number): string {
 // Order: most-specific first (per-tool), then generic shapes. First non-null wins.
 const CONDENSERS: readonly IOutputCondenser[] = [
   { name: "eslint", condense: (c) => condenseEslintJson(c.output) },
+  { name: "test-runner", condense: condenseTestRunner },
   { name: "vite", condense: (c) => condenseViteBuild(c.output) },
   { name: "path-list", condense: (c) => condensePathList(c.output) },
   { name: "repeated-lines", condense: (c) => condenseRepeatedLines(c.output) },

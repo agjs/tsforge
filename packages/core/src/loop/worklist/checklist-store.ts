@@ -252,6 +252,34 @@ export function findItem(
   return null;
 }
 
+/**
+ * Depth-first first open (pending/active) item — the next thing plan order
+ * requires. Used so task_focus cannot skip ahead of unfinished work.
+ */
+export function firstOpenItem(
+  items: readonly IChecklistItem[]
+): IChecklistItem | null {
+  for (const item of items) {
+    if (item.status === "done") {
+      continue;
+    }
+
+    const kids = item.children ?? [];
+
+    if (kids.length > 0) {
+      const child = firstOpenItem(kids);
+
+      if (child !== null) {
+        return child;
+      }
+    }
+
+    return item;
+  }
+
+  return null;
+}
+
 export function mapItems(
   items: readonly IChecklistItem[],
   fn: (item: IChecklistItem) => IChecklistItem
@@ -671,6 +699,20 @@ export function focusItemInPlan(
 
   if (target.status === "done") {
     return { ok: false, error: "cannot focus a done item — uncomplete first" };
+  }
+
+  // Plan order: refuse to jump ahead while an earlier open item remains.
+  // Otherwise the model task_focuses "Build Today view" while "store hook"
+  // stays unchecked — and never calls task_complete on the skipped work.
+  const head = firstOpenItem(plan.items);
+
+  if (head !== null && head.id !== itemId) {
+    return {
+      ok: false,
+      error:
+        `finish "${head.title}" first (task_complete when the gate is green), ` +
+        "then focus this item — plan order is required",
+    };
   }
 
   // Clear previous active → pending (unless already the target).

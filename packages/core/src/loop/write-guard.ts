@@ -266,12 +266,13 @@ async function writeGuard(
     .filter((d) => d.errors.length > 0);
   const total = typeErrors.length + lintProblems.length;
 
+  // Always echo post-format content when strip/format reshaped the file — including
+  // on a red write-check. The model’s next edit is usually a fix for those issues;
+  // without the echo it anchors on the pre-format text and hits edit:not-found.
+  const current = safeRead(absPath);
+
   if (total === 0 && dependants.length === 0) {
-    // Clean write. If strip/auto-format reshaped what the model wrote, its
-    // in-context copy is now stale — echo the post-format content so its NEXT edit
-    // anchors on disk reality, preventing the stale-anchor not-found the edit tool
-    // only recovers from. No-op when nothing changed (no divergence to report).
-    return reformatEcho(file, written, safeRead(absPath));
+    return reformatEcho(file, written, current);
   }
 
   const detail = writeGuardLines(absPath, cwd, typeErrors, lintProblems);
@@ -291,14 +292,15 @@ async function writeGuard(
   });
 
   if (total === 0) {
-    return blast;
+    return appendReformatEcho(blast, file, written, current);
   }
 
-  return (
+  const check =
     `\n\n⚠ CHECK of this file found ${String(total)} issue(s) — fix them now ` +
     "(edit this file) before writing others; ignore any 'cannot find module' for " +
-    `files you'll create next:\n${detail}${blast}`
-  );
+    `files you'll create next:\n${detail}${blast}`;
+
+  return appendReformatEcho(check, file, written, current);
 }
 
 /** Read a file synchronously, or "" if it can't be read (just-written files
@@ -313,15 +315,27 @@ function safeRead(absPath: string): string {
 
 /** Lines above which a reformat echo would cost more context than it saves; larger
  *  files fall back to the corrective (re-read-on-not-found) path. */
-const REFORMAT_ECHO_MAX_LINES = 80;
+const REFORMAT_ECHO_MAX_LINES = 200;
 
 /**
- * Feedback for a CLEAN write whose content the strip/auto-format pass reshaped:
- * echo the post-format file so the model edits against disk reality, not the
- * (now-stale) text it wrote — the preventive half of the edit-on-autoformat fix
- * (the corrective half inlines content on a not-found rejection). Returns "" when
- * nothing diverged (the model's copy is already correct) or the file is too large
- * to inline cheaply (a short note then, so the model knows to re-read).
+ * Append a reformat echo onto write-check / blast feedback when format diverged.
+ * Dirty and clean paths both need disk truth before the model’s next edit.
+ */
+export function appendReformatEcho(
+  feedback: string,
+  file: string,
+  written: string,
+  current: string
+): string {
+  return `${feedback}${reformatEcho(file, written, current)}`;
+}
+
+/**
+ * Echo post-format file content when strip/auto-format reshaped what the model
+ * wrote — the preventive half of the edit-on-autoformat fix (the corrective half
+ * inlines content on a not-found rejection). Returns "" when nothing diverged
+ * or the file is empty; large files get a short re-read note instead of a full
+ * inline.
  */
 export function reformatEcho(
   file: string,
@@ -339,14 +353,14 @@ export function reformatEcho(
   );
 
   if (lines.length > REFORMAT_ECHO_MAX_LINES) {
-    return `\n\nℹ ${file} was auto-formatted (imports/quotes/blank lines normalized) — re-read it before your next edit so your oldString matches what's on disk.`;
+    return `\n\nℹ ${file} auto-formatted — re-read before next edit.`;
   }
 
   const numbered = lines
     .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
     .join("\n");
 
-  return `\n\nℹ ${file} was auto-formatted — its CURRENT content is below; copy any future oldString from THIS (not from what you wrote):\n${numbered}`;
+  return `\n\nℹ ${file} auto-formatted — CURRENT content (use this for oldString):\n${numbered}`;
 }
 
 /** A meta-rule context scoped to ONE just-written file, so the per-write rules

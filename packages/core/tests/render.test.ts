@@ -145,3 +145,14 @@ test("renderEvent surfaces an ask_user question prominently (WS-C)", () => {
   // Not swallowed to empty like the ledger-only kinds (policy/usage/reverted).
   expect(out.trim().length).toBeGreaterThan(0);
 });
+
+test("renderEvent paints settled tool lines with a verb glyph (not dim-only)", () => {
+  const out = renderEvent(
+    { kind: "tool", task: "t", message: "read src/services/purchasing.ts" },
+    { color: false }
+  );
+
+  expect(out).toContain("read src/services/purchasing.ts");
+  expect(out).toContain("\u25ce"); // ◎
+  expect(out.trim().length).toBeGreaterThan(0);
+});

@@ -17,18 +17,18 @@ import type { IStackProfile } from "../src/stack-detection";
 import { Session } from "../src/loop";
 
 // THE greenfield bug: stack detection ran once at session start. Starting in an empty
-// dir → no package.json → the rule-LESS `generic-ts` fallback, frozen for the whole
-// build. As the model wrote a React app, the gate stayed generic-ts, so NO React rules
-// ever ran. The auto gate now re-resolves detection every cycle: resolveGate reads the
-// CURRENT package.json each call, so once `react` appears the pack turns on.
-test("auto-gate re-detects: generic-ts on an empty dir, react pack once package.json has react", async () => {
+// dir used to freeze a soft floor; the auto gate now re-resolves every cycle so once
+// `react` appears the framework pack turns on. Empty dir still gets always-on packs.
+test("auto-gate re-detects: always-on on an empty dir, react pack once package.json has react", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-redetect-"));
 
   try {
-    // Cycle 1: empty dir → the generic-ts fallback, no framework rules.
+    // Cycle 1: empty dir → always-on packs, no framework rules.
     const empty = await resolveGate({ ...parseArgs([]), dir }, null);
 
     expect(empty.accept).toContain("generic-ts");
+    expect(empty.accept).toContain("env-access");
+    expect(empty.accept).toContain("code-flow");
     expect(empty.accept).not.toContain("react-component-architecture");
 
     // The model writes a React app's package.json…
@@ -62,14 +62,14 @@ test("auto-gate re-detects: generic-ts on an empty dir, react pack once package.
 });
 
 // THE core fix, exercised on a SINGLE resolver (not two independent resolutions): a build
-// starts empty (generic-ts), writes a framework's package.json MID-SESSION, and the SAME
-// resolver's next cycle activates that pack. A regression that only ever re-used the
+// starts empty (always-on only), writes a framework's package.json MID-SESSION, and the
+// SAME resolver's next cycle activates that pack. A regression that only ever re-used the
 // captured baseline packs (never re-detecting) would fail this — the whole point of #105.
 test("a single resolver activates a framework pack when package.json gains it mid-session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-midsession-"));
 
   try {
-    // Start EMPTY → the resolver's first cycle is generic-ts, no framework packs.
+    // Start EMPTY → always-on packs, no framework packs.
     const resolved = await resolveGate({ ...parseArgs([]), dir }, null);
     const resolver = resolved.autoGate;
 
@@ -82,6 +82,7 @@ test("a single resolver activates a framework pack when package.json gains it mi
     const before = await resolver();
 
     expect(before.command).toContain("generic-ts");
+    expect(before.command).toContain("env-access");
     expect(before.command).not.toContain("react-component-architecture");
 
     // The build writes a React package.json partway through…
@@ -174,6 +175,108 @@ test("Session runs the auto-gate resolver each cycle, and setGate disables it", 
     // The manual gate was NOT overwritten by the resolver, and the resolver never ran again.
     expect(session.gate).toBe("exit 0");
     expect(calls).toBe(callsBeforeOverride);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// Live Check: + pack notice: auto-gate must refresh the task-contract and tell the
+// model when packs grow — otherwise the prompt keeps a stale soft command.
+test("auto-gate refreshes Check: and injects Detected packs: when packs grow", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-gate-vis-"));
+
+  let cycle = 0;
+
+  const autoGate = async () => {
+    cycle += 1;
+
+    if (cycle === 1) {
+      return {
+        command: "echo gate-v1",
+        stackProfile: {
+          name: "v1",
+          packs: ["generic-ts", "env-access"],
+          confidence: "guess" as const,
+          reason: "test",
+        },
+      };
+    }
+
+    return {
+      command: "echo gate-v2",
+      stackProfile: {
+        name: "v2",
+        packs: ["generic-ts", "env-access", "react-component-architecture"],
+        confidence: "certain" as const,
+        reason: "react appeared",
+      },
+    };
+  };
+
+  let fileSeq = 0;
+  let pendingCreate = false;
+  const provider: IProvider = {
+    async complete() {
+      if (!pendingCreate) {
+        pendingCreate = true;
+        fileSeq += 1;
+
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: String(fileSeq),
+              name: "create",
+              arguments: {
+                file: `f${String(fileSeq)}.ts`,
+                content: `export const n = ${String(fileSeq)};\n`,
+              },
+            },
+          ],
+        };
+      }
+
+      pendingCreate = false;
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      accept: "echo stale",
+      autoGate,
+    });
+
+    await session.send("first");
+
+    const system1 = session.messages[0];
+
+    expect(system1?.role).toBe("system");
+    expect(system1?.content ?? "").toContain("Check: `echo gate-v1`");
+    expect(system1?.content ?? "").not.toContain("Check: `echo stale`");
+    expect(
+      session.messages.some(
+        (m) => m.role === "user" && m.content.startsWith("Detected packs:")
+      )
+    ).toBe(false);
+
+    await session.send("second");
+
+    const system2 = session.messages[0];
+
+    expect(system2?.content ?? "").toContain("Check: `echo gate-v2`");
+    expect(
+      session.messages.some(
+        (m) =>
+          m.role === "user" &&
+          m.content.startsWith("Detected packs:") &&
+          m.content.includes("newly activated: react-component-architecture")
+      )
+    ).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

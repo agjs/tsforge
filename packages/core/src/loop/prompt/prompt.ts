@@ -12,6 +12,7 @@ import {
 import { renderFileSection } from "./project-map";
 import { activeOverlay } from "../../self-harness/overlay";
 import type { PromptBlockName } from "../../self-harness/self-harness.types";
+import { summarizeGateCommand } from "../gate-visibility";
 
 /** Apply the active self-harness overlay's edit (if any) to a NAMED editable
  *  prompt block. With no overlay this returns `base` untouched, so the base
@@ -325,7 +326,7 @@ export function seedPrompt(
     intent,
     stackText,
     scoutText,
-    `Acceptance command (run this to verify — it must exit 0): ${task.accept}`,
+    `Acceptance command (run this to verify — it must exit 0): ${summarizeGateCommand(task.accept)}`,
     `Editable files: ${task.files.join(", ")}`,
     `Current editable contents:\n${editableText}`,
     contextText,

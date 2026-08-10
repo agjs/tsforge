@@ -7,7 +7,7 @@ import {
 import type { IChatMessage } from "../inference";
 import { RESET, STYLE, paint } from "./style";
 import { displayWidth, sliceToWidth } from "./width";
-import { box, GLYPH } from "./box";
+import { box, GLYPH, toolGlyph } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
 import { StreamingMarkdown } from "./stream-markdown";
 import { renderDiff } from "./diff";
@@ -419,9 +419,11 @@ export function renderMessage(
   }
 
   if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
-    const names = message.toolCalls.map((c) => c.name).join(", ");
+    const summary = message.toolCalls
+      .map((c) => `${toolGlyph(c.name)} ${c.name}`)
+      .join("  ");
 
-    parts.push(paint(`· used ${names}`, STYLE.dim, color));
+    parts.push(paint(summary, `${STYLE.brandLight}${STYLE.bold}`, color));
   }
 
   // Closed card: top + pad, railed body, pad + bottom (model lives in the top bar).
@@ -480,7 +482,54 @@ function renderToken(event: ILoopEvent, color: boolean): string {
     return color ? stream.push(event.message, true) : "";
   }
 
-  return paint(event.message, STYLE.dim, color);
+  // Live tool-name / path markers (`◎ read…`, `✚ → file`) — bright, not dim.
+  return paint(event.message, `${STYLE.brandLight}${STYLE.bold}`, color);
+}
+
+/** Leading tool verb in a settled `kind: "tool"` message, if any. */
+function toolVerb(message: string): string | undefined {
+  const m = /^(read|search|create|edit|run|script)\b/u.exec(message);
+
+  return m?.[1];
+}
+
+/**
+ * Settled tool lines — same family as create/edit glyphLines (bright accent),
+ * not dim grey that vanishes into the pane canvas.
+ */
+function renderToolEvent(message: string, color: boolean): string {
+  if (message.startsWith("⚠") || message.startsWith("△")) {
+    return glyphLine(
+      GLYPH.warn,
+      message.replace(/^[⚠△]\s*/u, ""),
+      STYLE.yellow,
+      color
+    );
+  }
+
+  if (message.startsWith("↳")) {
+    return glyphLine("↳", message.replace(/^↳\s*/u, ""), STYLE.brand, color);
+  }
+
+  const verb = toolVerb(message);
+
+  if (verb !== undefined) {
+    return glyphLine(toolGlyph(verb), message, toolAccent(verb), color);
+  }
+
+  return glyphLine(GLYPH.info, message, STYLE.chromeLight, color);
+}
+
+function toolAccent(verb: string): string {
+  if (verb === "create") {
+    return STYLE.green;
+  }
+
+  if (verb === "run" || verb === "script") {
+    return STYLE.yellow;
+  }
+
+  return STYLE.brandLight;
 }
 
 /** A shell-command event as a box — exit status drives the accent + glyph (a
@@ -589,7 +638,7 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
       return "";
 
     case "tool":
-      return `  ${paint(event.message, STYLE.dim, color)}\n`;
+      return renderToolEvent(event.message, color);
 
     case "reverted":
       // Accounting-only (feeds accept-rate); the human-facing "reverted" message

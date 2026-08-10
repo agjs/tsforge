@@ -49,6 +49,26 @@ import {
 import { connectMcpServers } from "../mcp";
 import { loadAndRegisterPlugins } from "../config/external-plugins";
 import {
+  formatPackActivationNotice,
+  newlyActivatedPacks,
+  packsGrew,
+  sortedPacks,
+  summarizeGateCommand,
+} from "./gate-visibility";
+import { isChecklistTreeInject } from "./harness-inject";
+import {
+  autoCompactPct as compactThresholdPct,
+  compactConversation,
+  pruneEphemeralToolResidue,
+  scrubLegacyWriteArgStubs,
+} from "./context-hygiene";
+import {
+  filterWriteForceTools,
+  nextReadonlyStreak,
+  streakAfterReadonlyResteer,
+  toolCallsAttemptWrite,
+} from "./readonly-spin";
+import {
   DEFAULT_TEMPERATURE,
   LOOP_LIMITS,
   RUN_STATUS,
@@ -70,7 +90,6 @@ import {
   buildChatSystem,
   buildDriveToGreenSystem,
   buildTddGuidance,
-  COMPACT_SYSTEM,
   type ExecutionMode,
 } from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
@@ -95,7 +114,6 @@ import { parkOrRaiseHand } from "./raise-hand";
 import type { IPlanDocument } from "./worklist/checklist.types";
 import {
   countOpen,
-  findItem,
   formatPlanTree,
   isChecklistComplete,
   loadPlan,
@@ -122,6 +140,11 @@ export interface ISessionConfig {
   provider: IProvider;
   /** Working directory the agent operates in. */
   cwd: string;
+  /**
+   * Extra absolute directories for read/run/search beyond `cwd` (multi-repo attach).
+   * Default absent/`[]`. Do not set to the tsforge install path.
+   */
+  extraRoots?: readonly string[];
   /** Editable scope — edits/creates outside these are rejected. Empty = read-only. */
   files?: string[];
   /** Gate command. When set, a turn that ends without tool calls is gate-confirmed. */
@@ -441,7 +464,12 @@ export function checklistOpenNudge(opts: {
   return `${base} Continue with the next open item (task_focus / task_complete).`;
 }
 
-export { isEphemeralUserInject, isHarnessUserInject } from "./harness-inject";
+export {
+  isChecklistTreeInject,
+  isEphemeralUserInject,
+  isGateFeedbackInject,
+  isHarnessUserInject,
+} from "./harness-inject";
 
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;
@@ -556,9 +584,9 @@ const REPETITION_RESTEER =
 
 /** Pushed on a read-only spin in a BUILD (gated) session — demand a concrete edit. */
 const READONLY_RESTEER_BUILD =
-  "You have made many tool calls in a row WITHOUT writing any file — only reading " +
-  "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
-  "ONE file to make concrete progress. No more reads. No prose.";
+  "STOP READING. You already have enough context — further reads will be rejected. " +
+  "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
+  "with real file contents NOW. Do not call read, run, or search.";
 
 /** Pushed on a read-only spin in a CONVERSATIONAL (no-gate) session — demand an
  *  answer (there is nothing to edit, so the failure is never wrapping up). */
@@ -662,7 +690,7 @@ function taskContract(files: string[], accept: string | undefined): string {
     : `Scope: edit ONLY these paths — ${files.join(", ")}. Every other file is READ-ONLY; never edit it.`;
   const check =
     accept !== undefined && accept.length > 0
-      ? `Check: \`${accept}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`
+      ? `Check: \`${summarizeGateCommand(accept)}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`
       : "";
 
   return [TASK_CONTRACT_MARKER, scope, check]
@@ -796,10 +824,28 @@ function buildSyntheticHandoff(
   };
 }
 
+/** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`. */
+function rebuildTaskContract(ctx: Pick<ILoopCtx, "messages" | "task">): void {
+  const system = ctx.messages[0];
+
+  if (system?.role !== "system") {
+    return;
+  }
+
+  const fresh = taskContract(ctx.task.files, ctx.task.accept);
+  const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
+
+  system.content =
+    idx === -1
+      ? `${system.content}\n\n${fresh}`
+      : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
+}
+
 /** Build the AUTO-gate runner: a gate that RE-DETECTS the stack each cycle — refreshing
- *  `ctx.task.accept` (run by validate), the stack profile, and the per-write linter — so a
- *  greenfield build enables framework rule-packs once its package.json lists them. It reads
- *  the shared `active` flag; `setGate` flips that off so a manual override wins. Returned
+ *  `ctx.task.accept` (run by validate), the stack profile, the task-contract Check:, and
+ *  the per-write linter — so a greenfield build enables framework rule-packs once its
+ *  package.json lists them. Pack growth injects a Detected packs: notice. It reads the
+ *  shared `active` flag; `setGate` flips that off so a manual override wins. Returned
  *  alongside its `state` so `Session.create` can hand the flag to the constructor, and kept
  *  module-level so the large factory stays within the complexity budget. */
 function makeAutoGateRunner(
@@ -808,6 +854,7 @@ function makeAutoGateRunner(
   parse: ErrorParser | undefined
 ): { runner: IGate; state: { active: boolean } } {
   const state = { active: true };
+  let prevPacks: string[] | null = null;
   const runner: IGate = {
     async run(cwd, opts) {
       // F19: external plugins are frozen at session start; a mid-session edit of
@@ -818,9 +865,25 @@ function makeAutoGateRunner(
 
       if (state.active) {
         const r = await resolve();
+        const packs = sortedPacks(r.stackProfile.packs);
 
         ctx.task.accept = r.command;
         ctx.gate.stackProfile = r.stackProfile;
+        rebuildTaskContract(ctx);
+
+        if (packsGrew(prevPacks, packs) && prevPacks !== null) {
+          const activated = newlyActivatedPacks(prevPacks, packs);
+          const notice = formatPackActivationNotice(packs, activated);
+
+          ctx.messages.push({ role: "user", content: notice });
+          ctx.report({
+            kind: "tool",
+            task: ctx.task.id,
+            message: notice,
+          });
+        }
+
+        prevPacks = packs;
 
         if (r.lintFile !== undefined) {
           ctx.gate.lintFile = r.lintFile;
@@ -898,6 +961,8 @@ export class Session {
   /** Events of the CURRENT send (reset each drive), buffered off ctx.report so the
    *  post-send memory hook can mine the run for failure→fix lessons. */
   private readonly sendEvents: ILoopEvent[] = [];
+  /** After a readonly-spin re-steer: next askModel offers only create/edit/edit_lines. */
+  private forceWriteTools = false;
 
   private constructor(
     cfg: ISessionConfig,
@@ -971,6 +1036,13 @@ export class Session {
     if (this.hasGate) {
       this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
     }
+
+    // Drop any legacy per-turn checklist copies from resumed history before the
+    // first model call — they must not sit in context forever.
+    this.pruneChecklistTreeInjects();
+
+    // `--continue` used to revive contentMeta stubs; scrub before first call.
+    scrubLegacyWriteArgStubs(this.ctx.messages);
 
     if (typeof cfg.activePlanId === "string" && cfg.activePlanId.length > 0) {
       this.activePlanId = cfg.activePlanId;
@@ -1112,6 +1184,9 @@ export class Session {
       tool: {
         touched: new Set<string>(),
         policyMode: baseMode,
+        ...(cfg.extraRoots !== undefined && cfg.extraRoots.length > 0
+          ? { extraRoots: cfg.extraRoots }
+          : {}),
         ...(policyRules === undefined ? {} : { policyRules }),
         ...(mcpRegistry === null ? {} : { mcpRegistry }),
         ...(cfg.editGuard === undefined ? {} : { editGuard: cfg.editGuard }),
@@ -1262,16 +1337,42 @@ export class Session {
    *  (for the notice); otherwise undefined. Needs a known window AND real usage
    *  from a prior turn — both absent on the first send, so it never fires early. */
   private autoCompactPct(): number | undefined {
-    const window = this.cfg.contextWindow ?? 0;
-
-    if (window <= 0 || this.lastUsage === undefined) {
+    if (this.lastUsage === undefined) {
       return undefined;
     }
 
-    const fraction = this.lastUsage.promptTokens / window;
-    const threshold = this.cfg.autoCompactAt ?? AUTO_COMPACT_AT;
+    return compactThresholdPct(
+      this.lastUsage.promptTokens,
+      this.cfg.contextWindow ?? 0,
+      this.cfg.autoCompactAt ?? AUTO_COMPACT_AT
+    );
+  }
 
-    return fraction >= threshold ? Math.round(fraction * 100) : undefined;
+  /** Compact when over the window threshold; shared by send() and mid-drive turns. */
+  private async maybeAutoCompact(signal?: AbortSignal): Promise<void> {
+    const pct = this.autoCompactPct();
+
+    if (pct === undefined) {
+      return;
+    }
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⊙ context ~${pct}% full — auto-compacting to free room`,
+    });
+
+    const { before, after } = await this.compact(signal);
+
+    // Drop stale usage so the same pre-compact reading cannot re-fire every
+    // mid-drive turn before the next model call records a fresh prompt size.
+    this.lastUsage = undefined;
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⊙ compacted ${before} → ${after} messages`,
+    });
   }
 
   /** Set (or clear, with "") the gate command mid-session, or swap the composed
@@ -1391,8 +1492,19 @@ export class Session {
     return plan;
   }
 
-  /** System block: goal, active item, open counts, tools-only status reminder. */
+  /** Drop legacy per-turn `[checklist — session plan …]` user copies from history. */
+  private pruneChecklistTreeInjects(): void {
+    const kept = this.ctx.messages.filter((m) => !isChecklistTreeInject(m));
+
+    if (kept.length !== this.ctx.messages.length) {
+      this.ctx.messages.splice(0, this.ctx.messages.length, ...kept);
+    }
+  }
+
+  /** System block: live plan tree + tools-only status reminder (replace in place). */
   private refreshChecklistContract(): void {
+    this.pruneChecklistTreeInjects();
+
     const system = this.ctx.messages[0];
 
     if (system?.role !== "system") {
@@ -1401,12 +1513,17 @@ export class Session {
 
     const block = this.checklistContractText();
     const idx = system.content.indexOf(CHECKLIST_CONTRACT_MARKER);
+    const previous = idx === -1 ? "" : system.content.slice(idx).trimEnd();
 
     if (block.length === 0) {
       if (idx !== -1) {
         system.content = system.content.slice(0, idx).trimEnd();
       }
 
+      return;
+    }
+
+    if (previous === block) {
       return;
     }
 
@@ -1427,19 +1544,9 @@ export class Session {
       return "";
     }
 
-    const open = countOpen(plan.items);
-    const focused =
-      plan.activeItemId === null
-        ? null
-        : findItem(plan.items, plan.activeItemId);
-    const active =
-      focused === null ? "(none)" : `${focused.title} (${focused.id})`;
-
     return [
       CHECKLIST_CONTRACT_MARKER,
-      `goal: ${plan.goal}`,
-      `active: ${active}`,
-      `open: ${String(open)}`,
+      formatPlanTree(plan),
       "Checklist changes ONLY via task_list / task_focus / task_complete / task_uncomplete / task_add / task_update.",
       "Living plan: if you discover missing work (yours or the human's), task_add it — do not leave it only in chat.",
       "If an item's scope/title/detail drifts, task_update; if done work must be redone, task_uncomplete.",
@@ -1448,26 +1555,9 @@ export class Session {
     ].join("\n");
   }
 
-  /** Compact tree injected once per model turn for the bound plan. */
+  /** Keep the system checklist live; never append another full tree into history. */
   private injectPlanTree(): void {
-    if (this.activePlanId === null) {
-      return;
-    }
-
-    const plan = loadPlan(this.cfg.cwd, this.activePlanId);
-
-    if (plan === null) {
-      return;
-    }
-
     this.refreshChecklistContract();
-    this.ctx.messages.push({
-      role: "user",
-      content:
-        `[checklist — session plan ${plan.id}]\n${formatPlanTree(plan)}\n` +
-        "Living plan: task_add discovered work; task_update drifted items; " +
-        "task_uncomplete to reopen. Do not leave new work only in chat.",
-    });
   }
 
   /** True when a bound plan still has open nodes (blocks claiming finished). */
@@ -1584,19 +1674,7 @@ export class Session {
    *  `ctx.task`, replacing the old block in place. The static policy above the
    *  marker is untouched. No system message yet (shouldn't happen) ⇒ no-op. */
   private refreshTaskContract(): void {
-    const system = this.ctx.messages[0];
-
-    if (system?.role !== "system") {
-      return;
-    }
-
-    const fresh = taskContract(this.ctx.task.files, this.ctx.task.accept);
-    const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
-
-    system.content =
-      idx === -1
-        ? `${system.content}\n\n${fresh}`
-        : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
+    rebuildTaskContract(this.ctx);
   }
 
   /** Update the context window mid-session (e.g. after a `/model` hot-swap to a
@@ -1691,34 +1769,15 @@ export class Session {
   async compact(
     signal?: AbortSignal
   ): Promise<{ before: number; after: number }> {
-    const { ctx } = this;
-    const before = ctx.messages.length;
-    const conversation = ctx.messages.filter((m) => m.role !== "system");
-
-    if (conversation.length === 0) {
-      return { before, after: before };
-    }
-
-    const transcript = conversation
-      .map((m) => `[${m.role}] ${m.content}`)
-      .join("\n\n");
-    const res = await this.provider.complete(
-      [
-        { role: "system", content: COMPACT_SYSTEM },
-        { role: "user", content: transcript },
-      ],
-      { temperature: 0, ...(signal === undefined ? {} : { signal }) }
+    const result = await compactConversation(
+      this.ctx.messages,
+      this.provider,
+      signal
     );
 
-    const system = ctx.messages[0];
-    const summary: IChatMessage = {
-      role: "user",
-      content: `[Summary of the earlier conversation]\n${res.content}`,
-    };
+    this.ctx.messages = result.messages;
 
-    ctx.messages = system?.role === "system" ? [system, summary] : [summary];
-
-    return { before, after: ctx.messages.length };
+    return { before: result.before, after: result.after };
   }
 
   /** The live conversation (system + every exchange). Read-only view. */
@@ -1761,23 +1820,7 @@ export class Session {
     try {
       // Auto-compact BEFORE adding the new message (so it stays a fresh turn
       // after the summary) when the held context is near the window.
-      const pct = this.autoCompactPct();
-
-      if (pct !== undefined) {
-        report({
-          kind: "tool",
-          task: SESSION_ID,
-          message: `⊙ context ~${pct}% full — auto-compacting to free room`,
-        });
-
-        const { before, after } = await this.compact(opts.signal);
-
-        report({
-          kind: "tool",
-          task: SESSION_ID,
-          message: `⊙ compacted ${before} → ${after} messages`,
-        });
-      }
+      await this.maybeAutoCompact(opts.signal);
 
       // The plan-mode workflow note rides the FIRST message after the mode flips
       // on; revision replies go bare (the instruction persists in history).
@@ -1918,13 +1961,25 @@ export class Session {
     // enforces a read-only command allowlist) — the model never sees a write
     // tool. Filtered per call, so `this.tools` is untouched and toggling the
     // mode off restores the full set with zero bookkeeping.
-    const offeredTools = offeredToolsFor(
+    let offeredTools = offeredToolsFor(
       this.tools,
       this.planMode,
       this.ctx.tool.mcpRegistry?.toolSchemas() ?? [],
       activeOverlay()?.toolOverrides ?? [],
       this.activePlanId !== null && this.activePlanId.length > 0
     );
+
+    // Readonly-spin recovery: withhold read/search so soft text cannot be ignored.
+    if (this.forceWriteTools && !this.planMode) {
+      const forced = filterWriteForceTools(offeredTools);
+
+      if (forced.length > 0) {
+        offeredTools = forced;
+      }
+
+      this.forceWriteTools = false;
+    }
+
     const callStart = performance.now();
     let firstTokenAt = 0;
 
@@ -1989,6 +2044,9 @@ export class Session {
     }
 
     ctx.messages.push(assistantMessage(res));
+    // Age prior create/edit bodies once a newer assistant turn exists (must run
+    // after push — start-of-turn prune alone never sees the just-added message).
+    pruneEphemeralToolResidue(ctx.messages);
 
     // Every model call advances TTSR cooldown accounting (including interrupted
     // ones, so repeatGap rules count correctly after a retry).
@@ -2301,6 +2359,7 @@ export class Session {
     editsSinceCheck: number;
     readonlyStreak: number;
     readonlyRecoveries: number;
+    forceWriteNext: boolean;
   }> {
     const { edited, editsSinceCheck, progressed } = await this.runEditTurn(
       res,
@@ -2336,12 +2395,23 @@ export class Session {
         editsSinceCheck,
         readonlyStreak: carry.readonlyStreak,
         readonlyRecoveries: carry.readonlyRecoveries,
+        forceWriteNext: false,
       };
     }
 
-    const base = { action: "continue" as const, edited, editsSinceCheck };
+    const base = {
+      action: "continue" as const,
+      edited,
+      editsSinceCheck,
+      forceWriteNext: false,
+    };
+    const readonlyStreak = nextReadonlyStreak({
+      previous: carry.readonlyStreak,
+      progressed,
+      attemptedWrite: toolCallsAttemptWrite(res.toolCalls),
+    });
 
-    if (progressed) {
+    if (readonlyStreak === 0) {
       return {
         ...base,
         readonlyStreak: 0,
@@ -2349,7 +2419,6 @@ export class Session {
       };
     }
 
-    const readonlyStreak = carry.readonlyStreak + 1;
     const spin = await this.readonlySpinStop(
       readonlyStreak,
       carry.readonlyRecoveries,
@@ -2357,13 +2426,15 @@ export class Session {
       edited
     );
 
-    // Re-steered: reset the streak and spend one recovery, then keep looping so
-    // the model gets a fair window to act on the nudge before the next check.
+    // Re-steered: keep streak hot + force write tools next turn (soft text alone fails).
     if (spin === "retry") {
+      this.forceWriteTools = true;
+
       return {
         ...base,
-        readonlyStreak: 0,
+        readonlyStreak: streakAfterReadonlyResteer(READONLY_STREAK_LIMIT),
         readonlyRecoveries: carry.readonlyRecoveries + 1,
+        forceWriteNext: true,
       };
     }
 
@@ -2435,7 +2506,12 @@ export class Session {
     };
 
     if (r.action !== "continue") {
-      return { ...carried, editsSinceGate, action: r.action, forceTool: false };
+      return {
+        ...carried,
+        editsSinceGate,
+        action: r.action,
+        forceTool: r.forceWriteNext,
+      };
     }
 
     // Only force a gate when one is configured. With no gate the "gate" is empty
@@ -2449,10 +2525,20 @@ export class Session {
 
       return forced !== null
         ? { ...carried, editsSinceGate, action: forced, forceTool: false }
-        : { ...carried, editsSinceGate, action: "continue", forceTool: true };
+        : {
+            ...carried,
+            editsSinceGate,
+            action: "continue",
+            forceTool: true,
+          };
     }
 
-    return { ...carried, editsSinceGate, action: "continue", forceTool: false };
+    return {
+      ...carried,
+      editsSinceGate,
+      action: "continue",
+      forceTool: r.forceWriteNext,
+    };
   }
 
   /** Resolve a turn where the model yielded with NO tool calls: a conversational
@@ -2869,6 +2955,8 @@ export class Session {
     // Consecutive tool-call turns this send that touched NO editable file (the
     // read-only spin), and how many times we've re-steered out of one. The
     // gate-based guards can't see this — they only fire after a write.
+
+    this.forceWriteTools = false;
     let readonlyStreak = 0;
     let readonlyRecoveries = 0;
     // Edits since the last incremental check — drives "check every few edits".
@@ -2907,6 +2995,10 @@ export class Session {
       this.injectSteer(opts.steer);
       // Compact bound-plan tree so every turn sees current checklist status.
       this.injectPlanTree();
+      // Mid-drive hygiene: drop stale read dumps / superseded write-guards, then
+      // auto-compact if the last call's prompt tokens crossed the window threshold.
+      pruneEphemeralToolResidue(this.ctx.messages);
+      await this.maybeAutoCompact(opts.signal);
 
       report({
         kind: "cycle",

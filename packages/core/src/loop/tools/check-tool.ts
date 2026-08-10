@@ -1,5 +1,6 @@
 import type { IToolContext } from "./tool-context";
 import type { IErrorItem } from "../../validate/validate.types";
+import { summarizeGateCommand } from "../gate-visibility";
 
 /** Cap the error list so a huge failure set can't blow the turn's context budget. */
 const MAX_ERRORS = 200;
@@ -139,6 +140,9 @@ export async function doCheck(
     errorCount: deduped.length,
     ...(omitted > 0 ? { omitted } : {}),
     errors: shown,
+    // Summarize — never leak absolute harness toolchain paths into model context.
+    command: summarizeGateCommand(result.command),
+    packs: [...result.packs],
     ...rawOutput,
     ...autoFixed,
   });

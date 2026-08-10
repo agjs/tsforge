@@ -4,6 +4,8 @@ import {
   classifyReplRoute,
   nextAwaitingAnswer,
   humanAtKeyboard,
+  peelSteerQueue,
+  wantsPlanApproval,
 } from "../src/cli/repl";
 
 // WS-C: the interactive REPL must offer ask_user, and it must SURVIVE /clear. The /clear
@@ -112,6 +114,7 @@ test("classifyReplRoute: awaiting an answer beats plan-approval (the safety hole
     planMode: true,
     planDiscussed: true,
     awaitingAnswer: true,
+    hasPendingPlan: true,
   };
 
   // "approve"/"go" while awaiting an answer → the ANSWER, never a plan approval.
@@ -138,6 +141,60 @@ test("classifyReplRoute: normal plan-mode routing when NOT awaiting an answer", 
       awaitingAnswer: false,
     })
   ).toBe("normal");
+});
+
+test("classifyReplRoute: present_plan pending binds approve even after leaving plan mode", () => {
+  // Shift+Tab → normal clears planDiscussed; without hasPendingPlan, approve
+  // was a no-op and task_* tools never appeared (Ledgerkit dogfood).
+  expect(
+    classifyReplRoute("approve", {
+      planMode: false,
+      planDiscussed: false,
+      awaitingAnswer: false,
+      hasPendingPlan: true,
+    })
+  ).toBe("plan-approval");
+});
+
+test("peelSteerQueue removes approve from steer and keeps other mid-run lines", () => {
+  const state = {
+    planMode: true,
+    planDiscussed: true,
+    awaitingAnswer: false,
+    hasPendingPlan: true,
+  };
+
+  const peeled = peelSteerQueue(
+    ["keep going on db.ts", "approve", "also look at money.ts"],
+    state
+  );
+
+  // Approve must NEVER reach the model as steer text (Ledgerkit: plan stayed
+  // unbound, task_* withheld, writes denied then thrash).
+  expect(peeled.approve).toBe(true);
+  expect(peeled.steer).toEqual([
+    "keep going on db.ts",
+    "also look at money.ts",
+  ]);
+  expect(peeled.steer.some((l) => wantsPlanApproval(l, state))).toBe(false);
+
+  const idle = peelSteerQueue(["use sqlite"], {
+    ...state,
+    hasPendingPlan: false,
+    planDiscussed: false,
+  });
+
+  expect(idle.approve).toBe(false);
+  expect(idle.steer).toEqual(["use sqlite"]);
+});
+
+test("REPL wires peelSteerQueue into the mid-run steer drain", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+
+  expect(src).toContain("peelSteerQueue(drained, approvalRouteState())");
+  expect(src).toContain("pendingPlanApprove");
 });
 
 // nextAwaitingAnswer: a NO-PROGRESS failed answer send (turns 0 — Session.send returns
