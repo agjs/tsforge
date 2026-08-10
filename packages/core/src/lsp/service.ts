@@ -12,9 +12,16 @@ import type {
 
 /**
  * Quick-fixes safe to apply automatically — they align with our strict gate.
- * Deliberately EXCLUDES `addNonNullAssertion` and anything inserting `as`/`!`,
- * which the constitution bans. The gate re-validates regardless, so a bad fix
- * can't ship, but we don't want the harness fighting its own rules.
+ * Deliberately EXCLUDES:
+ * - `addNonNullAssertion` / anything inserting `as`/`!` (constitution bans)
+ * - `fixMissingProperties` / `fixMissingMember` — these INVENT placeholder
+ *   values (`[]`, `""`, `0`, …) to silence TS2739. Dogfood: extending `Artist`
+ *   with `followers`/`following` made tsFixAll stub `followers: []` across seed
+ *   + tests, the gate went green, then the model thrashed for minutes trying to
+ *   replace identical empty stubs via edit_lines. Missing fields must stay red
+ *   so the model writes real data.
+ * The gate re-validates regardless, so a bad fix can't ship, but we don't want
+ * the harness fighting its own rules or the model's planned edits.
  */
 const SAFE_FIXES = new Set([
   "import",
@@ -22,8 +29,6 @@ const SAFE_FIXES = new Set([
   "unusedIdentifier",
   "addMissingAwait",
   "fixOverrideModifier",
-  "fixMissingMember",
-  "fixMissingProperties",
   "fixUnreachableCode",
   "fixAddMissingConstraint",
 ]);
