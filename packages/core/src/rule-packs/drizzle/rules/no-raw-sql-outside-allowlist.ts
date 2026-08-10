@@ -2,7 +2,7 @@ import { AST_NODE_TYPES } from "@typescript-eslint/utils";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { matchesAnyGlobPattern } from "../../utils";
+import { matchesAnyGlobPattern, ruleRelativePath } from "../../utils";
 
 export const RULE_NAME = "no-raw-sql-outside-allowlist";
 
@@ -55,7 +55,12 @@ export const noRawSqlOutsideAllowlistRule = createRule<RuleOptions, MessageIds>(
     create(context, [options]) {
       const allowFiles = options.allowFiles ?? DEFAULT_ALLOW_FILES;
 
-      if (matchesAnyGlobPattern(context.filename, allowFiles)) {
+      if (
+        matchesAnyGlobPattern(
+          ruleRelativePath(context.filename, context.cwd),
+          allowFiles
+        )
+      ) {
         return {};
       }
 

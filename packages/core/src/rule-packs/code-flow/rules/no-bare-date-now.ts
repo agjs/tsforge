@@ -14,17 +14,23 @@ export interface INoBareDateNowOptions {
 /**
  * Paths where bare Date/Math.random are expected — the project's clock/rng util.
  * Matched via substring on the normalized filename (see fileMatchesAllowlist).
- * Empty used to be the default, which made EVERY greenfield `src/time.ts` fail
- * and sent models hunting for a non-existent "gate allowedPaths" knob.
+ * Include bare basenames so root `time.ts` matches (leading `/time.ts` alone
+ * misses it). Empty used to be the default, which made EVERY greenfield
+ * `src/time.ts` fail and sent models hunting for a non-existent knob.
  */
 const DEFAULT_ALLOWED_PATHS: readonly string[] = [
   "/time.ts",
   "/time/",
+  "time.ts",
   "/clock.ts",
   "/clock/",
+  "clock.ts",
   "/now.ts",
+  "now.ts",
   "/random.ts",
+  "random.ts",
   "/rng.ts",
+  "rng.ts",
 ];
 
 const DEFAULTS: Required<INoBareDateNowOptions> = {

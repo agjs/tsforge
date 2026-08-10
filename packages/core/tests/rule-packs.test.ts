@@ -454,6 +454,28 @@ describe("env-access: no-process-exit", () => {
     expect(messages).toHaveLength(0);
   });
 
+  test("allows process.exit() in src/config/error-handlers.ts (singleton file)", () => {
+    const messages = lint(
+      "env-access",
+      "no-process-exit",
+      "process.exit(1);",
+      "src/config/error-handlers.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows process.exit() in src/cli.ts (CLI entrypoint the message promises)", () => {
+    const messages = lint(
+      "env-access",
+      "no-process-exit",
+      "process.exit(1);",
+      "src/cli.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
   test("allows process.exit() in scripts", () => {
     const messages = lint(
       "env-access",
@@ -524,9 +546,16 @@ describe("code-flow: no-bare-date-now", () => {
       "export const now = () => new Date();",
       "src/lib/time/clock.ts"
     );
+    const rootTime = lint(
+      "code-flow",
+      "no-bare-date-now",
+      "export const now = () => Date.now();",
+      "time.ts"
+    );
 
     expect(inTime).toHaveLength(0);
     expect(inClock).toHaveLength(0);
+    expect(rootTime).toHaveLength(0);
   });
 
   test("allows Date.now() in explicitly allowlisted files", () => {
@@ -1201,6 +1230,28 @@ describe("drizzle pack", () => {
     );
 
     expect(messages.some((m) => m.messageId === "noRawSql")).toBeFalsy();
+  });
+
+  test("no-raw-sql-outside-allowlist: default allowlist covers migrations/**", () => {
+    const messages = lint(
+      "drizzle",
+      "no-raw-sql-outside-allowlist",
+      "import { sql } from 'drizzle-orm';\nconst result = sql`SELECT 1`;",
+      "drizzle/migrations/001_init.ts"
+    );
+
+    expect(messages.some((m) => m.messageId === "noRawSql")).toBeFalsy();
+  });
+
+  test("schema-files-must-not-import-driver: default pattern engages on schema paths", () => {
+    const messages = lint(
+      "drizzle",
+      "schema-files-must-not-import-driver",
+      "import { Pool } from 'pg';\nexport const pool = new Pool();",
+      "src/db/schema/users.schema.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("forbiddenDriverImport");
   });
 
   test("relations-must-cover-fks: rule exists and is callable", () => {
@@ -2603,6 +2654,28 @@ describe("oauth-security pack", () => {
     expect(rule.meta.docs?.description).toContain("Redis");
     expect(rule.meta.messages).toBeDefined();
     expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("state-must-be-redis-backed: default stateFiles glob engages on src/oauth/state.ts", () => {
+    const messages = lint(
+      "oauth-security",
+      "state-must-be-redis-backed",
+      "export function saveState(_s: string): void {}",
+      "src/oauth/state.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingRedisWrite");
+  });
+
+  test("state-must-be-redis-backed: skips non-state files under defaults", () => {
+    const messages = lint(
+      "oauth-security",
+      "state-must-be-redis-backed",
+      "export function saveState(_s: string): void {}",
+      "src/api/handler.ts"
+    );
+
+    expect(messages).toHaveLength(0);
   });
 
   test("state-ttl-bounded: rule exists and is callable", () => {

@@ -1,6 +1,7 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 import {
   matchesAnyGlobPattern,
+  ruleRelativePath as sharedRuleRelativePath,
   toPosixRelative as sharedToPosixRelative,
 } from "../utils";
 
@@ -33,7 +34,11 @@ export const DEFAULT_STATE_FILES: readonly string[] = [
 
 export const DEFAULT_PROVIDERS_GLOB = "**/oauth/providers/**";
 
-export { sharedToPosixRelative as toPosixRelative, matchesAnyGlobPattern };
+export {
+  sharedToPosixRelative as toPosixRelative,
+  sharedRuleRelativePath as ruleRelativePath,
+  matchesAnyGlobPattern,
+};
 
 /**
  * Returns true when the receiver of `<id>.<method>(...)` looks like a Redis

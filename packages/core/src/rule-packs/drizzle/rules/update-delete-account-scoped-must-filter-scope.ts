@@ -1,7 +1,7 @@
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { matchesAnyGlobPattern } from "../../utils";
+import { matchesAnyGlobPattern, ruleRelativePath } from "../../utils";
 import {
   chainContainsWhereWithScope,
   identifyUpdateDeleteQuery,
@@ -73,7 +73,12 @@ export const updateDeleteAccountScopedMustFilterScopeRule = createRule<
       return {};
     }
 
-    if (matchesAnyGlobPattern(context.filename, allowFiles)) {
+    if (
+      matchesAnyGlobPattern(
+        ruleRelativePath(context.filename, context.cwd),
+        allowFiles
+      )
+    ) {
       return {};
     }
 

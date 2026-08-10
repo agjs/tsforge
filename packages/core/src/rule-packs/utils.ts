@@ -98,33 +98,86 @@ export function toPosixRelative(filename: string, cwd: string): string {
 }
 
 /**
- * Simple glob-like matching for patterns. Supports:
- * - `**` (match any directory levels)
- * - `*` (match any characters except `/`)
- * - `?` (match single character)
- * - literal strings
+ * Repo-relative posix path for allowlist globs. Resolves relative filenames
+ * against cwd first so both absolute ESLint paths and test-relative names match.
  */
-export function matchesGlobPattern(path: string, pattern: string): boolean {
-  // Escape regex special chars except * and ?
-  const regexPattern = pattern
-    .split("**/")
-    .join("<<<GLOBSTAR>>>")
-    .split("/")
-    .map((seg) => {
-      if (seg === "<<<GLOBSTAR>>>") {
-        return ".*";
-      }
+export function ruleRelativePath(filename: string, cwd: string): string {
+  return toPosixRelative(path.resolve(cwd, filename), cwd);
+}
 
-      return seg
-        .replace(/[.+^${}()|[\]\\]/g, "\\$&") // escape regex chars
-        .replace(/\*/g, "[^/]*") // * matches anything except /
-        .replace(/\?/g, "[^/]"); // ? matches single char except /
-    })
-    .join("/");
+/**
+ * Glob-like matching for allowlist patterns. Supports double-star directory
+ * depth, single-star / question wildcards, brace expansion, and literals.
+ */
+export function matchesGlobPattern(filePath: string, pattern: string): boolean {
+  return expandBraces(pattern).some((expanded) =>
+    globToRegExp(expanded).test(filePath)
+  );
+}
 
-  const regex = new RegExp(`^${regexPattern}$`);
+/** Expand one level of `{a,b,c}` braces; recurse until none remain. */
+function expandBraces(pattern: string): string[] {
+  const start = pattern.indexOf("{");
 
-  return regex.test(path);
+  if (start < 0) {
+    return [pattern];
+  }
+
+  const end = pattern.indexOf("}", start);
+
+  if (end < 0) {
+    return [pattern];
+  }
+
+  const before = pattern.slice(0, start);
+  const after = pattern.slice(end + 1);
+  const alts = pattern.slice(start + 1, end).split(",");
+
+  return alts.flatMap((alt) => expandBraces(`${before}${alt}${after}`));
+}
+
+/** Convert a single brace-free glob to a full-match RegExp. */
+function globToRegExp(pattern: string): RegExp {
+  let i = 0;
+  let out = "^";
+
+  while (i < pattern.length) {
+    if (pattern.startsWith("**/", i)) {
+      out += "(?:.*/)?";
+      i += 3;
+      continue;
+    }
+
+    if (pattern.startsWith("**", i)) {
+      out += ".*";
+      i += 2;
+      continue;
+    }
+
+    const ch = pattern[i];
+
+    if (ch === undefined) {
+      break;
+    }
+
+    if (ch === "*") {
+      out += "[^/]*";
+      i += 1;
+      continue;
+    }
+
+    if (ch === "?") {
+      out += "[^/]";
+      i += 1;
+      continue;
+    }
+
+    out += /[.+^${}()|[\]\\]/u.test(ch) ? `\\${ch}` : ch;
+
+    i += 1;
+  }
+
+  return new RegExp(`${out}$`);
 }
 
 /**

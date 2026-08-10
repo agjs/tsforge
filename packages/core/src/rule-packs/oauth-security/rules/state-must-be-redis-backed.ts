@@ -7,7 +7,7 @@ import {
   DEFAULT_STATE_FILES,
   matchesAnyGlobPattern,
   matchRedisCall,
-  toPosixRelative,
+  ruleRelativePath,
 } from "../utils";
 
 export const RULE_NAME = "state-must-be-redis-backed";
@@ -152,7 +152,7 @@ export const stateMustBeRedisBackedRule = createRule<RuleOptions, MessageIds>({
       options.redisMethodNames ?? DEFAULT_REDIS_METHODS
     );
 
-    const relative = toPosixRelative(context.filename, context.cwd);
+    const relative = ruleRelativePath(context.filename, context.cwd);
 
     if (!matchesAnyGlobPattern(relative, stateFiles)) {
       return {};
