@@ -3,10 +3,16 @@ import type {
   IChatMessage,
   IModelResponse,
   IProvider,
+  ITokenUsage,
   IToolCall,
 } from "../inference";
 import { assistantMessage } from "./assistant-message";
 import { usageEvent } from "./model-call";
+import {
+  autoCompactPct,
+  compactConversation,
+  pruneEphemeralToolResidue,
+} from "./context-hygiene";
 import {
   validate,
   type ErrorParser,
@@ -24,6 +30,21 @@ import {
   READONLY_STREAK_LIMIT,
   MAX_READONLY_RECOVERIES,
 } from "./loop.constants";
+import {
+  nextReadonlyStreak,
+  streakAfterReadonlyResteer,
+  toolCallsAttemptWrite,
+  WRITE_FORCE_TOOL_NAMES,
+} from "./readonly-spin";
+import {
+  HISTORY_META_PARK_AT,
+  HISTORY_META_RESTEER,
+  HISTORY_META_RESTEER_AT,
+  isHistoryMetaOnlyWriteTurn,
+  nextHistoryMetaStreak,
+  streakAfterHistoryMetaResteer,
+  turnHadHistoryMetaReject,
+} from "./history-meta-spin";
 import type {
   IRunResult,
   IRunOptions,
@@ -167,6 +188,27 @@ async function consolidateLessons(
   }
 }
 
+/** Narrow headless tool schemas to the write-force set (post-readonly-resteer). */
+function writeForceToolsOrAll(tools: readonly unknown[]): unknown[] {
+  const forced = tools.filter((tool) => {
+    if (typeof tool !== "object" || tool === null || !("function" in tool)) {
+      return false;
+    }
+
+    const fn = tool.function;
+
+    return (
+      typeof fn === "object" &&
+      fn !== null &&
+      "name" in fn &&
+      typeof fn.name === "string" &&
+      WRITE_FORCE_TOOL_NAMES.has(fn.name)
+    );
+  });
+
+  return forced.length > 0 ? forced : [...tools];
+}
+
 /** Assemble per-call completion options, leaving optional knobs unset when absent. */
 function completionOptionsFor(args: {
   tools: unknown[];
@@ -177,11 +219,12 @@ function completionOptionsFor(args: {
   ttsrManager: TtsrManager | null;
   report: Reporter;
   taskId: string;
+  toolChoice?: "auto" | "required";
 }): Parameters<IProvider["complete"]>[1] {
   return {
     tools: args.tools,
     temperature: args.temperature,
-    toolChoice: "auto",
+    toolChoice: args.toolChoice ?? "auto",
     ...(args.enableThinking === undefined
       ? {}
       : { enableThinking: args.enableThinking }),
@@ -322,9 +365,9 @@ function handleReadonlyRetry(args: {
   args.messages.push({
     role: "user",
     content:
-      "You have made many tool calls in a row WITHOUT writing any file — only reading " +
-      "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
-      "ONE file to make concrete progress. No more reads. No prose.",
+      "STOP READING. You already have enough context — further reads will be rejected. " +
+      "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
+      "with real file contents NOW. Do not call read, run, or search.",
   });
 
   return {
@@ -383,6 +426,7 @@ async function processToolCallTurn(args: {
   state: ILoopState;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
   turn: number;
   turnStart: number;
   taskStart: number;
@@ -390,23 +434,79 @@ async function processToolCallTurn(args: {
   action: "continue" | "retry" | "check-gate" | IRunResult;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
+  forceWriteNext: boolean;
 }> {
+  const messagesStart = args.ctx.messages.length;
   const touchedEditable = await runToolCalls(
     args.toolCalls,
     args.ctx,
     args.state
   );
+  const hadHistoryMeta = turnHadHistoryMetaReject(
+    args.ctx.messages,
+    messagesStart
+  );
+  const historyMetaStreak = nextHistoryMetaStreak({
+    previous: args.historyMetaStreak,
+    hadHistoryMeta,
+    successfulWrite: touchedEditable,
+  });
 
-  // Read-only-spin guard: consecutive read-only turns without edits.
-  if (touchedEditable) {
+  const meta = historyMetaSpinStop({
+    historyMetaStreak,
+    report: args.ctx.report,
+    taskId: args.ctx.task.id,
+    turn: args.turn,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
+    messages: args.ctx.messages,
+  });
+
+  if (meta.action === "retry") {
     return {
-      action: "check-gate",
-      readonlyStreak: 0,
+      action: "retry",
+      readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: streakAfterHistoryMetaResteer(),
+      forceWriteNext: false,
     };
   }
 
-  const updatedStreak = args.readonlyStreak + 1;
+  if (meta.action !== null) {
+    return {
+      action: meta.action,
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak,
+      forceWriteNext: false,
+    };
+  }
+
+  const attemptedWrite =
+    toolCallsAttemptWrite(args.toolCalls) &&
+    !isHistoryMetaOnlyWriteTurn({
+      calls: args.toolCalls,
+      hadHistoryMeta,
+      successfulWrite: touchedEditable,
+    });
+  const updatedStreak = nextReadonlyStreak({
+    previous: args.readonlyStreak,
+    progressed: touchedEditable,
+    attemptedWrite,
+  });
+
+  // Read-only-spin guard: consecutive read-only turns without edits.
+  if (updatedStreak === 0) {
+    return {
+      action: touchedEditable ? "check-gate" : "continue",
+      readonlyStreak: 0,
+      readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak,
+      forceWriteNext: false,
+    };
+  }
+
   const spin = readonlySpinStop({
     readonlyStreak: updatedStreak,
     readonlyRecoveries: args.readonlyRecoveries,
@@ -422,8 +522,10 @@ async function processToolCallTurn(args: {
   if (spin.action === "retry") {
     return {
       action: "retry",
-      readonlyStreak: 0,
+      readonlyStreak: streakAfterReadonlyResteer(READONLY_STREAK_LIMIT),
       readonlyRecoveries: spin.readonlyRecoveries,
+      historyMetaStreak,
+      forceWriteNext: true,
     };
   }
 
@@ -432,6 +534,8 @@ async function processToolCallTurn(args: {
       action: spin.action,
       readonlyStreak: updatedStreak,
       readonlyRecoveries: spin.readonlyRecoveries,
+      historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
@@ -439,7 +543,78 @@ async function processToolCallTurn(args: {
     action: "continue",
     readonlyStreak: updatedStreak,
     readonlyRecoveries: args.readonlyRecoveries,
+    historyMetaStreak,
+    forceWriteNext: false,
   };
+}
+
+function historyMetaSpinStop(args: {
+  historyMetaStreak: number;
+  report: Reporter;
+  taskId: string;
+  turn: number;
+  turnStart: number;
+  taskStart: number;
+  messages: IChatMessage[];
+}): { action: IRunResult | "retry" | null } {
+  if (args.historyMetaStreak < HISTORY_META_RESTEER_AT) {
+    return { action: null };
+  }
+
+  if (args.historyMetaStreak >= HISTORY_META_PARK_AT) {
+    const handoff: IHandoff = {
+      block: STUCK_REASON.historyMetaSpin,
+      rungHistory: [],
+      errors: [],
+      ask: "model kept submitting empty/incomplete create/edit args (L3 / history stub)",
+      resumable: true,
+      resume: { triedLevers: [] },
+    };
+
+    args.report({
+      kind: "stuck",
+      task: args.taskId,
+      cycles: args.turn,
+      message:
+        "⚠ model kept submitting empty/incomplete create/edit args after " +
+        "re-steering — stopped (would otherwise burn the turn cap).",
+    });
+
+    emitTiming(
+      args.report,
+      args.taskId,
+      args.turn,
+      args.turnStart,
+      args.taskStart
+    );
+
+    return {
+      action: {
+        task: args.taskId,
+        redConfirmed: true,
+        status: RUN_STATUS.stuck,
+        cycles: args.turn,
+        reason: STUCK_REASON.historyMetaSpin,
+        handoff,
+        edits: 0,
+        regressions: 0,
+      },
+    };
+  }
+
+  if (args.historyMetaStreak !== HISTORY_META_RESTEER_AT) {
+    return { action: null };
+  }
+
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message:
+      "⚠ empty/incomplete create/edit loop — steering toward read + real write",
+  });
+  args.messages.push({ role: "user", content: HISTORY_META_RESTEER });
+
+  return { action: "retry" };
 }
 
 /** Handle a model response: check TTSR/degeneration, run tools or settle gate.
@@ -452,6 +627,7 @@ async function handleModelResponse(args: {
   messages: IChatMessage[];
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
   turn: number;
   turnStart: number;
   taskStart: number;
@@ -463,6 +639,8 @@ async function handleModelResponse(args: {
   action: "continue" | IRunResult;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
+  forceWriteNext: boolean;
 }> {
   // TTSR interrupt: continue without settling gate
   if (args.res.ttsrFired !== undefined) {
@@ -482,6 +660,8 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
@@ -497,6 +677,8 @@ async function handleModelResponse(args: {
       action: looped,
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
@@ -535,6 +717,8 @@ async function handleModelResponse(args: {
         action: settled,
         readonlyStreak: args.readonlyStreak,
         readonlyRecoveries: args.readonlyRecoveries,
+        historyMetaStreak: args.historyMetaStreak,
+        forceWriteNext: false,
       };
     }
 
@@ -545,27 +729,32 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
-  // Tool calls: process with read-only-spin guard and possibly settle gate
+  // Tool calls: process with history-meta + read-only-spin guards and possibly settle gate
   const tool = await processToolCallTurn({
     toolCalls: args.res.toolCalls,
     ctx: args.ctx,
     state: args.state,
     readonlyStreak: args.readonlyStreak,
     readonlyRecoveries: args.readonlyRecoveries,
+    historyMetaStreak: args.historyMetaStreak,
     turn: args.turn,
     turnStart: args.turnStart,
     taskStart: args.taskStart,
   });
 
-  // Re-steering: continue without gate
+  // Re-steering: continue without gate — next turn write-forces.
   if (tool.action === "retry") {
     return {
       action: "continue",
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
+      forceWriteNext: tool.forceWriteNext,
     };
   }
 
@@ -579,6 +768,8 @@ async function handleModelResponse(args: {
       },
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
@@ -596,6 +787,8 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
@@ -619,6 +812,8 @@ async function handleModelResponse(args: {
       },
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
+      forceWriteNext: false,
     };
   }
 
@@ -626,7 +821,55 @@ async function handleModelResponse(args: {
     action: "continue",
     readonlyStreak: tool.readonlyStreak,
     readonlyRecoveries: tool.readonlyRecoveries,
+    historyMetaStreak: tool.historyMetaStreak,
+    forceWriteNext: false,
   };
+}
+
+/** Mid-drive compact for the headless loop when prompt tokens cross the window.
+ *  Returns true when a compact ran (caller should clear stale lastUsage). */
+async function maybeHeadlessAutoCompact(args: {
+  messages: IChatMessage[];
+  ctx: ILoopCtx;
+  provider: IProvider;
+  report: Reporter;
+  taskId: string;
+  lastUsage: ITokenUsage | undefined;
+  contextWindow: number | undefined;
+  autoCompactAt: number;
+}): Promise<boolean> {
+  if (args.lastUsage === undefined || args.contextWindow === undefined) {
+    return false;
+  }
+
+  const pct = autoCompactPct(
+    args.lastUsage.promptTokens,
+    args.contextWindow,
+    args.autoCompactAt
+  );
+
+  if (pct === undefined) {
+    return false;
+  }
+
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message: `⊙ context ~${pct}% full — auto-compacting to free room`,
+  });
+
+  const compacted = await compactConversation(args.messages, args.provider);
+
+  args.messages.splice(0, args.messages.length, ...compacted.messages);
+  args.ctx.messages = args.messages;
+
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message: `⊙ compacted ${compacted.before} → ${compacted.after} messages`,
+  });
+
+  return true;
 }
 
 /** The main turn loop: call the model repeatedly, handle responses with guard checks,
@@ -647,10 +890,16 @@ async function runMainLoop(args: {
   ctx: ILoopCtx;
   state: ILoopState;
   finish: (result: IRunResult) => Promise<IRunResult>;
+  contextWindow?: number;
+  autoCompactAt?: number;
 }): Promise<IRunResult> {
   let readonlyStreak = 0;
   let readonlyRecoveries = 0;
+  let historyMetaStreak = 0;
+  let forceWriteNext = false;
+  let lastUsage: ITokenUsage | undefined;
   const taskStart = performance.now();
+  const autoCompactAt = args.autoCompactAt ?? 0.8;
 
   for (let turn = 1; turn <= args.maxTurns; turn += 1) {
     const turnStart = performance.now();
@@ -666,6 +915,22 @@ async function runMainLoop(args: {
       });
     }
 
+    pruneEphemeralToolResidue(args.messages);
+    const didCompact = await maybeHeadlessAutoCompact({
+      messages: args.messages,
+      ctx: args.ctx,
+      provider: args.provider,
+      report: args.report,
+      taskId: args.taskId,
+      lastUsage,
+      contextWindow: args.contextWindow,
+      autoCompactAt,
+    });
+
+    if (didCompact) {
+      lastUsage = undefined;
+    }
+
     args.report({
       kind: "cycle",
       task: args.taskId,
@@ -677,7 +942,19 @@ async function runMainLoop(args: {
 
     // R1 Phase A: when pendingDiagnosisSteer is set, advertise NO tools (empty array)
     // so the model can only produce text (the diagnosis), not tool calls.
-    const callTools = hasPendingDiagnosis(args.state) ? [] : args.tools;
+    // After readonly-spin re-steer: write-only tools + required tool_choice.
+    // Cleared below when handled.forceWriteNext is assigned for the next turn.
+    const writeForce = forceWriteNext;
+
+    let callTools: unknown[] = hasPendingDiagnosis(args.state)
+      ? []
+      : args.tools;
+    let toolChoice: "auto" | "required" = "auto";
+
+    if (writeForce && callTools.length > 0) {
+      callTools = writeForceToolsOrAll(callTools);
+      toolChoice = "required";
+    }
 
     // R2 per-call model overrides (temperature, reasoning effort) — applied to the
     // NEXT main-loop turn only, then cleared. Auxiliary calls stay on defaults.
@@ -701,6 +978,7 @@ async function runMainLoop(args: {
         ttsrManager: args.ttsrManager,
         report: args.report,
         taskId: args.taskId,
+        toolChoice,
       })
     );
 
@@ -709,6 +987,7 @@ async function runMainLoop(args: {
     // builds — did not, so a build log carried no token record at all and a
     // collapsing prefix-cache ratio had nowhere to show up.
     if (res.usage !== undefined) {
+      lastUsage = res.usage;
       args.report(
         usageEvent({
           task: args.taskId,
@@ -727,6 +1006,7 @@ async function runMainLoop(args: {
     // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)
     // tool_calls so the history has no dangling `tool_calls` (strict APIs 400 otherwise).
     args.messages.push(assistantMessage(res));
+    pruneEphemeralToolResidue(args.messages);
 
     // Every model call advances cooldown accounting — including interrupted
     // ones, otherwise repeatGap rules mis-count after a TTSR retry.
@@ -740,6 +1020,7 @@ async function runMainLoop(args: {
       messages: args.messages,
       readonlyStreak,
       readonlyRecoveries,
+      historyMetaStreak,
       turn,
       turnStart,
       taskStart,
@@ -751,6 +1032,8 @@ async function runMainLoop(args: {
 
     readonlyStreak = handled.readonlyStreak;
     readonlyRecoveries = handled.readonlyRecoveries;
+    historyMetaStreak = handled.historyMetaStreak;
+    forceWriteNext = handled.forceWriteNext;
 
     if (handled.action !== "continue") {
       return args.finish(handled.action);
@@ -1003,5 +1286,11 @@ export async function runTask(
     ctx,
     state,
     finish,
+    ...(opts.contextWindow === undefined
+      ? {}
+      : { contextWindow: opts.contextWindow }),
+    ...(opts.autoCompactAt === undefined
+      ? {}
+      : { autoCompactAt: opts.autoCompactAt }),
   });
 }

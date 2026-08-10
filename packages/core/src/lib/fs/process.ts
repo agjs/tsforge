@@ -63,7 +63,21 @@ export async function runShellCommand(
   command: string,
   opts: IShellRunOptions = {}
 ): Promise<IShellRun> {
-  return runArgvCommand(cwd, ["sh", "-c", command], opts);
+  // Prefer bash so `set -o pipefail` actually sticks. Debian/Ubuntu CI uses
+  // dash as `/bin/sh`, which rejects pipefail — the old "probe then set"
+  // form ran the command without pipefail and `false | cat` exited 0.
+  return runArgvCommand(cwd, shellArgvWithPipefail(command), opts);
+}
+
+/** Build `argv` for a shell that honors pipefail when bash is present. */
+export function shellArgvWithPipefail(command: string): string[] {
+  const bash = Bun.which("bash");
+
+  if (bash !== null) {
+    return [bash, "-c", `set -o pipefail; ${command}`];
+  }
+
+  return ["sh", "-c", command];
 }
 
 /**

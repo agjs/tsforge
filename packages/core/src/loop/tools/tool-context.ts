@@ -16,6 +16,10 @@ import type { IPlanDocument } from "../worklist/checklist.types";
  *  warns via its autofix notice. */
 export interface ICheckOutcome extends IValidateResult {
   autoFixed: string[];
+  /** Live gate command that produced this outcome (empty when none). */
+  command: string;
+  /** Pack ids the live gate / stack profile used. */
+  packs: readonly string[];
 }
 
 /** Run the workspace's fast acceptance gate on demand and return its STRUCTURED
@@ -96,6 +100,12 @@ export function composeGuards(...guards: readonly EditGuard[]): EditGuard {
 
 export interface IToolContext {
   cwd: string;
+  /**
+   * Extra absolute directories the model may read/search/run against, in addition
+   * to `cwd`. Default (absent/`[]`): project tree only. Never include the
+   * tsforge harness install path — that is what confinement blocks.
+   */
+  extraRoots?: readonly string[];
   /** The build ADAPTER's convention library (injected seam) — the `pull_conventions`
    *  tool reads its `guide`/`topics` from here instead of importing stack content.
    *  Absent ⇒ `pull_conventions` returns a "not configured" message. */
@@ -143,6 +153,9 @@ export interface IToolContext {
    *  model authored itself (vs. refusing to clobber pre-existing code). Same Set
    *  reference as the loop ctx, so writes from prior turns are visible. */
   touched?: Set<string>;
+  /** Paths successfully `read` this send — used so first-time survey reads do not
+   *  trip the readonly-spin park (Shiphold after /clear). */
+  surveyed?: Set<string>;
   /** Connected MCP servers. When present, `mcp__<server>__<tool>` calls are routed
    *  here. These are external context/tool sources — they never touch the editable
    *  scope or the deterministic gate. Absent ⇒ no MCP configured. */
@@ -215,12 +228,17 @@ export interface IParseResult<T> {
  *   - `repair:L3` when re-asking (feedback included in result)
  *   - `tool_input_rejected:<tool>` when (rarely) no parse succeeded
  * Returns both the parsed value and optional L3 feedback to surface to the model.
+ *
+ * `diagnose` (optional): field-level L3 text when repair still can't normalize —
+ * prefer this over the bare `tool_input_rejected` dead-end (Shiphold burned ~50
+ * turns on opaque "malformed args" retries).
  */
 export function parseOrRepair<T>(
   raw: Record<string, unknown>,
   normalize: (a: Record<string, unknown>) => T | null,
   ctx: IToolContext,
-  tool: string
+  tool: string,
+  diagnose?: (args: Record<string, unknown>) => string
 ): IParseResult<T> {
   const direct = normalize(raw);
 
@@ -252,7 +270,9 @@ export function parseOrRepair<T>(
     return { value: repaired };
   }
 
-  // L3: If still broken after L0-L2, return feedback if provided (recoverable=false).
+  const argsForDiag = repair.applied.length > 0 ? repair.args : raw;
+
+  // L3: repair ladder feedback, or tool-specific diagnose of the broken shape.
   if (
     !repair.recoverable &&
     repair.feedback !== undefined &&
@@ -265,6 +285,20 @@ export function parseOrRepair<T>(
     });
 
     return { value: null, feedback: repair.feedback };
+  }
+
+  if (diagnose !== undefined) {
+    const feedback = diagnose(argsForDiag);
+
+    if (feedback.length > 0) {
+      ctx.report({
+        kind: "repair",
+        task: ctx.task,
+        message: `${tool}:L3-re-ask`,
+      });
+
+      return { value: null, feedback };
+    }
   }
 
   ctx.report({

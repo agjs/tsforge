@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectStack } from "../src/stack-detection";
+import { ALWAYS_ON_PACKS, detectStack } from "../src/stack-detection";
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-stack-"));
@@ -108,13 +108,17 @@ test("project with bullmq: detects bullmq pack from anyDeps", async () => {
   }
 });
 
-test("no package.json: defaults to generic-ts only, confidence guess", async () => {
+test("no package.json: always-on packs, no framework packs, confidence guess", async () => {
   const dir = await tempDir();
 
   try {
     const profile = await detectStack(dir);
 
-    expect(profile.packs).toEqual(["generic-ts"]);
+    expect(profile.packs).toEqual([...ALWAYS_ON_PACKS]);
+    expect(profile.packs).toContain("env-access");
+    expect(profile.packs).toContain("code-flow");
+    expect(profile.packs).not.toContain("react");
+    expect(profile.packs).not.toContain("drizzle");
     expect(profile.confidence).toBe("guess");
     expect(profile.name).toBe("generic");
     expect(profile.reason).toContain("no package.json");
@@ -123,7 +127,7 @@ test("no package.json: defaults to generic-ts only, confidence guess", async () 
   }
 });
 
-test("malformed package.json: tolerates invalid JSON, defaults to generic, confidence guess", async () => {
+test("malformed package.json: always-on packs, confidence guess", async () => {
   const dir = await tempDir();
 
   try {
@@ -131,7 +135,8 @@ test("malformed package.json: tolerates invalid JSON, defaults to generic, confi
 
     const profile = await detectStack(dir);
 
-    expect(profile.packs).toEqual(["generic-ts"]);
+    expect(profile.packs).toEqual([...ALWAYS_ON_PACKS]);
+    expect(profile.packs).not.toContain("react");
     expect(profile.confidence).toBe("guess");
     expect(profile.name).toBe("generic");
     expect(profile.reason).toContain("invalid");

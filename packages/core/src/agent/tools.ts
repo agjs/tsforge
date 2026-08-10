@@ -71,18 +71,58 @@ export function fileArg(args: Record<string, unknown>): string | null {
   return fileArgCandidates(args)[0] ?? null;
 }
 
+/** Content-body aliases — schema asks for `content`, models send these. */
+const CONTENT_ARG_KEYS: readonly string[] = [
+  "content",
+  "contents",
+  "body",
+  "text",
+  "code",
+  "source",
+];
+
+/** Resolve create body text from `content` or a known synonym. */
+export function contentArg(args: Record<string, unknown>): string | null {
+  for (const key of CONTENT_ARG_KEYS) {
+    const value = args[key];
+
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function stringField(
+  args: Record<string, unknown>,
+  keys: readonly string[]
+): string | null {
+  for (const key of keys) {
+    const value = args[key];
+
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Normalize either edit form into a file + ordered replacement list. Accepts the
  * single `{file, oldString, newString}` shape AND the batched `{file, edits:[…]}`
  * shape, so old callers and the multi-site path share one contract.
- * Applies L1 coercions: stringified arrays are parsed.
+ * Applies L1 coercions: stringified arrays are parsed; snake_case old/new accepted.
  */
 export function toEdits(
   args: Record<string, unknown>
 ): { file: string; edits: IReplacement[] } | null {
-  const { edits: editsDef, oldString: oldStr, newString: newStr } = args;
+  const { edits: editsDef } = args;
   let edits = editsDef;
   const file = fileArg(args);
+  const oldStr = stringField(args, ["oldString", "old_string"]);
+  const newStr = stringField(args, ["newString", "new_string"]);
 
   if (file === null) {
     return null;
@@ -101,21 +141,24 @@ export function toEdits(
     const list: IReplacement[] = [];
 
     for (const e of edits) {
-      if (
-        isRecord(e) &&
-        typeof e.oldString === "string" &&
-        typeof e.newString === "string"
-      ) {
-        list.push({ oldString: e.oldString, newString: e.newString });
-      } else {
+      if (!isRecord(e)) {
         return null;
       }
+
+      const oldS = stringField(e, ["oldString", "old_string"]);
+      const newS = stringField(e, ["newString", "new_string"]);
+
+      if (oldS === null || newS === null) {
+        return null;
+      }
+
+      list.push({ oldString: oldS, newString: newS });
     }
 
     return list.length > 0 ? { file, edits: list } : null;
   }
 
-  if (typeof oldStr === "string" && typeof newStr === "string") {
+  if (oldStr !== null && newStr !== null) {
     return { file, edits: [{ oldString: oldStr, newString: newStr }] };
   }
 
@@ -123,14 +166,101 @@ export function toEdits(
 }
 
 export function toCreate(args: Record<string, unknown>): ICreateFile | null {
-  const { content } = args;
   const file = fileArg(args);
+  const content = contentArg(args);
 
-  if (file !== null && typeof content === "string") {
+  if (file !== null && content !== null) {
     return { file, content };
   }
 
   return null;
+}
+
+/** True when args carry a real create body (not just a history stub). */
+export function hasCreatePayload(args: Record<string, unknown>): boolean {
+  return contentArg(args) !== null;
+}
+
+/** True when args carry a real edit payload (single or batched). */
+export function hasEditPayload(args: Record<string, unknown>): boolean {
+  if (toEdits(args) !== null) {
+    return true;
+  }
+
+  // toEdits needs file; payload alone still counts for history-meta gating.
+  const oldStr = stringField(args, ["oldString", "old_string"]);
+  const newStr = stringField(args, ["newString", "new_string"]);
+
+  if (oldStr !== null && newStr !== null) {
+    return true;
+  }
+
+  const { edits } = args;
+
+  return isArray(edits) || typeof edits === "string";
+}
+
+/**
+ * Field-level L3 feedback when create args still don't parse. Names keys the
+ * model sent so it stops blind-retrying the same shape (Shiphold: 22× create
+ * rejects with only "need file, content").
+ */
+export function diagnoseCreateArgs(args: Record<string, unknown>): string {
+  const keys = Object.keys(args);
+  const have = keys.length > 0 ? keys.join(", ") : "(none)";
+  const missing: string[] = [];
+
+  if (fileArg(args) === null) {
+    missing.push("file");
+  }
+
+  if (contentArg(args) === null) {
+    missing.push("content");
+  }
+
+  const miss =
+    missing.length > 0 ? missing.join(" + ") : "file + content (wrong types)";
+
+  return (
+    `create: malformed args — have {${have}}; need ${miss}. ` +
+    `Example: {file:"src/a.ts", content:"export {}\\n"}. ` +
+    `Do not nest under arguments; history stubs are not valid writes.`
+  );
+}
+
+/**
+ * Field-level L3 feedback when edit args still don't parse.
+ */
+export function diagnoseEditArgs(args: Record<string, unknown>): string {
+  const keys = Object.keys(args);
+  const have = keys.length > 0 ? keys.join(", ") : "(none)";
+  const missing: string[] = [];
+
+  if (fileArg(args) === null) {
+    missing.push("file");
+  }
+
+  const hasPair =
+    stringField(args, ["oldString", "old_string"]) !== null &&
+    stringField(args, ["newString", "new_string"]) !== null;
+  const hasEdits =
+    isArray(args.edits) ||
+    (typeof args.edits === "string" && args.edits.length > 0);
+
+  if (!hasPair && !hasEdits) {
+    missing.push("oldString/newString (or edits[])");
+  }
+
+  const miss =
+    missing.length > 0
+      ? missing.join(" + ")
+      : "file + oldString/newString (wrong types)";
+
+  return (
+    `edit: malformed args — have {${have}}; need ${miss}. ` +
+    `Example: {file:"src/a.ts", oldString:"x", newString:"y"}. ` +
+    `Do not nest under arguments; history stubs are not valid writes.`
+  );
 }
 
 /**

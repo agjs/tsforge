@@ -546,13 +546,13 @@ test("read-only spin (gated): re-steered, then stopped well before the backstop"
     const result = await session.send("update the app");
 
     expect(result.status).toBe("stuck");
-    // STREAK_LIMIT 12 × (RECOVERIES 2 re-steers + 1 final) = 36 — far below the
-    // 250-turn interactive backstop, which is the whole point.
-    expect(result.turns).toBe(36);
+    // Hot streak after re-steer: turn 12 resteer, 13 resteer, 14 park — far
+    // below the 250-turn interactive backstop (was 36 when streak reset to 0).
+    expect(result.turns).toBe(14);
     // The build-flavored re-steer fired (not the conversational one).
     expect(
       session.messages.some(
-        (m) => m.role === "user" && m.content.includes("STOP exploring")
+        (m) => m.role === "user" && m.content.includes("STOP READING")
       )
     ).toBe(true);
   } finally {
@@ -740,10 +740,18 @@ test("send returns 'interrupted' when its signal is aborted mid-turn", async () 
 
   try {
     // A provider that never resolves on its own — only the abort ends it.
+    // Check `aborted` immediately: mid-drive hygiene can let abort win the race
+    // before this listener is registered.
     const provider: IProvider = {
       async complete(_messages, opts) {
+        const signal = opts?.signal;
+
+        if (signal?.aborted === true) {
+          throw new Error("aborted");
+        }
+
         return new Promise((_resolve, reject) => {
-          opts?.signal?.addEventListener("abort", () => {
+          signal?.addEventListener("abort", () => {
             reject(new Error("aborted"));
           });
         });

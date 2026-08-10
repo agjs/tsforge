@@ -4,6 +4,7 @@ import {
   formatPlanProposal,
   worklistBadge,
   pendingPlanBadge,
+  parseWorklistBadge,
 } from "../src/loop/worklist/panel";
 import type { IPlanDocument } from "../src/loop/worklist/checklist.types";
 import { stripSgr } from "../src/render/frame";
@@ -255,5 +256,11 @@ describe("formatWorklistLines", () => {
     expect(
       pendingPlanBadge(plan([{ id: "a", title: "A", status: "pending" }]))
     ).toBe("·1");
+  });
+
+  test("parseWorklistBadge maps pending ·N to 0/N (not blank 0/0)", () => {
+    expect(parseWorklistBadge("·13")).toEqual({ done: 0, total: 13 });
+    expect(parseWorklistBadge("3/7")).toEqual({ done: 3, total: 7 });
+    expect(parseWorklistBadge("")).toEqual({ done: 0, total: 0 });
   });
 });

@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test";
-import { reformatEcho } from "../src/loop/write-guard";
+import { appendReformatEcho, reformatEcho } from "../src/loop/write-guard";
 
-describe("reformatEcho (preventive ACI echo on a clean write)", () => {
+describe("reformatEcho (preventive ACI echo after format)", () => {
   test("no echo when the auto-format changed nothing", () => {
     const code = "export const x = 1;\n";
 
@@ -19,7 +19,6 @@ describe("reformatEcho (preventive ACI echo on a clean write)", () => {
 
     expect(out).toContain("auto-formatted");
     expect(out).toContain('export const x = "a";'); // the actual on-disk text
-    // Tells the model to anchor on THIS, not what it wrote.
     expect(out.toLowerCase()).toContain("oldstring");
   });
 
@@ -33,14 +32,46 @@ describe("reformatEcho (preventive ACI echo on a clean write)", () => {
     expect(lineNumbers).toEqual(["1", "2"]); // no phantom "3" from the trailing \n
   });
 
+  test("inlines content for files up to the 200-line cap", () => {
+    const written = "x";
+    const current = Array.from({ length: 150 }, (_, i) => `line${i}`).join(
+      "\n"
+    );
+    const out = reformatEcho("mid.ts", written, current);
+
+    expect(out).toContain("line5");
+    expect(out).toContain("CURRENT content");
+  });
+
   test("a large reshaped file gets a re-read note, not inlined content", () => {
     const written = "x";
-    const current = Array.from({ length: 200 }, (_, i) => `line${i}`).join(
+    const current = Array.from({ length: 201 }, (_, i) => `line${i}`).join(
       "\n"
     );
     const out = reformatEcho("big.ts", written, current);
 
     expect(out).toContain("re-read");
     expect(out).not.toContain("line5"); // content NOT inlined (too large)
+  });
+});
+
+describe("appendReformatEcho (dirty write-check still gets disk truth)", () => {
+  test("concatenates echo onto write-check feedback when format diverged", () => {
+    const feedback =
+      "\n\n⚠ CHECK of this file found 1 issue(s) — fix them now (edit this file)";
+    const written = "export const x = 'a'\n";
+    const current = 'export const x = "a";\n';
+    const out = appendReformatEcho(feedback, "a.ts", written, current);
+
+    expect(out.startsWith(feedback)).toBe(true);
+    expect(out).toContain('export const x = "a";');
+    expect(out).toContain("oldString");
+  });
+
+  test("leaves feedback unchanged when format did not diverge", () => {
+    const feedback = "\n\n⚠ BLAST RADIUS — 1 file broken";
+    const code = "export const x = 1;\n";
+
+    expect(appendReformatEcho(feedback, "a.ts", code, code)).toBe(feedback);
   });
 });

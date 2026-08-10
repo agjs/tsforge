@@ -1,14 +1,32 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { rm } from "node:fs/promises";
 import { applyEdits } from "../../files/edit";
 import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
-import { normalizeWorkspacePath } from "../../lib/scope";
+import {
+  isPathUnderRoot,
+  OUTSIDE_PROJECT_REJECT,
+  outsideWorkspacePaths,
+  resolveProjectPath,
+} from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
-import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
+import {
+  toEdits,
+  toCreate,
+  toRun,
+  toRead,
+  runCommand,
+  diagnoseCreateArgs,
+  diagnoseEditArgs,
+} from "../../agent";
+import { peelNestedToolArgs } from "../../agent/tool-repair";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { condenseToolOutput } from "./condense";
+import {
+  looksLikeHarnessOmitMarker,
+  hasHarnessOmittedArgs,
+} from "../context-hygiene";
 import {
   parseOrRepair,
   reject,
@@ -20,14 +38,20 @@ import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
 import { trace } from "../../lib/trace";
 
+/** Refuse writes that paste harness history markers onto disk (seen live). */
+const HARNESS_MARKER_REJECT =
+  "that string is a harness history marker, NOT source code. " +
+  "`read` the file and pass real contents to create/edit.";
+
+/** Refuse re-submitting history stubs as tool args (contentMeta / _harness…). */
+const HARNESS_META_ARGS_REJECT =
+  "create/edit REJECTED: those args are a harness history stub, not a valid " +
+  "write. Pass real `content` (create) or `oldString`/`newString` (edit).";
+
 /**
- * Read a file for the model. TRUSTED-MODE (by design): `read` and `run` are NOT
- * sandboxed to the workspace — a `../config` read or any shell command the
- * process can run is permitted, like a local human-run coding agent (Claude Code,
- * etc.). Only WRITES (`edit`/`create`) are scope-enforced, since those are what
- * mutate the user's project. tsforge runs locally on the user's own machine
- * against their own code; the threat model is mistakes, not a hostile operator.
- * (Sandboxing reads would be a separate, explicit execution profile.)
+ * Read a file for the model. Confined to session cwd (+ optional `extraRoots`):
+ * foreign absolute trees (e.g. a leaked harness install path) are rejected.
+ * Writes (`edit`/`create`) remain separately scope-enforced via editable globs.
  */
 export async function readFile(
   args: Record<string, unknown>,
@@ -43,15 +67,29 @@ export async function readFile(
     return "read: malformed args (need `file`)";
   }
 
-  r.file = normalizeWorkspacePath(ctx.cwd, r.file);
+  const roots = ctx.extraRoots ?? [];
+  const resolved = resolveProjectPath(ctx.cwd, r.file, roots);
+
+  if (!resolved.ok) {
+    return reject(ctx, "read", `REJECTED: ${OUTSIDE_PROJECT_REJECT}`);
+  }
+
+  // Snapshot / hashline keys stay cwd-relative when possible; extraRoots may sit
+  // outside cwd, so fall back to the absolute path for the key/display.
+  r.file = isPathUnderRoot(ctx.cwd, resolved.abs)
+    ? relative(ctx.cwd, resolved.abs)
+    : resolved.abs;
 
   ctx.report({ kind: "tool", task: ctx.task, message: `read ${r.file}` });
 
-  const handle = Bun.file(join(ctx.cwd, r.file));
+  const handle = Bun.file(resolved.abs);
 
   if (!(await handle.exists())) {
     return `read: ${r.file} does not exist`;
   }
+
+  // First-time reads this send pause the readonly-spin streak (orientation).
+  (ctx.surveyed ??= new Set()).add(r.file.replaceAll("\\", "/"));
 
   const content = await handle.text();
   const allLines = content.split("\n");
@@ -496,6 +534,20 @@ export async function runShell(
     );
   }
 
+  const foreign = outsideWorkspacePaths(
+    ctx.cwd,
+    r.command,
+    ctx.extraRoots ?? []
+  );
+
+  if (foreign.length > 0) {
+    return reject(
+      ctx,
+      "run",
+      `REJECTED: ${OUTSIDE_PROJECT_REJECT} (paths: ${foreign.join(", ")})`
+    );
+  }
+
   // Refuse a shell redirect/tee that WRITES an in-scope project file. The model
   // reaches for `cat > src/foo.tsx << EOF` to escape edit-tool friction, but that
   // bypasses the write-guard (no per-file type/lint feedback → errors pile to the
@@ -512,7 +564,8 @@ export async function runShell(
     return reject(
       ctx,
       "run:shell-write",
-      `run ${r.command} REJECTED: writing a project file via a shell redirect (\`> ${scopedWrite.path}\`) bypasses the type/lint guard and scope checks. Use \`create\` to write or fully rewrite ${scopedWrite.path} (it overwrites a file you created this session), or \`edit\`/\`edit_lines\` for targeted changes — those get checked the instant you write.`
+      `run REJECTED: do not write project files via shell redirect ` +
+        `(\`> ${scopedWrite.path}\`). Use \`create\` or \`edit\`/\`edit_lines\` instead.`
     );
   }
 
@@ -520,12 +573,9 @@ export async function runShell(
     return reject(
       ctx,
       "run",
-      `"${r.command}" looks like a long-running dev server / watcher — it never ` +
-        "exits, so it would stall the build loop. You do not need to run one: the " +
-        "gate already builds the app and smoke-tests it in a headless browser. To " +
-        "debug a blank page, read the build output and the component/source files; " +
-        "page rendering is handled for you. (If you truly need a process running, " +
-        "background it with a trailing `&` so the command returns.)"
+      `"${r.command}" looks like a long-running server/watcher and would hang. ` +
+        "Skip it — the gate already builds and smoke-tests. To keep a process, " +
+        "background with a trailing `&`."
     );
   }
 
@@ -626,18 +676,56 @@ function isSyntacticallyBroken(content: string, file: string): boolean {
   }
 }
 
+function rejectEditHarnessMarkers(
+  edits: readonly { readonly oldString: string; readonly newString: string }[],
+  ctx: IToolContext
+): string | null {
+  for (const part of edits) {
+    if (
+      looksLikeHarnessOmitMarker(part.oldString) ||
+      looksLikeHarnessOmitMarker(part.newString)
+    ) {
+      return reject(ctx, "edit:harness-marker", HARNESS_MARKER_REJECT);
+    }
+  }
+
+  return null;
+}
+
 export async function doEdit(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const { value: edit, feedback } = parseOrRepair(args, toEdits, ctx, "edit");
+  // Peel nested `{ arguments: {…} }` BEFORE history-meta — DeepSeek re-submits
+  // stubs wrapped in another arguments bag; checking only the outer object
+  // missed the omit flag (Ledgerkit: 43× L3 on {_harnessArgsOmitted,file}).
+  const peeled = peelNestedToolArgs(args);
+
+  // True stub re-submit (omit flag / legacy *Meta) — not file-only incompletes
+  // (those get L3 diagnose). Reservely: file-only→history-meta thrashed forever.
+  if (hasHarnessOmittedArgs(peeled)) {
+    return reject(ctx, "edit:history-meta", HARNESS_META_ARGS_REJECT);
+  }
+
+  const { value: edit, feedback } = parseOrRepair(
+    args,
+    toEdits,
+    ctx,
+    "edit",
+    diagnoseEditArgs
+  );
 
   if (edit === null) {
-    if (feedback !== undefined && feedback.length > 0) {
-      return feedback;
-    }
+    return (
+      feedback ??
+      "edit: malformed args (need `file` plus either `oldString`/`newString` or an `edits` array of {oldString,newString})"
+    );
+  }
 
-    return "edit: malformed args (need `file` plus either `oldString`/`newString` or an `edits` array of {oldString,newString})";
+  const markerReject = rejectEditHarnessMarkers(edit.edits, ctx);
+
+  if (markerReject !== null) {
+    return markerReject;
   }
 
   const editTarget = resolveWritable(ctx, edit.file);
@@ -828,12 +916,13 @@ function editFailHelp(
   }
 
   if (result.reason === EDIT_FAIL_REASON.notFound) {
-    // Stale anchor: the file was auto-reformatted after the model's last write
-    // (imports reordered, quotes/commas normalized), so its oldString no longer
-    // matches. Steer it to re-anchor on the CURRENT content (the caller inlines it)
-    // and make a TARGETED edit — never to rewrite the whole file via `create`
-    // (that re-introduces already-fixed errors, and `create` now rejects it).
-    return `the file ${file} EXISTS, but your oldString was not found in it (it was auto-reformatted after your last write — imports reordered, quotes/commas normalized). Do NOT recreate or rewrite the file — copy a fresh oldString verbatim from its CURRENT content and make a targeted \`edit\`.`;
+    // Stale anchor — CURRENT content is inlined by the caller; keep the
+    // EXISTS / Do NOT recreate phrases (execute-tool tests lock them).
+    return (
+      `the file ${file} EXISTS, but your oldString was not found in it. ` +
+      `Do NOT recreate or rewrite the file — copy a fresh oldString from its ` +
+      `CURRENT content and make a targeted \`edit\`.`
+    );
   }
 
   return result.reason;
@@ -843,19 +932,28 @@ export async function doCreate(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
+  // Peel nested envelopes before history-meta (same Ledgerkit bypass as edit).
+  const peeled = peelNestedToolArgs(args);
+
+  // True stub / legacy meta only — file-only incompletes fall through to L3.
+  if (hasHarnessOmittedArgs(peeled)) {
+    return reject(ctx, "create:history-meta", HARNESS_META_ARGS_REJECT);
+  }
+
   const { value: create, feedback } = parseOrRepair(
     args,
     toCreate,
     ctx,
-    "create"
+    "create",
+    diagnoseCreateArgs
   );
 
   if (create === null) {
-    if (feedback !== undefined && feedback.length > 0) {
-      return feedback;
-    }
+    return feedback ?? "create: malformed args (need file, content)";
+  }
 
-    return "create: malformed args (need file, content)";
+  if (looksLikeHarnessOmitMarker(create.content)) {
+    return reject(ctx, "create:harness-marker", HARNESS_MARKER_REJECT);
   }
 
   const createTarget = resolveWritable(ctx, create.file);
@@ -889,7 +987,7 @@ export async function doCreate(
     return reject(
       ctx,
       "create:exists",
-      `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
+      `create ${create.file} REJECTED: file already exists. Use \`edit\` to change it (full-file rewrite is fine).`
     );
   }
 
@@ -921,7 +1019,7 @@ export async function doCreate(
     });
 
     return exists
-      ? `created ${create.file} — rewrote a file that had a syntax error; it parses now, keep it green.`
+      ? `created ${create.file} — rewrote a previously broken file.`
       : `created ${create.file}`;
   }
 

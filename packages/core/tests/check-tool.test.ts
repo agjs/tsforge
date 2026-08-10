@@ -32,6 +32,8 @@ function result(
     errors,
     output: "",
     autoFixed: [],
+    command: "eslint .",
+    packs: ["generic-ts", "code-flow"],
     ...extra,
   };
 }
@@ -83,6 +85,8 @@ test("doCheck returns the whole structured error set on a red gate", async () =>
     },
     { file: "src/y.ts", message: "type error" },
   ]);
+  expect(parsed.command).toBe("eslint .");
+  expect(parsed.packs).toEqual(["generic-ts", "code-flow"]);
   // The model-facing struct must NOT leak the internal dedup `key`.
   expect(out).not.toContain('"key"');
 });

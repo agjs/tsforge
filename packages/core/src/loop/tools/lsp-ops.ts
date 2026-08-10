@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { fileArg, TOOL_NAME, type ToolName } from "../../agent";
 import { runArgvCommand } from "../../lib/fs";
-import { writable } from "../../lib/scope";
+import { allowedRoots, writable } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import {
   str,
@@ -10,8 +10,8 @@ import {
   type IToolContext,
 } from "./tool-context";
 
-/** ripgrep search over the working dir — the model's primary navigation at
- *  scale (structural/text, fast). Falls back gracefully if `rg` is absent. */
+/** ripgrep search over allowed roots (cwd + optional extraRoots) — the model's
+ *  primary navigation at scale. Falls back gracefully if `rg` is absent. */
 export async function doSearch(
   args: Record<string, unknown>,
   ctx: IToolContext
@@ -24,8 +24,10 @@ export async function doSearch(
   }
 
   const glob = str(args, "glob");
+  const roots = allowedRoots(ctx.cwd, ctx.extraRoots ?? []);
   // Spawn rg with an explicit argv (NO shell) — the pattern/glob come from the
   // model, so a `sh -c` string would let `$()`/backticks inside them execute.
+  // Path args are the allowed roots only (never a foreign absolute tree).
   const argv = [
     "rg",
     "--line-number",
@@ -35,6 +37,7 @@ export async function doSearch(
     "-e",
     pattern,
     ...(glob.length > 0 ? ["-g", glob] : []),
+    ...roots,
   ];
   const res = await runArgvCommand(
     ctx.cwd,

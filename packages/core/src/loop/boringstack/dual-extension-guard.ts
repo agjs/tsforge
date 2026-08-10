@@ -64,13 +64,9 @@ export function makeDualExtensionTestGuard(cwd: string): EditGuard {
     return {
       reason: "dual-extension-test",
       message:
-        `create ${file} REJECTED: ${twin} already exists. A same-basename ` +
-        `.test.ts + .test.tsx PAIR breaks the type-aware lint for the WHOLE app — ` +
-        `TypeScript drops the .tsx from its program, and it cannot be auto-cleared ` +
-        `(the build path can't delete files). Add these tests to the EXISTING ` +
-        `${twin} (one test file per basename). If they need JSX, use a DIFFERENT ` +
-        `basename for the render tests — e.g. a \`.render.test.tsx\` alongside ` +
-        `${twin} — so the two files never share a basename. Do NOT recreate ${file}.`,
+        `create ${file} REJECTED: ${twin} already exists. Same-basename ` +
+        `.test.ts + .test.tsx breaks type-aware lint. Add tests to ${twin}, or ` +
+        `use a different basename (e.g. \`.render.test.tsx\`). Do NOT recreate ${file}.`,
     };
   };
 }

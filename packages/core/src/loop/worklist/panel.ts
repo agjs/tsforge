@@ -110,6 +110,28 @@ export function pendingPlanBadge(plan: IPlanDocument | null): string {
   return `·${String(open)}`;
 }
 
+/** Parse a worklist/pending badge into Tasks-rail header counts. */
+export function parseWorklistBadge(badge: string): {
+  done: number;
+  total: number;
+} {
+  const trimmed = badge.trim();
+  const frac = /^(\d+)\/(\d+)$/u.exec(trimmed);
+
+  if (frac !== null) {
+    return { done: Number(frac[1]), total: Number(frac[2]) };
+  }
+
+  // Pending proposal: `·13` means 0 done / 13 open (not a blank 0/0 rail).
+  const pending = /^·(\d+)$/u.exec(trimmed);
+
+  if (pending !== null) {
+    return { done: 0, total: Number(pending[1]) };
+  }
+
+  return { done: 0, total: 0 };
+}
+
 /**
  * Closed PLAN card for the main transcript when present_plan fires —
  * goal + nested tree, no raw JSON. Soft-wraps (never mid-word clip).

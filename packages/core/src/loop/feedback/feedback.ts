@@ -9,6 +9,7 @@ import {
   metaRuleHelp,
   renderMetaViolations,
 } from "../feedback/meta-rule-feedback";
+import { formatGateIdentity } from "../gate-visibility";
 
 /** Cap rendered source lines so a large error set can't wall the model. */
 const FEEDBACK_MAX_LINES = 20;
@@ -45,7 +46,8 @@ export async function gateFeedback(
   task: ITask,
   cwd: string,
   metaViolations: readonly IMetaRuleViolation[] = [],
-  focusError: string | null = null
+  focusError: string | null = null,
+  packs: readonly string[] = []
 ): Promise<string> {
   const own = errors.filter((e) => isOwnError(e, cwd, task.files));
   const outOfScope = errors.filter((e) => !isOwnError(e, cwd, task.files));
@@ -138,7 +140,9 @@ export async function gateFeedback(
         "`create` tool with the file path and full content."
       : "";
 
-  return `The acceptance command still fails:\n${list}${capped}${outOfScopeBlock}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+  const identity = formatGateIdentity(task.accept, packs);
+
+  return `The acceptance command still fails:\n${identity}\n\n${list}${capped}${outOfScopeBlock}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
 }
 
 /**

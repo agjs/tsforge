@@ -467,18 +467,18 @@ describe("env-access: no-process-exit", () => {
 });
 
 describe("code-flow: no-bare-date-now", () => {
-  test("reports Date.now() call", () => {
+  test("reports Date.now() call outside a clock util file", () => {
     const messages = lint(
       "code-flow",
       "no-bare-date-now",
       "const timestamp = Date.now();",
-      "src/utils/time.ts"
+      "src/utils/stamp.ts"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("bareDateNow");
   });
 
-  test("reports Math.random() call", () => {
+  test("reports Math.random() call outside an rng util file", () => {
     const messages = lint(
       "code-flow",
       "no-bare-date-now",
@@ -489,24 +489,42 @@ describe("code-flow: no-bare-date-now", () => {
     expect(messages.map((m) => m.messageId)).toContain("bareMathRandom");
   });
 
-  test("reports new Date() with no arguments", () => {
+  test("reports new Date() with no arguments outside a clock util file", () => {
     const messages = lint(
       "code-flow",
       "no-bare-date-now",
       "const now = new Date();",
-      "src/utils/time.ts"
+      "src/utils/stamp.ts"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("bareNewDate");
   });
 
-  test("allows Date.now() in allowlisted files", () => {
+  test("allows Date.now() in default clock util paths (time.ts / clock.ts)", () => {
+    const inTime = lint(
+      "code-flow",
+      "no-bare-date-now",
+      "export const now = () => Date.now();",
+      "src/time.ts"
+    );
+    const inClock = lint(
+      "code-flow",
+      "no-bare-date-now",
+      "export const now = () => new Date();",
+      "src/lib/time/clock.ts"
+    );
+
+    expect(inTime).toHaveLength(0);
+    expect(inClock).toHaveLength(0);
+  });
+
+  test("allows Date.now() in explicitly allowlisted files", () => {
     const messages = lint(
       "code-flow",
       "no-bare-date-now",
       "export const now = () => Date.now();",
-      "src/lib/time/clock.ts",
-      [{ allowedPaths: ["src/lib/time/"] }]
+      "src/lib/system/wall.ts",
+      [{ allowedPaths: ["src/lib/system/"] }]
     );
 
     expect(messages).toHaveLength(0);

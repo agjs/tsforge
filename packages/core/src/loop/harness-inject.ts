@@ -3,6 +3,17 @@
  * Resume / transcript paint must not label these as USER cards.
  */
 
+/** Per-turn full plan-tree inject (legacy append path — pruned from history). */
+export function isChecklistTreeInject(message: {
+  readonly role: string;
+  readonly content: string;
+}): boolean {
+  return (
+    message.role === "user" &&
+    message.content.startsWith("[checklist — session plan ")
+  );
+}
+
 /** Checklist injects / Phase B nudges — Tasks rail already owns that UI. */
 export function isEphemeralUserInject(message: {
   readonly role: string;
@@ -15,7 +26,7 @@ export function isEphemeralUserInject(message: {
   const content = message.content;
 
   return (
-    content.startsWith("[checklist — session plan ") ||
+    isChecklistTreeInject(message) ||
     content.startsWith("Gate is GREEN but the approved checklist")
   );
 }
@@ -30,6 +41,7 @@ const HARNESS_USER_PREFIXES: readonly string[] = [
   "⚠ REGRESSION",
   "⚠ generation interrupted",
   "The acceptance command still fails:",
+  "Detected packs:",
   "You are only one or two errors from done",
   "You replied with text but called no tool",
   "STOP — you wrote file contents",
@@ -37,9 +49,30 @@ const HARNESS_USER_PREFIXES: readonly string[] = [
   "Your previous response timed out",
   "You started repeating yourself",
   "You have made many tool calls",
-  "NOTE: automatic fixers",
+  "NOTE: auto-fixed",
   "An expert engineer just repaired",
+  "STOP copying prior create/edit",
 ];
+
+/**
+ * Settle gate-feedback user messages (one live slot — replace, don't append).
+ * Includes NEAR-GREEN / REGRESSION banners that wrap the acceptance block.
+ */
+export function isGateFeedbackInject(message: {
+  readonly role: string;
+  readonly content: string;
+}): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+
+  const content = message.content;
+
+  return (
+    content.startsWith("The acceptance command still fails:") ||
+    content.includes("\nThe acceptance command still fails:")
+  );
+}
 
 /** True when this user-role message was written by the harness, not the human. */
 export function isHarnessUserInject(message: {
@@ -60,6 +93,5 @@ export function isHarnessUserInject(message: {
     return true;
   }
 
-  // Banner + feedback: NEAR-GREEN / REGRESSION lines precede the acceptance block.
-  return content.includes("\nThe acceptance command still fails:");
+  return isGateFeedbackInject(message);
 }

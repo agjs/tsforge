@@ -116,7 +116,9 @@ export async function doHashlineEdit(
       return reject(
         ctx,
         "edit_lines:syntax-regression",
-        `edit_lines ${edit.file} REVERTED: your edit introduced ${String(after - before)} new syntax error(s) — the file no longer parses, so it was rolled back to its previous content. Your line ops likely landed on the wrong lines. \`read\` ${edit.file} again to get fresh line anchors, then make a SMALL, targeted edit of only the broken lines.`
+        `edit_lines ${edit.file} REVERTED: introduced ${String(after - before)} ` +
+          `new syntax error(s); file restored. \`read\` ${edit.file} for fresh ` +
+          `line anchors, then edit only the broken lines.`
       );
     }
 

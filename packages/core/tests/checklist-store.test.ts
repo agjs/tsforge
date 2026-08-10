@@ -102,6 +102,8 @@ describe("checklist-store", () => {
         errors: [],
         output: "",
         autoFixed: [],
+        command: "true",
+        packs: ["generic-ts"],
       }),
     };
 
@@ -139,12 +141,16 @@ describe("checklist-store", () => {
         errors: [{ key: "x", message: "TS2304: Cannot find name 'x'" }],
         output: "fail",
         autoFixed: [],
+        command: "bun test",
+        packs: ["code-flow", "env-access"],
       }),
     };
 
     const out = await doTaskComplete({ id: "child-a" }, ctx);
 
     expect(out).toMatch(/gate RED/i);
+    expect(out).toContain("Check: bun test");
+    expect(out).toContain("Packs: code-flow, env-access");
     expect(loadPlan(dir, "red")?.items[0]?.children?.[0]?.status).toBe(
       "pending"
     );
@@ -173,15 +179,43 @@ describe("checklist-store", () => {
 
   test("focus/uncomplete helpers", () => {
     let plan = samplePlan("p2");
-    const focused = focusItemInPlan(plan, "child-b");
+    const skip = focusItemInPlan(plan, "child-b");
 
-    expect(focused.ok).toBe(true);
+    expect(skip.ok).toBe(false);
 
-    if (!focused.ok) {
+    if (!skip.ok) {
+      expect(skip.error).toMatch(/Child A/);
+    }
+
+    const focusedA = focusItemInPlan(plan, "child-a");
+
+    expect(focusedA.ok).toBe(true);
+
+    if (!focusedA.ok) {
       return;
     }
 
-    plan = focused.plan;
+    plan = focusedA.plan;
+    expect(plan.activeItemId).toBe("child-a");
+
+    const doneA = completeItemInPlan(plan, "child-a");
+
+    expect(doneA.ok).toBe(true);
+
+    if (!doneA.ok) {
+      return;
+    }
+
+    plan = doneA.plan;
+    const focusedB = focusItemInPlan(plan, "child-b");
+
+    expect(focusedB.ok).toBe(true);
+
+    if (!focusedB.ok) {
+      return;
+    }
+
+    plan = focusedB.plan;
     expect(plan.activeItemId).toBe("child-b");
 
     const done = completeItemInPlan(plan, "child-b");

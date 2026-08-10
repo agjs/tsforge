@@ -18,8 +18,33 @@ export const GLYPH = {
   run: "→",
   create: "✚",
   edit: "✎",
+  read: "◎",
+  search: "⌕",
   bullet: "•",
 } as const;
+
+/** Glyph for a tool name (live stream markers + settled tool lines). */
+export function toolGlyph(name: string): string {
+  switch (name) {
+    case "read":
+      return GLYPH.read;
+    case "search":
+    case "symbol_search":
+    case "find_references":
+      return GLYPH.search;
+    case "run":
+    case "script":
+      return GLYPH.run;
+    case "create":
+    case "scaffold_ui":
+      return GLYPH.create;
+    case "edit":
+    case "edit_lines":
+      return GLYPH.edit;
+    default:
+      return GLYPH.info;
+  }
+}
 
 const DEFAULT_WIDTH = 80;
 const MIN_WIDTH = 48;

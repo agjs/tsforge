@@ -151,7 +151,12 @@ test("isEslintJsonLine flags the eslint blob, not ordinary output", () => {
 test("parserFor picks a parser by command", () => {
   expect(parserFor("eslint . --format json")).toBe(parseEslintJson);
   expect(parserFor("tsc --noEmit")).toBe(parseTsc);
-  expect(parserFor("bun test x")).toBe(genericErrors);
+  // bun test uses structured failure parsing (not the opaque generic blob).
+  const bunItems = parserFor("bun test x")(
+    "src/a.test.ts:\n(fail) a > breaks\n"
+  );
+
+  expect(bunItems[0]?.rule).toBe("bun-test");
 });
 
 test("parserFor uses the combined parser for chained tsc && eslint gates", () => {

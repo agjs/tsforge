@@ -182,13 +182,14 @@ function evaluatePack(
 export async function detectStack(cwd: string): Promise<IStackProfile> {
   const { deps, devDeps, exists, valid } = await loadPackageDeps(cwd);
 
-  // No package.json or invalid JSON — return minimal profile
+  // No package.json or invalid JSON — still load always-on packs (env-access,
+  // code-flow, …). Framework packs stay dep-gated and need a valid package.json.
   if (!valid) {
     const reason = exists ? "invalid package.json" : "no package.json found";
 
     return {
       name: "generic",
-      packs: ["generic-ts"],
+      packs: [...ALWAYS_ON_PACKS],
       confidence: "guess",
       reason,
     };

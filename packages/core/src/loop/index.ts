@@ -79,6 +79,7 @@ export {
   Session,
   PLAN_APPROVED_NOTE,
   checklistOpenNudge,
+  isChecklistTreeInject,
   isEphemeralUserInject,
   isHarnessUserInject,
   filterGateStream,

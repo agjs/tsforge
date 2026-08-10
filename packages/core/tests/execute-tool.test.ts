@@ -721,6 +721,8 @@ test("check passes policy (default mode) and dispatches to doCheck — structure
         ],
         output: "",
         autoFixed: [],
+        command: "eslint .",
+        packs: ["generic-ts"],
       }),
     }
   );
@@ -739,6 +741,8 @@ test("check passes policy (default mode) and dispatches to doCheck — structure
         message: "'y' is unused",
       },
     ],
+    command: "eslint .",
+    packs: ["generic-ts"],
   });
 });
 
@@ -756,6 +760,8 @@ test("check is rejected in PLAN mode (not read-only, not run) — the hard guard
         errors: [],
         output: "",
         autoFixed: [],
+        command: "",
+        packs: [],
       }),
     }
   );
@@ -994,13 +1000,15 @@ describe("resolveWritable behaves identically at every call site", () => {
     const c = ctx(dir, ["impl.ts"]);
 
     try {
-      // Reads are not scope-limited, so a valid anchor for the sibling is
-      // obtainable — edit_lines must then be refused on SCOPE, not on the anchor.
+      // Reads are cwd-confined; a sibling outside the workspace is rejected before
+      // any hashline anchor exists. Edit tools must still refuse on SCOPE even if
+      // the model invents an anchor string.
       const read = await executeTool(
         { name: "read", arguments: { file: "../escaped.ts" } },
         c
       );
-      const anchor = /¶\S+/u.exec(read)?.[0] ?? "";
+
+      expect(read).toContain("REJECTED");
 
       const CALLS: readonly [string, Record<string, unknown>][] = [
         [
@@ -1015,7 +1023,7 @@ describe("resolveWritable behaves identically at every call site", () => {
           "edit_lines",
           {
             file: "../escaped.ts",
-            input: `${anchor}\nreplace 1..1:\n+export const secret = 2;`,
+            input: `¶deadbeef\nreplace 1..1:\n+export const secret = 2;`,
           },
         ],
         ["create", { file: "../new-escape.ts", content: "x" }],

@@ -9,6 +9,12 @@ import {
   trimMarkdownFences,
   type IRepairResult,
 } from "../src/agent/tool-repair";
+import {
+  toCreate,
+  toEdits,
+  diagnoseCreateArgs,
+  diagnoseEditArgs,
+} from "../src/agent/tools";
 import { executeTool } from "../src/loop/tools/execute-tool";
 import type { IToolContext } from "../src/loop/tools/execute-tool";
 
@@ -61,6 +67,46 @@ test("L0: idempotent — already-valid args have no applied repairs", () => {
 
   expect(result.applied).toHaveLength(0);
   expect(result.recoverable).toBe(true);
+});
+
+test("L0: unwraps nested arguments bag (double-wrapped tool call)", () => {
+  const result = repairArgs({
+    arguments: { file: "a.ts", content: "export {}\n" },
+  });
+
+  expect(result.applied).toContain("unwrap-nested:arguments");
+  expect(result.args).toEqual({ file: "a.ts", content: "export {}\n" });
+});
+
+test("L0: unwraps nested omit-only stub (no file key)", () => {
+  const result = repairArgs({
+    arguments: { _harnessArgsOmitted: true },
+  });
+
+  expect(result.applied).toContain("unwrap-nested:arguments");
+  expect(result.args).toEqual({ _harnessArgsOmitted: true });
+});
+
+test("L0: unwraps nested args / parameters synonyms", () => {
+  expect(
+    repairArgs({ args: { file: "a.ts", oldString: "x", newString: "y" } })
+      .applied
+  ).toContain("unwrap-nested:args");
+  expect(
+    repairArgs({
+      parameters: { file: "a.ts", oldString: "x", newString: "y" },
+    }).applied
+  ).toContain("unwrap-nested:parameters");
+});
+
+test("L0: does not unwrap nest when top-level already has payload keys", () => {
+  const result = repairArgs({
+    file: "outer.ts",
+    arguments: { file: "inner.ts", content: "nope" },
+  });
+
+  expect(result.applied.join(",")).not.toContain("unwrap-nested");
+  expect(result.args.file).toBe("outer.ts");
 });
 
 // ============================================================================
@@ -259,6 +305,86 @@ test("turn loop: edit with stringified array is coerced (L1)", async () => {
     const content = await Bun.file(join(dir, "impl.ts")).text();
 
     expect(content).toContain("const a = 10;");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("toCreate accepts content aliases (contents/body/text)", () => {
+  expect(toCreate({ file: "a.ts", contents: "x\n" })).toEqual({
+    file: "a.ts",
+    content: "x\n",
+  });
+  expect(toCreate({ path: "a.ts", body: "y\n" })).toEqual({
+    file: "a.ts",
+    content: "y\n",
+  });
+});
+
+test("toEdits accepts snake_case old_string/new_string", () => {
+  expect(toEdits({ file: "a.ts", old_string: "a", new_string: "b" })).toEqual({
+    file: "a.ts",
+    edits: [{ oldString: "a", newString: "b" }],
+  });
+});
+
+test("diagnoseCreateArgs names keys present and missing content", () => {
+  const msg = diagnoseCreateArgs({ file: "src/a.ts" });
+
+  expect(msg).toContain("have {file}");
+  expect(msg).toContain("content");
+  expect(msg).not.toContain("need file, content)"); // not the opaque one-liner alone
+});
+
+test("diagnoseEditArgs names keys when oldString missing", () => {
+  const msg = diagnoseEditArgs({ file: "src/a.ts", newString: "y" });
+
+  expect(msg).toContain("have {file, newString}");
+  expect(msg).toContain("oldString");
+});
+
+test("turn loop: nested arguments create is repaired and writes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-repair-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "create",
+        arguments: {
+          arguments: { file: "nested.ts", content: "export const n = 1;\n" },
+        },
+      },
+      ctx(dir, ["**/*"])
+    );
+
+    expect(r).toContain("created nested.ts");
+    expect(await Bun.file(join(dir, "nested.ts")).text()).toContain(
+      "export const n = 1"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("turn loop: create with only file gets field-level diagnose (not history-meta)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-repair-"));
+  const reports: string[] = [];
+
+  try {
+    const r = await executeTool(
+      { name: "create", arguments: { file: "solo.ts" } },
+      {
+        ...ctx(dir, ["**/*"]),
+        report: (e) => {
+          reports.push(e.message);
+        },
+      }
+    );
+
+    expect(r).toContain("have {file}");
+    expect(r).toContain("need content");
+    expect(reports.some((m) => m.includes("create:L3-re-ask"))).toBe(true);
+    expect(reports.some((m) => m.includes("create:history-meta"))).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

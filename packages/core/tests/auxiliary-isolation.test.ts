@@ -42,9 +42,14 @@ describe("Auxiliary call isolation (no pendingModelOverride)", () => {
 
   test("auxiliary calls cannot read the pending main-loop override", async () => {
     const session = await source("session.ts");
+    const hygiene = await source("context-hygiene.ts");
     const compactStart = session.indexOf("  async compact(");
     const compactEnd = session.indexOf("  get messages", compactStart);
     const compact = session.slice(compactStart, compactEnd);
+    const hygieneCompactStart = hygiene.indexOf(
+      "export async function compactConversation"
+    );
+    const hygieneCompact = hygiene.slice(hygieneCompactStart);
     const auxiliaryFiles = [
       "planning/propose-plan.ts",
       "greenfield/plan.ts",
@@ -57,9 +62,12 @@ describe("Auxiliary call isolation (no pendingModelOverride)", () => {
 
     expect(compactStart).toBeGreaterThanOrEqual(0);
     expect(compactEnd).toBeGreaterThan(compactStart);
-    expect(compact).toContain("this.provider.complete");
-    expect(compact).toContain("temperature: 0");
+    // Session.compact delegates to compactConversation (shared with headless).
+    expect(compact).toContain("compactConversation(");
     expect(compact).not.toContain("pendingModelOverride");
+    expect(hygieneCompact).toContain("provider.complete");
+    expect(hygieneCompact).toContain("temperature: 0");
+    expect(hygieneCompact).not.toContain("pendingModelOverride");
 
     for (const auxiliary of auxiliarySources) {
       expect(auxiliary).not.toContain("pendingModelOverride");

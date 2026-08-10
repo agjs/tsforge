@@ -27,6 +27,7 @@ export {
   formatPlanProposal,
   worklistBadge,
   pendingPlanBadge,
+  parseWorklistBadge,
   currentTaskMark,
 } from "./panel";
 export type { IFormatWorklistLinesOptions } from "./panel";
@@ -53,6 +54,7 @@ export {
   completeItemInPlan,
   uncompleteItemInPlan,
   focusItemInPlan,
+  firstOpenItem,
   addItemInPlan,
   updateItemFieldsInPlan,
   formatPlanTree,

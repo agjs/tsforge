@@ -25,6 +25,7 @@ import {
   insetX,
   RAIL_TITLE_ROWS,
 } from "./chrome";
+import { parseWorklistBadge } from "../../loop/worklist/panel";
 import { CursorState } from "./cursor-state";
 import { fitAnsiLine } from "./fit-line";
 import {
@@ -921,14 +922,10 @@ export class PaneScreen {
   }
 
   private railCounts(): { done: number; total: number } {
-    const badge = this.worklistBadge.trim();
-    const fromBadge = /^(\d+)\/(\d+)$/.exec(badge);
+    const fromBadge = parseWorklistBadge(this.worklistBadge);
 
-    if (fromBadge !== null) {
-      return {
-        done: Number(fromBadge[1]),
-        total: Number(fromBadge[2]),
-      };
+    if (fromBadge.total > 0) {
+      return fromBadge;
     }
 
     const head = stripSgr(this.panelLines[0] ?? "");

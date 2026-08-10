@@ -7,6 +7,7 @@ import type {
 import { ModelRequestError } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { TOOL_NAME } from "../agent";
+import { projectWriteArgsForWire } from "../loop/context-hygiene";
 
 /** Map our message shape to the OpenAI wire shape (tool_calls / tool results).
  *  `includeReasoning` re-attaches an assistant turn's `reasoning_content` —
@@ -38,7 +39,12 @@ export function toWire(
       tool_calls: m.toolCalls.map((tc, i) => ({
         id: tc.id ?? `call_${i}`,
         type: "function",
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        function: {
+          name: tc.name,
+          arguments: JSON.stringify(
+            projectWriteArgsForWire(tc.name, tc.arguments)
+          ),
+        },
       })),
     };
   }
