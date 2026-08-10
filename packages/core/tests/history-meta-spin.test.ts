@@ -5,10 +5,13 @@ import {
   projectWriteArgsForWire,
 } from "../src/loop/context-hygiene";
 import {
+  HISTORY_META_PARK_AT,
   HISTORY_META_RESTEER_AT,
   isHistoryMetaOnlyWriteTurn,
+  isMalformedWriteRejectContent,
   nextHistoryMetaStreak,
   streakAfterHistoryMetaResteer,
+  turnHadHistoryMetaReject,
 } from "../src/loop/history-meta-spin";
 import { doCreate, doEdit } from "../src/loop/tools/file-ops";
 import type { IToolContext } from "../src/loop/tools/tool-context";
@@ -190,9 +193,37 @@ describe("history-meta streak", () => {
     ).toBe(4);
   });
 
-  test("one-shot resteer threshold; no park", () => {
+  test("resteer once then park on dry malformed streak", () => {
     expect(HISTORY_META_RESTEER_AT).toBe(3);
+    expect(HISTORY_META_PARK_AT).toBe(12);
     expect(streakAfterHistoryMetaResteer()).toBe(HISTORY_META_RESTEER_AT + 1);
+  });
+
+  test("L3 malformed args count as bad-write rejects", () => {
+    expect(
+      isMalformedWriteRejectContent(
+        "edit: malformed args — have {(none)}; need file + oldString/newString"
+      )
+    ).toBe(true);
+    expect(
+      isMalformedWriteRejectContent(
+        "create/edit REJECTED: those args are a harness history stub"
+      )
+    ).toBe(true);
+    expect(isMalformedWriteRejectContent("edit applied ok")).toBe(false);
+  });
+
+  test("turnHadHistoryMetaReject sees L3 tool results", () => {
+    const messages = [
+      {
+        role: "tool" as const,
+        content:
+          "edit: malformed args — have {}; need file + oldString/newString (or edits[]).",
+        toolCallId: "1",
+      },
+    ];
+
+    expect(turnHadHistoryMetaReject(messages, 0)).toBe(true);
   });
 
   test("history-meta-only write turn detection", () => {

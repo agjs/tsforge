@@ -10,6 +10,8 @@ export const STUCK_REASON = {
   stalled: "stalled",
   cap: "cap",
   readonlySpin: "readonly-spin",
+  /** Consecutive create/edit L3 / history-meta rejects with no successful write. */
+  historyMetaSpin: "history-meta-spin",
   handoff: "handoff",
 } as const;
 

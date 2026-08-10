@@ -37,6 +37,7 @@ import {
   WRITE_FORCE_TOOL_NAMES,
 } from "./readonly-spin";
 import {
+  HISTORY_META_PARK_AT,
   HISTORY_META_RESTEER,
   HISTORY_META_RESTEER_AT,
   isHistoryMetaOnlyWriteTurn,
@@ -456,6 +457,9 @@ async function processToolCallTurn(args: {
     historyMetaStreak,
     report: args.ctx.report,
     taskId: args.ctx.task.id,
+    turn: args.turn,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
     messages: args.ctx.messages,
   });
 
@@ -465,6 +469,16 @@ async function processToolCallTurn(args: {
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
       historyMetaStreak: streakAfterHistoryMetaResteer(),
+      forceWriteNext: false,
+    };
+  }
+
+  if (meta.action !== null) {
+    return {
+      action: meta.action,
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -538,9 +552,56 @@ function historyMetaSpinStop(args: {
   historyMetaStreak: number;
   report: Reporter;
   taskId: string;
+  turn: number;
+  turnStart: number;
+  taskStart: number;
   messages: IChatMessage[];
-}): { action: "retry" | null } {
-  // One-shot resteer only — never park (Reservely: park aborted productive runs).
+}): { action: IRunResult | "retry" | null } {
+  if (args.historyMetaStreak < HISTORY_META_RESTEER_AT) {
+    return { action: null };
+  }
+
+  if (args.historyMetaStreak >= HISTORY_META_PARK_AT) {
+    const handoff: IHandoff = {
+      block: STUCK_REASON.historyMetaSpin,
+      rungHistory: [],
+      errors: [],
+      ask: "model kept submitting empty/incomplete create/edit args (L3 / history stub)",
+      resumable: true,
+      resume: { triedLevers: [] },
+    };
+
+    args.report({
+      kind: "stuck",
+      task: args.taskId,
+      cycles: args.turn,
+      message:
+        "⚠ model kept submitting empty/incomplete create/edit args after " +
+        "re-steering — stopped (would otherwise burn the turn cap).",
+    });
+
+    emitTiming(
+      args.report,
+      args.taskId,
+      args.turn,
+      args.turnStart,
+      args.taskStart
+    );
+
+    return {
+      action: {
+        task: args.taskId,
+        redConfirmed: true,
+        status: RUN_STATUS.stuck,
+        cycles: args.turn,
+        reason: STUCK_REASON.historyMetaSpin,
+        handoff,
+        edits: 0,
+        regressions: 0,
+      },
+    };
+  }
+
   if (args.historyMetaStreak !== HISTORY_META_RESTEER_AT) {
     return { action: null };
   }
@@ -549,7 +610,7 @@ function historyMetaSpinStop(args: {
     kind: "tool",
     task: args.taskId,
     message:
-      "⚠ history stub create/edit loop — steering toward read + real write",
+      "⚠ empty/incomplete create/edit loop — steering toward read + real write",
   });
   args.messages.push({ role: "user", content: HISTORY_META_RESTEER });
 

@@ -1,23 +1,44 @@
 /**
- * History-meta stub-spam streak — DeepSeek re-submits redacted create/edit
- * args even after a clear history-stub reject (Ledgerkit / Reservely).
- * Soft resteer once per climb; never park (Reservely: park-at-8 aborted a
- * run that still had successful writes + a real type-error).
+ * Malformed create/edit thrash guard.
+ *
+ * DeepSeek copies redacted/empty write tool_calls (Ledgerkit history-meta,
+ * Reservely L3-re-ask storm → 1000-turn runaway). Soft text alone does not
+ * stop it. Count consecutive turns with a bad write reject and no successful
+ * write: resteer once, then park. Never let these turns reset readonly-spin.
  */
 import type { IChatMessage } from "../inference";
 import { isHistoryMetaRejectContent } from "./context-hygiene";
 import { isAttemptedWriteTool } from "./readonly-spin";
 
-/** Consecutive history-meta-only turns before a sharp user inject. */
+/** Consecutive bad-write-only turns before a sharp user inject. */
 export const HISTORY_META_RESTEER_AT = 3;
+
+/**
+ * Consecutive bad-write-only turns before parking.
+ * Reservely continue: ~50 L3/min with zero successful writes — must stop.
+ * Only fires after a dry streak (successful write resets to 0).
+ */
+export const HISTORY_META_PARK_AT = 12;
 
 /** Action-only resteer — do not copy prior tool_calls. */
 export const HISTORY_META_RESTEER =
-  "STOP copying prior create/edit tool_calls from history — those are stubs, " +
-  "not real writes. `read` the file, then call create/edit with real `content` " +
-  "or `oldString`/`newString`. Do not re-submit empty or file-only args.";
+  "STOP copying prior create/edit tool_calls from history — those are stubs " +
+  "or incomplete. `read` the file, then call create/edit with real `content` " +
+  "or `oldString`/`newString`. Empty `{}` / file-only args are not valid writes.";
 
-/** True when any tool result appended this turn is a history-meta reject. */
+/** True when a tool result is a history-meta or L3 create/edit reject. */
+export function isMalformedWriteRejectContent(content: string): boolean {
+  if (isHistoryMetaRejectContent(content)) {
+    return true;
+  }
+
+  return (
+    content.includes("malformed args") ||
+    content.includes("Tool argument repair failed")
+  );
+}
+
+/** True when any tool result appended this turn is a malformed write reject. */
 export function turnHadHistoryMetaReject(
   messages: readonly IChatMessage[],
   messagesStartIndex: number
@@ -25,7 +46,7 @@ export function turnHadHistoryMetaReject(
   for (let i = messagesStartIndex; i < messages.length; i += 1) {
     const m = messages[i];
 
-    if (m?.role === "tool" && isHistoryMetaRejectContent(m.content)) {
+    if (m?.role === "tool" && isMalformedWriteRejectContent(m.content)) {
       return true;
     }
   }
@@ -34,8 +55,8 @@ export function turnHadHistoryMetaReject(
 }
 
 /**
- * Stub-spam turn: model attempted a write, got history-meta, no successful
- * edit. Must not reset readonly-spin via attemptedWrite.
+ * Stub/L3 spam turn: model attempted a write, got a malformed reject, no
+ * successful edit. Must not reset readonly-spin via attemptedWrite.
  */
 export function isHistoryMetaOnlyWriteTurn(opts: {
   readonly calls: readonly { readonly name: string }[];
@@ -49,7 +70,7 @@ export function isHistoryMetaOnlyWriteTurn(opts: {
   return opts.calls.some((c) => isAttemptedWriteTool(c.name));
 }
 
-/** Next history-meta streak after one tool turn. */
+/** Next bad-write streak after one tool turn. */
 export function nextHistoryMetaStreak(opts: {
   readonly previous: number;
   readonly hadHistoryMeta: boolean;
@@ -67,8 +88,8 @@ export function nextHistoryMetaStreak(opts: {
 }
 
 /**
- * After resteer, bump past the threshold so the next meta turn does not
- * re-inject (Reservely logged 4 resteers while stuck at === RESTEER_AT).
+ * After resteer, bump past the threshold so the next bad turn does not
+ * re-inject (Reservely logged repeated resteers at === RESTEER_AT).
  */
 export function streakAfterHistoryMetaResteer(): number {
   return HISTORY_META_RESTEER_AT + 1;
