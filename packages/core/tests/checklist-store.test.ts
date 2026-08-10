@@ -118,7 +118,13 @@ describe("checklist-store", () => {
     expect(loadPlan(dir, "bound")?.items[0]?.children?.[0]?.status).toBe(
       "done"
     );
-    expect(reports.some((m) => m.startsWith("task_complete:"))).toBe(true);
+    // Human title lines — never dump the plan UUID into the TUI scrollback.
+    expect(reports.some((m) => m.startsWith("done ·"))).toBe(true);
+    expect(reports.some((m) => m.includes("Child A"))).toBe(true);
+    expect(reports.every((m) => !m.includes("plan bound"))).toBe(true);
+    expect(reports.every((m) => !/plan [0-9a-f-]{8,}/i.test(m))).toBe(true);
+    expect(reports.some((m) => m.startsWith("focus ·"))).toBe(true);
+    expect(reports.some((m) => m.startsWith("gate · checking"))).toBe(true);
 
     const other: IToolContext = { ...ctx, activePlanId: "missing" };
 

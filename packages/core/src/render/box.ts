@@ -21,6 +21,7 @@ export const GLYPH = {
   read: "◎",
   search: "⌕",
   bullet: "•",
+  reopen: "○",
 } as const;
 
 /** Glyph for a tool name (live stream markers + settled tool lines). */
@@ -37,10 +38,19 @@ export function toolGlyph(name: string): string {
       return GLYPH.run;
     case "create":
     case "scaffold_ui":
+    case "task_add":
       return GLYPH.create;
     case "edit":
     case "edit_lines":
+    case "task_update":
       return GLYPH.edit;
+    case "task_complete":
+      return GLYPH.done;
+    case "task_focus":
+    case "task_list":
+      return GLYPH.read;
+    case "task_uncomplete":
+      return GLYPH.reopen;
     default:
       return GLYPH.info;
   }

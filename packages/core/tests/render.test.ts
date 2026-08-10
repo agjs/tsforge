@@ -156,3 +156,26 @@ test("renderEvent paints settled tool lines with a verb glyph (not dim-only)", (
   expect(out).toContain("\u25ce"); // ◎
   expect(out.trim().length).toBeGreaterThan(0);
 });
+
+test("renderEvent paints checklist tool lines with title glyphs (no plan UUID)", () => {
+  const mid = "\u00b7"; // middle dot
+  const doneMsg = `done ${mid} Extend Artist type with followers/following`;
+  const focusMsg = `focus ${mid} Populate seed followers/following`;
+  const done = renderEvent(
+    { kind: "tool", task: "t", message: doneMsg },
+    { color: false }
+  );
+  const focus = renderEvent(
+    { kind: "tool", task: "t", message: focusMsg },
+    { color: false }
+  );
+
+  expect(done).toContain(doneMsg);
+  expect(done).toContain("\u2713"); // checkmark
+  expect(done).not.toContain("task_complete");
+  expect(done).not.toMatch(/plan [0-9a-f-]{8,}/i);
+
+  expect(focus).toContain(focusMsg);
+  expect(focus).toContain("\u25ce"); // bullseye
+  expect(focus).not.toContain("\u25cf"); // black circle
+});

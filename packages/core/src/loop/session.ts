@@ -1639,7 +1639,8 @@ export class Session {
       (e) =>
         e.kind === "tool" &&
         typeof e.message === "string" &&
-        e.message.startsWith("task_complete:")
+        (e.message.startsWith("done ·") ||
+          e.message.startsWith("gate · checking"))
     );
   }
 

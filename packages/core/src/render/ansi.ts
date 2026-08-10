@@ -491,6 +491,33 @@ function toolVerb(message: string): string | undefined {
   return m?.[1];
 }
 
+/** Checklist success / gate-check lines: `done · Title`, `focus · …`, etc. */
+function checklistToolLine(
+  message: string
+): { glyph: string; accent: string } | undefined {
+  if (message.startsWith("done ·")) {
+    return { glyph: GLYPH.done, accent: STYLE.green };
+  }
+
+  if (message.startsWith("focus ·") || message.startsWith("gate ·")) {
+    return { glyph: GLYPH.read, accent: STYLE.brandLight };
+  }
+
+  if (message.startsWith("reopen ·")) {
+    return { glyph: GLYPH.reopen, accent: STYLE.chromeLight };
+  }
+
+  if (message.startsWith("add ·")) {
+    return { glyph: GLYPH.create, accent: STYLE.green };
+  }
+
+  if (message.startsWith("update ·")) {
+    return { glyph: GLYPH.edit, accent: STYLE.brandLight };
+  }
+
+  return undefined;
+}
+
 /**
  * Settled tool lines — same family as create/edit glyphLines (bright accent),
  * not dim grey that vanishes into the pane canvas.
@@ -507,6 +534,12 @@ function renderToolEvent(message: string, color: boolean): string {
 
   if (message.startsWith("↳")) {
     return glyphLine("↳", message.replace(/^↳\s*/u, ""), STYLE.brand, color);
+  }
+
+  const checklist = checklistToolLine(message);
+
+  if (checklist !== undefined) {
+    return glyphLine(checklist.glyph, message, checklist.accent, color);
   }
 
   const verb = toolVerb(message);
