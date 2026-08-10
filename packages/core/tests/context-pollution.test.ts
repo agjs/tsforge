@@ -322,7 +322,7 @@ describe("pruneEphemeralToolResidue", () => {
     ).toBe(true);
   });
 
-  test("create bodies stay until a later assistant turn, then omit clearly", () => {
+  test("create/edit args stay full after later assistant turns", () => {
     const body = "export const x = 1;\n";
     const messages: IChatMessage[] = [
       {
@@ -347,16 +347,13 @@ describe("pruneEphemeralToolResidue", () => {
 
     const args = messages[0]?.toolCalls?.[0]?.arguments;
 
-    // File only + underscore flag — never contentMeta (models re-submit that).
-    expect(args).toEqual({
-      file: "x.ts",
-      [HARNESS_ARGS_OMITTED]: true,
-    });
-    expect(JSON.stringify(args)).not.toMatch(/contentMeta/u);
-    expect(JSON.stringify(args)).not.toMatch(/harness:content-omitted/u);
+    expect(args).toEqual({ file: "x.ts", content: body });
+    expect(JSON.stringify(args)).not.toMatch(
+      /contentMeta|_harnessArgsOmitted/u
+    );
   });
 
-  test("edit bodies collapse to file + omit flag (no *Meta schema lookalikes)", () => {
+  test("edit args stay full — never collapse to omit stubs", () => {
     const messages: IChatMessage[] = [
       {
         role: "assistant",
@@ -383,14 +380,19 @@ describe("pruneEphemeralToolResidue", () => {
 
     expect(args).toEqual({
       file: "a.ts",
-      [HARNESS_ARGS_OMITTED]: true,
+      oldString: "const x = 1;",
+      newString: "const x = 2;",
     });
     expect(JSON.stringify(args)).not.toMatch(
-      /oldStringMeta|newStringMeta|contentMeta/u
+      /oldStringMeta|newStringMeta|contentMeta|_harnessArgsOmitted/u
     );
   });
 
-  test("edits[] collapse the same way — no per-entry meta objects", () => {
+  test("edits[] stay full after later assistant turns", () => {
+    const edits = [
+      { oldString: "a", newString: "b" },
+      { oldString: "c", newString: "d" },
+    ];
     const messages: IChatMessage[] = [
       {
         role: "assistant",
@@ -401,10 +403,7 @@ describe("pruneEphemeralToolResidue", () => {
             name: "edit",
             arguments: {
               file: "a.ts",
-              edits: [
-                { oldString: "a", newString: "b" },
-                { oldString: "c", newString: "d" },
-              ],
+              edits,
             },
           },
         ],
@@ -417,11 +416,7 @@ describe("pruneEphemeralToolResidue", () => {
 
     const args = messages[0]?.toolCalls?.[0]?.arguments;
 
-    expect(args).toEqual({
-      file: "a.ts",
-      [HARNESS_ARGS_OMITTED]: true,
-    });
-    expect(args?.edits).toBeUndefined();
+    expect(args).toEqual({ file: "a.ts", edits });
   });
 
   test("write-guard blast collapses once a later gate feedback exists", () => {
@@ -458,12 +453,42 @@ describe("pruneEphemeralToolResidue", () => {
     expect(tool?.content).toContain("write-guard detail dropped");
     expect(tool?.content.includes("L1: boom")).toBe(false);
   });
+
+  test("write-guard blast ages after a later assistant turn (no gate needed)", () => {
+    const messages: IChatMessage[] = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "c1",
+            name: "create",
+            arguments: { file: "a.ts", content: "x" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "c1",
+        content:
+          "created a.ts\n\nℹ a.ts auto-formatted — CURRENT content (use this for oldString):\n1| x\n",
+      },
+    ];
+
+    pruneEphemeralToolResidue(messages);
+    expect(messages[1]?.content).toContain("CURRENT content");
+
+    messages.push({ role: "assistant", content: "next" });
+    pruneEphemeralToolResidue(messages);
+
+    expect(messages[1]?.content).toContain("created a.ts");
+    expect(messages[1]?.content).toContain("write-guard detail dropped");
+    expect(messages[1]?.content.includes("CURRENT content")).toBe(false);
+  });
 });
 
 describe("assistantMessage clones tool args for history", () => {
   test("prune cannot poison a reused scripted create step", async () => {
-    // Shiphold/TDD flake: run A stubs create args on a shared scripted object;
-    // run B then hits create:history-meta on a "fresh" create.
     const { assistantMessage } = await import("../src/loop/assistant-message");
     const step = {
       content: "",
@@ -480,15 +505,18 @@ describe("assistantMessage clones tool args for history", () => {
     messages.push({ role: "assistant", content: "next" });
     pruneEphemeralToolResidue(messages);
 
+    // Args stay full in history — still cloned so hygiene cannot share refs.
     expect(messages[0]?.toolCalls?.[0]?.arguments).toEqual({
       file: "calc.ts",
-      [HARNESS_ARGS_OMITTED]: true,
+      content: "export const n = 1;\n",
     });
-    // Provider/scripted fixture still has the real body.
     expect(step.toolCalls[0]?.arguments).toEqual({
       file: "calc.ts",
       content: "export const n = 1;\n",
     });
+    expect(messages[0]?.toolCalls?.[0]?.arguments).not.toBe(
+      step.toolCalls[0]?.arguments
+    );
   });
 });
 
@@ -514,8 +542,8 @@ describe("headless mid-drive compact wiring", () => {
   });
 });
 
-describe("Session create redacts applied toolCall bodies", () => {
-  test("after create applies, history toolCall args are stubs not file bodies", async () => {
+describe("Session create keeps applied toolCall bodies", () => {
+  test("after create applies, history toolCall args still carry content", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-redact-"));
     const body = "export const notes = [];\n".repeat(30);
     let phase = 0;
@@ -558,7 +586,7 @@ describe("Session create redacts applied toolCall bodies", () => {
       expect(createCall).toBeDefined();
       expect(createCall?.arguments).toEqual({
         file: "notes.ts",
-        [HARNESS_ARGS_OMITTED]: true,
+        content: body,
       });
     } finally {
       await rm(dir, { recursive: true, force: true });

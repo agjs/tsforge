@@ -3,9 +3,8 @@ import type { IChatMessage, IModelResponse, IToolCall } from "../inference";
 /**
  * History owns its tool-call args. Provider responses (and test `scripted()`
  * fixtures) must not share mutable argument objects with message history —
- * `pruneEphemeralToolResidue` rewrites aged create/edit args in place, which
- * otherwise poisons the next run that reuses the same scripted step
- * (`tool_rejected:create:history-meta` after a prior TDD red run).
+ * `scrubLegacyWriteArgStubs` (and other hygiene) may rewrite args in place,
+ * which otherwise poisons the next run that reuses the same scripted step.
  */
 function cloneToolCalls(calls: readonly IToolCall[]): IToolCall[] {
   return calls.map((tc) => ({
