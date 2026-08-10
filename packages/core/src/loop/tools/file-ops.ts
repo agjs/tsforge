@@ -671,11 +671,16 @@ export async function runShell(
  * resources' tables — unrecoverable), so the model rewrites it via the now-uncapped
  * `edit`; an unparseable file has nothing worth protecting and `create` may replace
  * it wholesale. Bun's transpiler throws on parse errors but NOT type errors, so a
- * merely type-wrong file stays protected. Empty = fine (not broken).
+ * merely type-wrong file stays protected.
+ *
+ * Empty / whitespace-only is treated as broken too: there is nothing to protect,
+ * and `edit` cannot recover (empty `oldString` is rejected). Dogfood: a wiped
+ * `index.css` hit `create:exists` + `edit:not-found` forever while the file was
+ * 0 bytes.
  */
 function isSyntacticallyBroken(content: string, file: string): boolean {
   if (content.trim().length === 0) {
-    return false;
+    return true;
   }
 
   // JSON must be parsed as JSON, NOT transpiled as JS: a valid JSON object
@@ -1006,8 +1011,9 @@ export async function doCreate(
   // so a full rewrite goes through `edit`): it protects SHARED working files. The
   // model is scoped to the shared app schema (all resources' tables); a wholesale
   // `create` there would silently wipe every OTHER resource's table — unrecoverable.
-  // The ONE exception: a file that no longer parses can't be surgically anchored, so
-  // overwrite is the only clean fix and loses nothing (it's already garbage).
+  // Exceptions: a file that no longer parses, or an empty/whitespace-only file —
+  // nothing worth protecting, and surgical `edit` can't recover an empty file
+  // (empty oldString is otherwise rejected). Overwrite is the clean fix.
   const createPath = join(ctx.cwd, create.file);
   const exists = await Bun.file(createPath).exists();
   const before = exists
@@ -1046,13 +1052,13 @@ export async function doCreate(
       task: ctx.task,
       file: create.file,
       message: exists
-        ? `create ${create.file} (rewrote a syntactically-broken file)`
+        ? `create ${create.file} (rewrote an empty or syntactically-broken file)`
         : `create ${create.file}`,
       content: create.content,
     });
 
     return exists
-      ? `created ${create.file} — rewrote a previously broken file.`
+      ? `created ${create.file} — rewrote a previously empty or broken file.`
       : `created ${create.file}`;
   }
 
