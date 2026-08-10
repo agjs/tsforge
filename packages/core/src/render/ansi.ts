@@ -6,6 +6,7 @@ import {
 } from "../loop/harness-inject";
 import type { IChatMessage } from "../inference";
 import { RESET, STYLE, paint } from "./style";
+import { humanDuration } from "./human-duration";
 import { displayWidth, sliceToWidth } from "./width";
 import { box, GLYPH, toolGlyph } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
@@ -38,17 +39,6 @@ function humanCount(n: number): string {
   const k = n / 1000;
 
   return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-}
-
-/** Compact duration: 9000 → "9s", 84000 → "1m24s". */
-function humanDuration(ms: number): string {
-  const total = Math.round(ms / 1000);
-
-  if (total < 60) {
-    return `${total}s`;
-  }
-
-  return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, "0")}s`;
 }
 
 /**
