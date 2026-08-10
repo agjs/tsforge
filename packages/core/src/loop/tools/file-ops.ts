@@ -135,16 +135,30 @@ const READ_ONLY_COMMANDS = new Set([
   "file",
   "which",
   "du",
+  "pwd",
   "tsc",
   "git",
 ]);
 
+/** Runtimes whose `--version` / `-v` is a pure info probe (greenfield plan mode). */
+const VERSION_PROBE_BINS = new Set(["node", "bun", "npm", "pnpm", "yarn"]);
+
 /** Git subcommands that only inspect the repo. */
 const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "branch"]);
 
-/** Shell metacharacters that could turn a read into a write (`> out`, `&& rm`,
- *  `| tee`, command substitution). Their PRESENCE disqualifies — conservative. */
-const SHELL_WRITE_RE = /[>;&|`]|\$\(/;
+/**
+ * Shell metacharacters that make a command non-inspectable for plan mode.
+ * Allows `&&` chains of read-only segments (greenfield: `pwd && ls`); still
+ * rejects pipes, redirects, `;`, background `&`, and command substitution.
+ */
+function hasDisallowedShellMeta(command: string): boolean {
+  if (/[>|`]|\$\(|;/.test(command)) {
+    return true;
+  }
+
+  // Trailing or lone `&` (background) — not `&&`.
+  return /(?:^|[^&])&(?:[^&]|$)/u.test(command);
+}
 
 /** Path targets a shell command WRITES via `>`/`>>` redirect or `tee` — so the
  *  run tool can refuse a write that should go through `create`/`edit` (which the
@@ -265,20 +279,38 @@ function tscIsReadOnly(rest: string[]): boolean {
 }
 
 /**
- * Deterministically read-only: exactly one allowlisted command with no
- * redirects/pipes/chaining AND no MUTATING FLAGS for that command. Used by plan
- * mode so the model can explore (`ls`, `rg`, `git log`, `tsc --noEmit`) with no
- * path to mutating the workspace — an allowlisted command can still write via a
- * flag (`find . -delete`, `git branch -D`, `tsc --outDir`), so each is checked.
+ * Deterministically read-only: allowlisted inspection commands with no
+ * redirects/pipes/backgrounding. `&&` chains are OK when EVERY segment is
+ * independently read-only (`pwd && ls`, `node --version && bun --version`) —
+ * a trailing `rm` still fails. Used by plan mode so greenfield can probe the
+ * environment without a path to mutating the workspace.
  */
 export function isReadOnlyCommand(command: string): boolean {
-  if (SHELL_WRITE_RE.test(command)) {
+  if (hasDisallowedShellMeta(command)) {
     return false;
   }
 
-  const [head, ...rest] = command.trim().split(/\s+/);
+  const segments = command
+    .split(/\s*&&\s*/u)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 
-  if (head === undefined || !READ_ONLY_COMMANDS.has(head)) {
+  return segments.length > 0 && segments.every(isReadOnlySegment);
+}
+
+/** One `&&`-free segment: allowlisted head, or a runtime `--version`/`-v` probe. */
+function isReadOnlySegment(segment: string): boolean {
+  const [head, ...rest] = segment.trim().split(/\s+/);
+
+  if (head === undefined) {
+    return false;
+  }
+
+  if (VERSION_PROBE_BINS.has(head)) {
+    return rest.length === 1 && (rest[0] === "--version" || rest[0] === "-v");
+  }
+
+  if (!READ_ONLY_COMMANDS.has(head)) {
     return false;
   }
 
@@ -529,8 +561,9 @@ export async function runShell(
     return reject(
       ctx,
       "run",
-      "plan mode: only read-only commands are allowed (ls, cat, rg, grep, find, " +
-        `git status/log/diff/show/branch, tsc — no pipes/redirects). Blocked: ${r.command}`
+      "plan mode: only read-only commands are allowed (ls, cat, rg, pwd, " +
+        "node/bun/npm --version, git status/log/diff, tsc --noEmit — no pipes/" +
+        `redirects; \`&&\` OK if every segment is read-only). Blocked: ${r.command}`
     );
   }
 

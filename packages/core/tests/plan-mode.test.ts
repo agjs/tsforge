@@ -220,11 +220,19 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   // Read-only shapes.
   expect(isReadOnlyCommand("ls")).toBe(true);
   expect(isReadOnlyCommand("ls -la src")).toBe(true);
+  expect(isReadOnlyCommand("pwd")).toBe(true);
   expect(isReadOnlyCommand("rg -n foo src")).toBe(true);
   expect(isReadOnlyCommand("git log --oneline")).toBe(true);
   expect(isReadOnlyCommand("git diff")).toBe(true);
   expect(isReadOnlyCommand("tsc --noEmit")).toBe(true);
   expect(isReadOnlyCommand("cat package.json")).toBe(true);
+  expect(isReadOnlyCommand("node --version")).toBe(true);
+  expect(isReadOnlyCommand("bun -v")).toBe(true);
+  expect(isReadOnlyCommand("npm --version")).toBe(true);
+
+  // Safe && chains of read-only segments (greenfield probes).
+  expect(isReadOnlyCommand("pwd && ls -la")).toBe(true);
+  expect(isReadOnlyCommand("node --version && bun --version")).toBe(true);
 
   // Mutation or escape hatches.
   expect(isReadOnlyCommand("rm -rf x")).toBe(false);
@@ -235,6 +243,7 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   expect(isReadOnlyCommand("cat a | tee b")).toBe(false);
   expect(isReadOnlyCommand("echo $(rm x)")).toBe(false);
   expect(isReadOnlyCommand("npm install")).toBe(false);
+  expect(isReadOnlyCommand("node")).toBe(false); // bare node is a REPL
   expect(isReadOnlyCommand("")).toBe(false);
 
   // Allowlisted commands that MUTATE via a flag — the head/subcommand check used

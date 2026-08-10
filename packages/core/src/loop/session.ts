@@ -117,6 +117,7 @@ import {
   runCheckGate,
   runToolCalls,
   settleGate,
+  announceTaskDone,
   toolsFor,
   tryExpertRescue,
 } from "./turn";
@@ -940,6 +941,9 @@ export class Session {
     | NonNullable<ReturnType<typeof buildSpawnAgentTool>>
   )[];
   private hasGate: boolean;
+  /** Current 1-based turn inside the active drive — fed to mid-turn `check` /
+   *  `task_complete` gate progress lines so they match settle (not hardcoded 0). */
+  private driveTurn = 0;
   /** Shared with the auto-gate runner: while `active`, the runner re-detects the stack
    *  each cycle. `setGate` flips it off — a manual gate override stops re-detection.
    *  Absent when the session has no auto gate. */
@@ -976,6 +980,11 @@ export class Session {
    *  advertised tool list per call — `this.tools` itself is never mutated, so
    *  toggling off restores everything with zero bookkeeping. */
   private planMode = false;
+  /**
+   * Set when Phase B continues after GREEN with an open checklist — the next
+   * driveInner iteration must reset readonly-spin counters (fresh item work).
+   */
+  private checklistContinuePending = false;
   /** The policy mode to fall back to when plan mode is OFF — from CLI/config
    *  (wired in `create`), default `"default"`. Plan mode overrides it with
    *  `"plan"`; toggling plan off restores THIS, not a hard `"default"`. */
@@ -1064,13 +1073,13 @@ export class Session {
     // `check` tool seam — only when offerCheck (do not enable via hasGate alone).
     // Reads `this.ctx` LAZILY so a mid-build `setGate` swap is honored.
     if (offerCheck) {
-      this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
+      this.ctx.tool.runCheck = () => runCheckGate(this.ctx, this.driveTurn);
     }
 
     // Checklist complete seam — separate from `check` so a gate for task_complete
     // does not advertise/enable the model's on-demand check tool.
     if (this.hasGate) {
-      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx, this.driveTurn);
     }
 
     // Drop any legacy per-turn checklist copies from resumed history before the
@@ -1436,7 +1445,7 @@ export class Session {
 
     // task_complete needs runTaskGate; wire it when a gate appears mid-session.
     if (this.hasGate && this.ctx.tool.runTaskGate === undefined) {
-      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx, this.driveTurn);
     }
 
     this.refreshTaskContract();
@@ -1663,6 +1672,10 @@ export class Session {
       task: SESSION_ID,
       message: `⊙ gate green — checklist still open (${String(block.openCount)} item(s)); continuing`,
     });
+    // Fresh exploration budget for the next checklist item — do not inherit a
+    // near-limit readonly streak (or force-write) from the turns that just went green.
+    this.checklistContinuePending = true;
+    this.forceWriteTools = false;
 
     return "continue";
   }
@@ -2614,14 +2627,30 @@ export class Session {
 
       const forced = await this.gateAfterChurn(turn, turnStart, sendStart);
 
-      return forced !== null
-        ? { ...carried, editsSinceGate, action: forced, forceTool: false }
-        : {
-            ...carried,
-            editsSinceGate,
-            action: "continue",
-            forceTool: true,
-          };
+      if (forced !== null) {
+        return { ...carried, editsSinceGate, action: forced, forceTool: false };
+      }
+
+      // Phase B checklist continue (not a red re-gate) — do not force-write.
+      if (this.checklistContinuePending) {
+        this.checklistContinuePending = false;
+
+        return {
+          ...carried,
+          editsSinceGate,
+          readonlyStreak: 0,
+          readonlyRecoveries: 0,
+          action: "continue",
+          forceTool: false,
+        };
+      }
+
+      return {
+        ...carried,
+        editsSinceGate,
+        action: "continue",
+        forceTool: true,
+      };
     }
 
     return {
@@ -2679,6 +2708,10 @@ export class Session {
         return { action: "continue", buildNudges, forceTool: false };
       }
 
+      if (next.status === "done") {
+        announceTaskDone(this.report, SESSION_ID, next.turns);
+      }
+
       return { action: next, buildNudges, forceTool: false };
     }
 
@@ -2716,8 +2749,16 @@ export class Session {
 
     const next = this.continueIfChecklistOpen(forced);
 
-    // Checklist-open continue is NOT a red gate — keep repairing off.
-    return next === "continue" ? null : next;
+    if (next === "continue") {
+      // Checklist-open continue is NOT a red gate — keep repairing off.
+      return null;
+    }
+
+    if (next.status === "done") {
+      announceTaskDone(this.report, SESSION_ID, next.turns);
+    }
+
+    return next;
   }
 
   /** Run the gate once the model has stopped after editing: a terminal result
@@ -3122,6 +3163,7 @@ export class Session {
     this.state.nearGreenRotation = undefined;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
+      this.driveTurn = turn;
       const turnStart = performance.now();
 
       // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
@@ -3252,6 +3294,13 @@ export class Session {
       forceTool = y.forceTool;
       // A yield runs the gate (when edited), so the churn counter starts fresh.
       editsSinceGate = 0;
+
+      if (this.checklistContinuePending) {
+        this.checklistContinuePending = false;
+        readonlyStreak = 0;
+        readonlyRecoveries = 0;
+        this.forceWriteTools = false;
+      }
 
       if (y.action !== "continue") {
         return y.action;

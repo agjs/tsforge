@@ -29,6 +29,8 @@ describe("nextReadonlyStreak", () => {
     ).toBe(0);
     expect(toolCallsAttemptWrite([{ name: "create" }])).toBe(true);
     expect(toolCallsAttemptWrite([{ name: "read" }])).toBe(false);
+    expect(toolCallsAttemptWrite([{ name: "check" }])).toBe(true);
+    expect(toolCallsAttemptWrite([{ name: "task_complete" }])).toBe(true);
   });
 
   test("pure reads increment (no survey grace)", () => {

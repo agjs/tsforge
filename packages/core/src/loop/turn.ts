@@ -1417,7 +1417,8 @@ async function runGateStep(
     report({
       kind: "tool",
       task: task.id,
-      message: `⚙ running gate · turn ${turn}…`,
+      message:
+        turn > 0 ? `⚙ running gate · turn ${String(turn)}…` : "⚙ running gate…",
     });
   }
 
@@ -1516,10 +1517,15 @@ export async function evaluateGate(
  *  `settleGate` uses, projected to the {@link ICheckOutcome} the tool returns —
  *  including `autoFixed`, so `check` can warn the model that mid-turn autofix
  *  rewrote files (the desync guard `settleGate` gives via its autofix notice).
- *  Wired onto the tool context by the build overlay (Session). `turn` is 0 — a
- *  mid-turn check is not a settle cycle; it only affects a cosmetic progress line. */
-export async function runCheckGate(ctx: ILoopCtx): Promise<ICheckOutcome> {
-  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, 0);
+ *  Wired onto the tool context by the build overlay (Session).
+ *  `turn` is the current drive turn (1-based) so the live progress line matches
+ *  settle — never hardcode 0 (that made task_complete/`check` look stuck on
+ *  "turn 0" for the whole gate run). */
+export async function runCheckGate(
+  ctx: ILoopCtx,
+  turn: number
+): Promise<ICheckOutcome> {
+  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, turn);
 
   return {
     passed,
@@ -2830,9 +2836,16 @@ export async function settleGate(
   });
 
   if (gatePassed) {
-    // Gate passed — clear block tracking
+    // Gate passed — clear block tracking AND the last red ErrorSet. Leaving
+    // prevGateErrors populated made Phase-B continues (checklist still open)
+    // cite ghost "outstanding gate error(s)" on readonly-spin / handoff after
+    // GREEN (DeepSeek dogfood: model correctly called the message stale).
     state.blockFingerprint = "";
     state.focusError = null;
+    state.prevGateErrors = [];
+    state.errorAge = new Map();
+    state.lastFailureClass = undefined;
+    state.lastFailureDetail = undefined;
     // WS-B: the build is green — there's no near-green state left to protect.
     state.nearGreenCheckpoint = undefined;
     state.nearGreenBest = undefined;
@@ -2840,13 +2853,9 @@ export async function settleGate(
 
     await polishOnGreen(ctx);
 
-    report({
-      kind: "done",
-      task: task.id,
-      cycles: turn,
-      message: `task ${task.id}: done in ${turn} turn(s)`,
-    });
-
+    // Do NOT emit kind:"done" here — Session Phase B may continue with an open
+    // checklist (`⊙ gate green — checklist still open; continuing`). Callers that
+    // truly finish announce via {@link announceTaskDone}.
     return {
       task: task.id,
       redConfirmed: true,
@@ -2882,6 +2891,21 @@ export async function settleGate(
   await nearGreenCheckpointStep(ctx, state, curr, gateErrors);
 
   return null;
+}
+
+/** Emit the terminal `done` ledger event — only after the caller knows the
+ *  drive will not Phase-B continue (open checklist). */
+export function announceTaskDone(
+  report: Reporter,
+  taskId: string,
+  turns: number
+): void {
+  report({
+    kind: "done",
+    task: taskId,
+    cycles: turns,
+    message: `task ${taskId}: done in ${String(turns)} turn(s)`,
+  });
 }
 
 /** Handle a non-gate exit (timeout, degeneration, readonly-spin, malformed-tool-call)

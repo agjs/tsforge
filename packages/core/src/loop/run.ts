@@ -74,6 +74,7 @@ import {
   buildTsService,
   runToolCalls,
   settleGate,
+  announceTaskDone,
   emitTiming,
   handleR1Diagnosis,
   hasPendingDiagnosis,
@@ -714,6 +715,10 @@ async function handleModelResponse(args: {
     );
 
     if (settled !== null) {
+      if (settled.status === RUN_STATUS.done) {
+        announceTaskDone(args.report, args.taskId, settled.cycles);
+      }
+
       return {
         action: settled,
         readonlyStreak: args.readonlyStreak,
@@ -805,6 +810,10 @@ async function handleModelResponse(args: {
   );
 
   if (settled !== null) {
+    if (settled.status === RUN_STATUS.done) {
+      announceTaskDone(args.report, args.taskId, settled.cycles);
+    }
+
     return {
       action: {
         ...settled,

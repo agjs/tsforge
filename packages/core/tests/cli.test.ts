@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -346,6 +346,40 @@ test("spinner exposes a live 'compacting' activity label and repaints via onTick
 
   spinner.stop();
   expect(spinner.frameLabel()).toBe(""); // stopped → loader cleared
+});
+
+test("spinner elapsed clock survives stop/start across drive boundaries", async () => {
+  const { makeSpinner } = await import("../src/cli");
+  const out = { write: (): void => undefined, isTTY: true };
+  const spinner = makeSpinner(out);
+  let now = 1_000_000;
+  const spy = spyOn(performance, "now").mockImplementation(() => now);
+
+  try {
+    spinner.setInlineGate(() => false);
+    spinner.start();
+    now += 90_000;
+    spinner.tick();
+    expect(spinner.frameLabel()).toContain("1m30s");
+
+    spinner.stop();
+    expect(spinner.frameLabel()).toBe("");
+
+    now += 30_000;
+    spinner.start();
+    spinner.tick();
+    // Same session clock — not a fresh 0s after the next drive's start().
+    expect(spinner.frameLabel()).toContain("2m00s");
+
+    spinner.resetClock();
+    spinner.stop();
+    spinner.start();
+    spinner.tick();
+    expect(spinner.frameLabel()).toMatch(/ · 0s$/);
+    spinner.stop();
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 // Wiring test: the editor-backed input path routes onSubmit → a callback that

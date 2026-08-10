@@ -16,11 +16,16 @@ export interface ISpinnerOut {
 /** Animated activity line (`⠋ thinking · 12s` / `25m00s`) for the silent
  *  stretches of a turn — hidden chain-of-thought, prompt processing, a slow
  *  first token. TTY only. Any rendered event clears it before printing (the
- *  next tick redraws), so it never interleaves with streamed text or boxes. */
+ *  next tick redraws), so it never interleaves with streamed text or boxes.
+ *
+ *  The elapsed clock is session-scoped: `start()` does not reset it, so a new
+ *  drive after plan-approve / ask_user does not jump the status strip back to
+ *  `0s`. Call `resetClock()` on `/clear` (or a fresh session). */
 export function makeSpinner(out: ISpinnerOut = process.stdout): {
   start: () => void;
   clear: () => void;
   stop: () => void;
+  resetClock: () => void;
   setLabel: (label: string) => void;
   onTick: (cb: () => void) => void;
   setInlineGate: (fn: () => boolean) => void;
@@ -83,7 +88,13 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
       }
 
       label = "thinking";
-      startedAt = performance.now();
+
+      // Keep the session wall clock across drive boundaries (plan approve →
+      // implement, ask_user resume, etc.). Only the first start arms it.
+      if (startedAt === 0) {
+        startedAt = performance.now();
+      }
+
       timer = setInterval(tick, SPINNER_TICK_MS);
     },
     clear,
@@ -94,6 +105,9 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
       }
 
       clear();
+    },
+    resetClock: (): void => {
+      startedAt = 0;
     },
     setLabel: (l: string): void => {
       label = l;

@@ -1149,6 +1149,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     planMode = false;
     planDiscussed = false;
     session.setPlanMode(false);
+    setMode("normal");
     await persist();
     echo("  ✓ plan approved — implementing\n");
     await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
@@ -1239,6 +1240,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   const clearConversation = async (): Promise<void> => {
     // Rebuild the session with the current state (config is not reused;
     // repl's /clear creates a fresh Session.create call)
+    spinner.resetClock();
     const profile = resolveCliProfile(args.profile);
     // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
     // silently drop the deferred gate: the gate fires on mutation state (`edited`),
