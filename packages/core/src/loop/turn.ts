@@ -747,8 +747,8 @@ async function runOneToolCall(
     toolCallId: callKey(call, index),
   });
 
-  // create/edit arg bodies age out in pruneEphemeralToolResidue (not here) —
-  // immediate stubs were mistaken for on-disk source.
+  // Write-guard appendices age out in pruneEphemeralToolResidue; create/edit
+  // args stay full on the wire (stubbing them taught empty resubmits).
 
   return touchedEditable;
 }

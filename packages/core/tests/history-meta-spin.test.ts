@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { isRecord } from "../src/lib/guards";
 
 describe("projectWriteArgsForWire", () => {
-  test("strips stub to empty object — no file, no omit flag", () => {
+  test("legacy omit stubs project to empty object — no file, no omit flag", () => {
     const projected = projectWriteArgsForWire("create", {
       file: "a.ts",
       [HARNESS_ARGS_OMITTED]: true,
@@ -34,6 +34,16 @@ describe("projectWriteArgsForWire", () => {
     const args = { file: "a.ts", content: "export {}\n" };
 
     expect(projectWriteArgsForWire("create", args)).toEqual(args);
+  });
+
+  test("leaves real edit args untouched", () => {
+    const args = {
+      file: "a.ts",
+      oldString: "a",
+      newString: "b",
+    };
+
+    expect(projectWriteArgsForWire("edit", args)).toEqual(args);
   });
 });
 
@@ -85,6 +95,56 @@ describe("toWire scrub", () => {
     expect(raw).not.toContain("_harnessArgsOmitted");
     expect(raw).not.toContain("src/cli.ts");
     expect(JSON.parse(raw)).toEqual({});
+  });
+
+  test("sends full create content on the wire", () => {
+    const wire = toWire({
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "1",
+          name: "create",
+          arguments: { file: "src/cli.ts", content: "export {}\n" },
+        },
+      ],
+    });
+    const calls = wire.tool_calls;
+
+    expect(Array.isArray(calls)).toBe(true);
+
+    if (!Array.isArray(calls)) {
+      return;
+    }
+
+    const first = calls[0];
+
+    expect(isRecord(first)).toBe(true);
+
+    if (!isRecord(first)) {
+      return;
+    }
+
+    const fn = first.function;
+
+    expect(isRecord(fn)).toBe(true);
+
+    if (!isRecord(fn)) {
+      return;
+    }
+
+    const raw = fn.arguments;
+
+    expect(typeof raw).toBe("string");
+
+    if (typeof raw !== "string") {
+      return;
+    }
+
+    expect(JSON.parse(raw)).toEqual({
+      file: "src/cli.ts",
+      content: "export {}\n",
+    });
   });
 });
 

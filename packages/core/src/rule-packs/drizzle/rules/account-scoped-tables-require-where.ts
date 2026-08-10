@@ -2,7 +2,11 @@ import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { matchesAnyGlobPattern, pushChildNodes } from "../../utils";
+import {
+  matchesAnyGlobPattern,
+  pushChildNodes,
+  ruleRelativePath,
+} from "../../utils";
 
 export const RULE_NAME = "account-scoped-tables-require-where";
 
@@ -70,7 +74,12 @@ export const accountScopedTablesRequireWhereRule = createRule<
       return {};
     }
 
-    if (matchesAnyGlobPattern(context.filename, allowFiles)) {
+    if (
+      matchesAnyGlobPattern(
+        ruleRelativePath(context.filename, context.cwd),
+        allowFiles
+      )
+    ) {
       return {};
     }
 

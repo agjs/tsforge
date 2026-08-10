@@ -1,7 +1,7 @@
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { matchesAnyGlobPattern } from "../../utils";
+import { matchesAnyGlobPattern, ruleRelativePath } from "../../utils";
 
 export const RULE_NAME = "schema-files-must-not-import-driver";
 
@@ -93,7 +93,11 @@ export const schemaFilesMustNotImportDriverRule = createRule<
   create(context, [options]) {
     const filePattern = options.filePattern ?? DEFAULT_FILE_PATTERN;
 
-    if (!matchesAnyGlobPattern(context.filename, [filePattern])) {
+    if (
+      !matchesAnyGlobPattern(ruleRelativePath(context.filename, context.cwd), [
+        filePattern,
+      ])
+    ) {
       return {};
     }
 

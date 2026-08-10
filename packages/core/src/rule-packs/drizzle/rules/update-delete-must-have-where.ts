@@ -1,7 +1,7 @@
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { matchesAnyGlobPattern } from "../../utils";
+import { matchesAnyGlobPattern, ruleRelativePath } from "../../utils";
 import { chainContainsWhere, identifyUpdateDeleteQuery } from "../utils";
 
 export const RULE_NAME = "update-delete-must-have-where";
@@ -46,7 +46,12 @@ export const updateDeleteMustHaveWhereRule = createRule<
   create(context, [options]) {
     const allowFiles = options.allowFiles ?? [];
 
-    if (matchesAnyGlobPattern(context.filename, allowFiles)) {
+    if (
+      matchesAnyGlobPattern(
+        ruleRelativePath(context.filename, context.cwd),
+        allowFiles
+      )
+    ) {
       return {};
     }
 

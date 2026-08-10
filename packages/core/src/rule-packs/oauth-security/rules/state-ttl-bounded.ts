@@ -7,7 +7,7 @@ import {
   DEFAULT_STATE_FILES,
   matchesAnyGlobPattern,
   matchRedisCall,
-  toPosixRelative,
+  ruleRelativePath,
 } from "../utils";
 
 export const RULE_NAME = "state-ttl-bounded";
@@ -76,7 +76,7 @@ export const stateTtlBoundedRule = createRule<RuleOptions, MessageIds>({
     const maxTtlSeconds = options.maxTtlSeconds ?? DEFAULT_MAX_TTL;
     const redisMethods = new Set(DEFAULT_REDIS_METHODS);
 
-    const relative = toPosixRelative(context.filename, context.cwd);
+    const relative = ruleRelativePath(context.filename, context.cwd);
 
     if (!matchesAnyGlobPattern(relative, stateFiles)) {
       return {};

@@ -7,7 +7,7 @@ import {
   DEFAULT_PROVIDERS_GLOB,
   DEFAULT_VERIFIER_FN_NAMES,
   matchesAnyGlobPattern,
-  toPosixRelative,
+  ruleRelativePath,
 } from "../utils";
 
 export const RULE_NAME = "pkce-required-for-oidc";
@@ -113,7 +113,7 @@ export const pkceRequiredForOidcRule = createRule<RuleOptions, MessageIds>({
       options.verifierFnNames ?? DEFAULT_VERIFIER_FN_NAMES
     );
 
-    const relative = toPosixRelative(context.filename, context.cwd);
+    const relative = ruleRelativePath(context.filename, context.cwd);
 
     if (!matchesAnyGlobPattern(relative, [providersGlob])) {
       return {};

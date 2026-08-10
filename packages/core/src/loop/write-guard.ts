@@ -16,7 +16,6 @@ import {
   PER_WRITE_META_RULES,
   type IMetaRuleContext,
 } from "../meta-rules";
-import { HL_LINE_SEP } from "../files/hashline-format";
 import type { Reporter } from "./loop.types";
 import type { ILoopCtx } from "./turn";
 
@@ -313,13 +312,9 @@ function safeRead(absPath: string): string {
   }
 }
 
-/** Lines above which a reformat echo would cost more context than it saves; larger
- *  files fall back to the corrective (re-read-on-not-found) path. */
-const REFORMAT_ECHO_MAX_LINES = 200;
-
 /**
  * Append a reformat echo onto write-check / blast feedback when format diverged.
- * Dirty and clean paths both need disk truth before the model’s next edit.
+ * Dirty and clean paths both need a disk-truth hint before the model’s next edit.
  */
 export function appendReformatEcho(
   feedback: string,
@@ -331,11 +326,10 @@ export function appendReformatEcho(
 }
 
 /**
- * Echo post-format file content when strip/auto-format reshaped what the model
- * wrote — the preventive half of the edit-on-autoformat fix (the corrective half
- * inlines content on a not-found rejection). Returns "" when nothing diverged
- * or the file is empty; large files get a short re-read note instead of a full
- * inline.
+ * Note that strip/auto-format reshaped what the model wrote. Keep this short —
+ * full CURRENT dumps taught nothing the corrective not-found path (inline on
+ * reject) and fuzzy edit matching don't already cover, and they bloat history.
+ * Returns "" when nothing diverged or the file is empty.
  */
 export function reformatEcho(
   file: string,
@@ -346,21 +340,7 @@ export function reformatEcho(
     return "";
   }
 
-  // Drop the standard trailing newline before splitting, so a `…\n`-terminated
-  // file doesn't number a phantom empty last line the model could anchor on.
-  const lines = (current.endsWith("\n") ? current.slice(0, -1) : current).split(
-    "\n"
-  );
-
-  if (lines.length > REFORMAT_ECHO_MAX_LINES) {
-    return `\n\nℹ ${file} auto-formatted — re-read before next edit.`;
-  }
-
-  const numbered = lines
-    .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
-    .join("\n");
-
-  return `\n\nℹ ${file} auto-formatted — CURRENT content (use this for oldString):\n${numbered}`;
+  return `\n\nℹ ${file} auto-formatted — re-read or use fuzzy anchors before next edit.`;
 }
 
 /** A meta-rule context scoped to ONE just-written file, so the per-write rules

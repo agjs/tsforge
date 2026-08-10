@@ -1,6 +1,10 @@
 /**
- * Context-pollution controls: one live gate-feedback slot, redact applied
- * create/edit bodies, and evict stale read / write-guard residue.
+ * Context-pollution controls: one live gate-feedback slot, scrub legacy write
+ * stubs, and evict stale read / write-guard residue.
+ *
+ * Write args stay full in history and on the wire (pi / oh-my-pi / Reasonix).
+ * Context is reclaimed from tool *results* — not by projecting create/edit args
+ * to `{}` (DeepSeek then re-submits empty shapes forever).
  */
 import type { IChatMessage, IProvider } from "../inference";
 import { TOOL_NAME } from "../agent/agent.constants";
@@ -15,9 +19,8 @@ import { isGateFeedbackInject } from "./harness-inject";
 export const MAX_LIVE_READ_PATHS = 12;
 
 /**
- * How many later assistant turns before create/edit arg bodies are redacted.
- * Keep the real body for the next turn, then collapse to file + omit flag
- * (never `contentMeta` — models re-submit that as the create schema).
+ * How many later assistant turns before create/edit *tool results* drop their
+ * write-guard / CURRENT-content appendices. Args are never aged.
  */
 export const STALE_WRITE_ASSISTANT_TURNS = 1;
 
@@ -109,10 +112,10 @@ export function hasHarnessOmittedArgs(args: Record<string, unknown>): boolean {
 }
 
 /**
- * Outbound wire projection for create/edit args. In-memory history keeps the
- * omit flag + file for reject detection; the model must NEVER see
- * `_harnessArgsOmitted` or a copyable stub `{file}` (Reservely: copied file-only
- * → history-meta thrash). Stubs go out as `{}`.
+ * Outbound wire projection for create/edit args. Live history keeps full
+ * bodies. Legacy omit stubs (pre-fix `--continue` sessions) have no body to
+ * send — project to `{}` so the model never sees `_harnessArgsOmitted` or a
+ * copyable `{file}` stub.
  */
 export function projectWriteArgsForWire(
   toolName: string,
@@ -145,17 +148,6 @@ function stubFileOnly(args: Record<string, unknown>): Record<string, unknown> {
   }
 
   return out;
-}
-
-function stubEditArgs(args: Record<string, unknown>): Record<string, unknown> {
-  // Drop oldString/newString/edits entirely — meta siblings were re-submitted.
-  return stubFileOnly(args);
-}
-
-function stubCreateArgs(
-  args: Record<string, unknown>
-): Record<string, unknown> {
-  return stubFileOnly(args);
 }
 
 /**
@@ -266,24 +258,15 @@ function stripWriteGuardBlast(content: string): string {
   return `${head}\n\n[write-guard detail dropped — see latest gate feedback]`;
 }
 
-function ageWriteArgsOnAssistant(
-  m: IChatMessage,
+function shouldAgeWriteResult(
+  messages: readonly IChatMessage[],
+  toolIndex: number,
   assistantAfter: number
-): void {
-  if (
-    assistantAfter < STALE_WRITE_ASSISTANT_TURNS ||
-    m.toolCalls === undefined
-  ) {
-    return;
-  }
-
-  for (const tc of m.toolCalls) {
-    if (tc.name === TOOL_NAME.create) {
-      tc.arguments = stubCreateArgs(tc.arguments);
-    } else if (tc.name === TOOL_NAME.edit) {
-      tc.arguments = stubEditArgs(tc.arguments);
-    }
-  }
+): boolean {
+  return (
+    assistantAfter >= STALE_WRITE_ASSISTANT_TURNS ||
+    hasLaterGateFeedback(messages, toolIndex)
+  );
 }
 
 /** Supersede older same-path reads; record newest-first live indices. */
@@ -334,8 +317,9 @@ function trimLiveReadBudget(
 }
 
 /**
- * Evict superseded / over-budget `read` dumps, redact aged create/edit bodies,
- * and collapse write-guard appendices once a later settle gate-feedback exists.
+ * Evict superseded / over-budget `read` dumps and collapse write-guard /
+ * CURRENT-content appendices on aged create/edit tool results. Create/edit
+ * *args* stay full — peers reclaim context from results, not by stubbing writes.
  *
  * Reads: keep the latest live dump per path; omit older same-path dumps
  * (superseded). Cap unique live paths at MAX_LIVE_READ_PATHS. Never omit solely
@@ -358,7 +342,6 @@ export function pruneEphemeralToolResidue(messages: IChatMessage[]): void {
     }
 
     if (m.role === "assistant") {
-      ageWriteArgsOnAssistant(m, assistantAfter);
       assistantAfter += 1;
       continue;
     }
@@ -384,7 +367,7 @@ export function pruneEphemeralToolResidue(messages: IChatMessage[]): void {
 
     if (
       (info?.name === TOOL_NAME.create || info?.name === TOOL_NAME.edit) &&
-      hasLaterGateFeedback(messages, i)
+      shouldAgeWriteResult(messages, i, assistantAfter)
     ) {
       m.content = stripWriteGuardBlast(m.content);
     }

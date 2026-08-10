@@ -14,7 +14,15 @@ type RuleOptions = [NoProcessExitOptions];
 type MessageIds = "processExit";
 
 const DEFAULT_ALLOWED_FILES: readonly string[] = [
+  // Singleton file AND folder — `error-handlers/**` alone misses error-handlers.ts
+  // (same class as env.ts vs env/**).
+  "src/config/error-handlers.ts",
   "src/config/error-handlers/**",
+  // CLI entrypoints — message promises these; `scripts/**` alone misses src/cli.ts
+  // (Reservely dogfood burned turns fighting the gate on a real CLI).
+  "src/cli.ts",
+  "src/cli/**",
+  "bin/**",
   "scripts/**",
   "**/*.test.ts",
   "tests/**",
@@ -69,7 +77,7 @@ export const noProcessExitRule = createRule<RuleOptions, MessageIds>({
     schema: [optionSchema],
     messages: {
       processExit:
-        "`process.exit()` is reserved for graceful shutdown (`src/config/error-handlers/`) and CLI scripts. Route shutdown through the centralized handlers instead.",
+        "`process.exit()` is reserved for graceful shutdown (`src/config/error-handlers/`), CLI entrypoints (`src/cli.ts`, `scripts/`, `bin/`), and tests. Route library shutdown through the centralized handlers instead.",
     },
   },
   defaultOptions: [{ allowedFiles: [...DEFAULT_ALLOWED_FILES] }],

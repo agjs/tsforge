@@ -258,7 +258,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: "// Three attempts: the gateway retries twice internally, so more multiplies\n// into a thundering herd during an outage.\nexport const RETRY_LIMIT = 3;",
   },
   "tsforge/no-process-exit": {
-    what: "`process.exit()` truncates in-flight work and skips cleanup. Throw and let the process unwind.",
+    what: "`process.exit()` truncates in-flight work in library code. Use it only in CLI entrypoints (`src/cli.ts`, `scripts/`, `bin/`) or error-handlers; elsewhere throw and let the process unwind.",
     bad: "export function boot(ok: boolean): void {\n  if (!ok) {\n    process.exit(1);\n  }\n}",
     good: 'export function boot(ok: boolean): void {\n  if (!ok) {\n    throw new Error("boot failed: configuration invalid");\n  }\n}',
   },
