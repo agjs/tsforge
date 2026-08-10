@@ -1,7 +1,8 @@
 /**
  * History-meta stub-spam streak — DeepSeek re-submits redacted create/edit
- * args for dozens of turns even after a clear history-stub reject (Ledgerkit).
- * Mirror readonly-spin: resteer at N, park at M.
+ * args even after a clear history-stub reject (Ledgerkit / Reservely).
+ * Soft resteer once per climb; never park (Reservely: park-at-8 aborted a
+ * run that still had successful writes + a real type-error).
  */
 import type { IChatMessage } from "../inference";
 import { isHistoryMetaRejectContent } from "./context-hygiene";
@@ -10,14 +11,11 @@ import { isAttemptedWriteTool } from "./readonly-spin";
 /** Consecutive history-meta-only turns before a sharp user inject. */
 export const HISTORY_META_RESTEER_AT = 3;
 
-/** Consecutive history-meta-only turns before parking the run. */
-export const HISTORY_META_PARK_AT = 8;
-
 /** Action-only resteer — do not copy prior tool_calls. */
 export const HISTORY_META_RESTEER =
   "STOP copying prior create/edit tool_calls from history — those are stubs, " +
   "not real writes. `read` the file, then call create/edit with real `content` " +
-  "or `oldString`/`newString`. Do not re-submit file-only args.";
+  "or `oldString`/`newString`. Do not re-submit empty or file-only args.";
 
 /** True when any tool result appended this turn is a history-meta reject. */
 export function turnHadHistoryMetaReject(
@@ -68,7 +66,10 @@ export function nextHistoryMetaStreak(opts: {
   return opts.previous;
 }
 
-/** Keep streak at the resteer threshold so the next meta reject can climb to park. */
+/**
+ * After resteer, bump past the threshold so the next meta turn does not
+ * re-inject (Reservely logged 4 resteers while stuck at === RESTEER_AT).
+ */
 export function streakAfterHistoryMetaResteer(): number {
-  return HISTORY_META_RESTEER_AT;
+  return HISTORY_META_RESTEER_AT + 1;
 }

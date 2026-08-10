@@ -2,11 +2,9 @@ import { test, expect, describe } from "bun:test";
 import { toWire } from "../src/inference/wire";
 import {
   HARNESS_ARGS_OMITTED,
-  isIncompleteWriteStub,
   projectWriteArgsForWire,
 } from "../src/loop/context-hygiene";
 import {
-  HISTORY_META_PARK_AT,
   HISTORY_META_RESTEER_AT,
   isHistoryMetaOnlyWriteTurn,
   nextHistoryMetaStreak,
@@ -17,16 +15,16 @@ import type { IToolContext } from "../src/loop/tools/tool-context";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isRecord } from "../src/lib/guards";
 
 describe("projectWriteArgsForWire", () => {
-  test("strips omit flag — wire sees file only", () => {
+  test("strips stub to empty object — no file, no omit flag", () => {
     const projected = projectWriteArgsForWire("create", {
       file: "a.ts",
       [HARNESS_ARGS_OMITTED]: true,
     });
 
-    expect(projected).toEqual({ file: "a.ts" });
-    expect(projected).not.toHaveProperty(HARNESS_ARGS_OMITTED);
+    expect(projected).toEqual({});
   });
 
   test("leaves real create args untouched", () => {
@@ -37,7 +35,7 @@ describe("projectWriteArgsForWire", () => {
 });
 
 describe("toWire scrub", () => {
-  test("does not send _harnessArgsOmitted on the wire", () => {
+  test("does not send omit flag or stub file on the wire", () => {
     const wire = toWire({
       role: "assistant",
       content: "",
@@ -59,21 +57,21 @@ describe("toWire scrub", () => {
 
     const first = calls[0];
 
-    expect(first).toBeDefined();
+    expect(isRecord(first)).toBe(true);
 
-    if (first === undefined || typeof first !== "object" || first === null) {
+    if (!isRecord(first)) {
       return;
     }
 
-    const fn = "function" in first ? first.function : undefined;
+    const fn = first.function;
 
-    expect(fn).toBeDefined();
+    expect(isRecord(fn)).toBe(true);
 
-    if (fn === undefined || typeof fn !== "object" || fn === null) {
+    if (!isRecord(fn)) {
       return;
     }
 
-    const raw = "arguments" in fn ? fn.arguments : undefined;
+    const raw = fn.arguments;
 
     expect(typeof raw).toBe("string");
 
@@ -82,28 +80,38 @@ describe("toWire scrub", () => {
     }
 
     expect(raw).not.toContain("_harnessArgsOmitted");
-    expect(JSON.parse(raw)).toEqual({ file: "src/cli.ts" });
+    expect(raw).not.toContain("src/cli.ts");
+    expect(JSON.parse(raw)).toEqual({});
   });
 });
 
-describe("isIncompleteWriteStub", () => {
-  test("file-only is incomplete", () => {
-    expect(isIncompleteWriteStub({ file: "a.ts" })).toBe(true);
+describe("omit-flag vs file-only rejects", () => {
+  test("omit-flag create is history-meta", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-meta-"));
+    const reports: string[] = [];
+    const ctx: IToolContext = {
+      cwd: dir,
+      files: ["**/*"],
+      task: "t",
+      report: (e) => {
+        reports.push(e.message);
+      },
+    };
+
+    try {
+      const msg = await doCreate(
+        { file: "solo.ts", [HARNESS_ARGS_OMITTED]: true },
+        ctx
+      );
+
+      expect(msg).toContain("history stub");
+      expect(reports.some((m) => m.includes("create:history-meta"))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
-  test("omit flag is incomplete", () => {
-    expect(
-      isIncompleteWriteStub({ file: "a.ts", [HARNESS_ARGS_OMITTED]: true })
-    ).toBe(true);
-  });
-
-  test("real content is complete", () => {
-    expect(isIncompleteWriteStub({ file: "a.ts", content: "x" })).toBe(false);
-  });
-});
-
-describe("file-only create/edit → history-meta", () => {
-  test("create with only file is history-meta", async () => {
+  test("file-only create is L3 diagnose, not history-meta", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-meta-"));
     const reports: string[] = [];
     const ctx: IToolContext = {
@@ -118,14 +126,18 @@ describe("file-only create/edit → history-meta", () => {
     try {
       const msg = await doCreate({ file: "solo.ts" }, ctx);
 
-      expect(msg).toContain("history stub");
-      expect(reports.some((m) => m.includes("create:history-meta"))).toBe(true);
+      expect(msg).toContain("have {file}");
+      expect(msg).toContain("need content");
+      expect(reports.some((m) => m.includes("create:L3-re-ask"))).toBe(true);
+      expect(reports.some((m) => m.includes("create:history-meta"))).toBe(
+        false
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("edit with only file is history-meta", async () => {
+  test("omit-flag edit is history-meta", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-meta-"));
 
     await Bun.write(join(dir, "a.ts"), "export const x = 1;\n");
@@ -140,7 +152,10 @@ describe("file-only create/edit → history-meta", () => {
     };
 
     try {
-      const msg = await doEdit({ file: "a.ts" }, ctx);
+      const msg = await doEdit(
+        { file: "a.ts", [HARNESS_ARGS_OMITTED]: true },
+        ctx
+      );
 
       expect(msg).toContain("history stub");
       expect(reports.some((m) => m.includes("edit:history-meta"))).toBe(true);
@@ -175,10 +190,9 @@ describe("history-meta streak", () => {
     ).toBe(4);
   });
 
-  test("resteer / park thresholds", () => {
+  test("one-shot resteer threshold; no park", () => {
     expect(HISTORY_META_RESTEER_AT).toBe(3);
-    expect(HISTORY_META_PARK_AT).toBe(8);
-    expect(streakAfterHistoryMetaResteer()).toBe(3);
+    expect(streakAfterHistoryMetaResteer()).toBe(HISTORY_META_RESTEER_AT + 1);
   });
 
   test("history-meta-only write turn detection", () => {

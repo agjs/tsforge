@@ -19,15 +19,13 @@ import {
   runCommand,
   diagnoseCreateArgs,
   diagnoseEditArgs,
-  hasCreatePayload,
-  hasEditPayload,
 } from "../../agent";
 import { peelNestedToolArgs } from "../../agent/tool-repair";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { condenseToolOutput } from "./condense";
 import {
   looksLikeHarnessOmitMarker,
-  isIncompleteWriteStub,
+  hasHarnessOmittedArgs,
 } from "../context-hygiene";
 import {
   parseOrRepair,
@@ -703,9 +701,9 @@ export async function doEdit(
   // missed the omit flag (Ledgerkit: 43× L3 on {_harnessArgsOmitted,file}).
   const peeled = peelNestedToolArgs(args);
 
-  // Stub re-submit (omit flag / legacy meta / file-only wire scrub copy) with no
-  // real payload — catch before the generic malformed wall.
-  if (isIncompleteWriteStub(peeled) && !hasEditPayload(peeled)) {
+  // True stub re-submit (omit flag / legacy *Meta) — not file-only incompletes
+  // (those get L3 diagnose). Reservely: file-only→history-meta thrashed forever.
+  if (hasHarnessOmittedArgs(peeled)) {
     return reject(ctx, "edit:history-meta", HARNESS_META_ARGS_REJECT);
   }
 
@@ -937,9 +935,8 @@ export async function doCreate(
   // Peel nested envelopes before history-meta (same Ledgerkit bypass as edit).
   const peeled = peelNestedToolArgs(args);
 
-  // History redaction / wire-scrub copies leave file-only or omit-flag stubs —
-  // catch before the generic "malformed" wall.
-  if (isIncompleteWriteStub(peeled) && !hasCreatePayload(peeled)) {
+  // True stub / legacy meta only — file-only incompletes fall through to L3.
+  if (hasHarnessOmittedArgs(peeled)) {
     return reject(ctx, "create:history-meta", HARNESS_META_ARGS_REJECT);
   }
 

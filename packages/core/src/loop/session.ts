@@ -69,7 +69,6 @@ import {
   toolCallsAttemptWrite,
 } from "./readonly-spin";
 import {
-  HISTORY_META_PARK_AT,
   HISTORY_META_RESTEER,
   HISTORY_META_RESTEER_AT,
   isHistoryMetaOnlyWriteTurn,
@@ -83,7 +82,6 @@ import {
   RUN_STATUS,
   READONLY_STREAK_LIMIT,
   MAX_READONLY_RECOVERIES,
-  STUCK_REASON,
 } from "./loop.constants";
 import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
@@ -2436,11 +2434,7 @@ export class Session {
       forceWriteNext: false,
     };
 
-    const meta = await this.historyMetaSpinStop(
-      historyMetaStreak,
-      turn,
-      edited
-    );
+    const meta = await this.historyMetaSpinStop(historyMetaStreak);
 
     if (meta === "retry") {
       return {
@@ -2449,15 +2443,6 @@ export class Session {
         readonlyRecoveries: carry.readonlyRecoveries,
         historyMetaStreak: streakAfterHistoryMetaResteer(),
         forceWriteNext: false,
-      };
-    }
-
-    if (meta !== null) {
-      return {
-        ...base,
-        action: meta,
-        readonlyStreak: carry.readonlyStreak,
-        readonlyRecoveries: carry.readonlyRecoveries,
       };
     }
 
@@ -2917,33 +2902,8 @@ export class Session {
     );
   }
 
-  private historyMetaSpinStop(
-    streak: number,
-    turn: number,
-    edited: boolean
-  ): Promise<ISendResult | "retry" | null> {
-    if (streak < HISTORY_META_RESTEER_AT) {
-      return Promise.resolve(null);
-    }
-
-    if (streak >= HISTORY_META_PARK_AT) {
-      const handoff = buildSyntheticHandoff(
-        STUCK_REASON.historyMetaSpin,
-        this.state.prevGateErrors.map((e) => e.message),
-        "model kept re-submitting history stub create/edit args"
-      );
-
-      this.report({
-        kind: "stuck",
-        task: SESSION_ID,
-        message:
-          "⚠ model kept re-submitting history stub create/edit args after " +
-          "re-steering — stopped. Read the file and pass real content.",
-      });
-
-      return Promise.resolve(this.raiseHandOrStuck(handoff, turn, edited));
-    }
-
+  private historyMetaSpinStop(streak: number): Promise<"retry" | null> {
+    // One-shot resteer only — never park (Reservely: park aborted productive runs).
     if (streak !== HISTORY_META_RESTEER_AT) {
       return Promise.resolve(null);
     }
