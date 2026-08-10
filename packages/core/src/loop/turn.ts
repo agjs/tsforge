@@ -25,6 +25,11 @@ import type {
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
+import {
+  attributionLeadIn,
+  classifyFromGate,
+  type FailureClass,
+} from "../eval/failure-class";
 import type { IConventionProvider } from "./conventions-provider";
 import {
   shouldCheckpoint,
@@ -567,6 +572,11 @@ export interface ILoopState {
     enableThinking?: boolean;
     thinkingTokenBudget?: number;
   } | null;
+  /** Harness-owned failure class from the last settleGate classifyFromGate call.
+   *  Cleared to `none` on green. Feeds feedback lead-in and handoff. */
+  lastFailureClass?: FailureClass;
+  /** Dominant rule/code accompanying lastFailureClass when present. */
+  lastFailureDetail?: string;
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
@@ -1556,14 +1566,26 @@ function stuckResult(
   ).sort();
   const errorKeys = gateErrors.map((e) => e.message);
   const ask = buildHandoffAsk(finalSteer, errorKeys);
+  const failureClass = state.lastFailureClass;
+  const failureDetail = state.lastFailureDetail;
+  const attribution =
+    failureClass !== undefined
+      ? attributionLeadIn({
+          failureClass,
+          detail: failureDetail,
+        })
+      : "";
+  const askWithClass = attribution.length > 0 ? `${attribution} ${ask}` : ask;
 
   const handoff: IHandoff = {
     block,
     rungHistory,
     errors: errorKeys,
-    ask,
+    ask: askWithClass,
     resumable: true,
     resume: { triedLevers: rungHistory },
+    failureClass,
+    failureDetail,
   };
 
   ctx.report({
@@ -2246,6 +2268,14 @@ export async function injectFeedback(
     state.focusError ?? null,
     ctx.gate.stackProfile?.packs ?? []
   );
+  const attribution =
+    state.lastFailureClass !== undefined
+      ? attributionLeadIn({
+          failureClass: state.lastFailureClass,
+          detail: state.lastFailureDetail,
+        })
+      : "";
+  const attributionBlock = attribution.length > 0 ? `${attribution}\n\n` : "";
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
   // A pending steer (the model stalled) leads the feedback so it can't be missed.
   // R1 Phase A's diagnosis-only instruction takes precedence when set, and is NOT
@@ -2314,7 +2344,7 @@ export async function injectFeedback(
   // One live gate-feedback user slot (replace prior settle walls — do not append forever).
   upsertGateFeedback(
     ctx.messages,
-    `${rotation}${banner}${steer}${notice}${feedback}${how}`
+    `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`
   );
   // A new settle supersedes per-write guard blasts still sitting on create/edit tool results.
   pruneEphemeralToolResidue(ctx.messages);
@@ -2754,6 +2784,14 @@ export async function settleGate(
 
   state.lastGateCount = curr;
 
+  // Harness-owned attribution from the CURRENT gate (events optional — mid-run
+  // settle usually has only the ErrorSet; behavioral classes still work when the
+  // caller later passes a fuller event stream via classifyFromGate directly).
+  const failure = classifyFromGate(gateErrors);
+
+  state.lastFailureClass = failure.failureClass;
+  state.lastFailureDetail = failure.detail;
+
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate
   // for finding systematic mistakes to fix in the harness).
@@ -2773,6 +2811,8 @@ export async function settleGate(
     // Structured rule/code list (not just a count) so the failure classifier can
     // tell a type error from a lint rule without re-parsing the gate output.
     rules: gateErrors.flatMap((e) => (e.rule === undefined ? [] : [e.rule])),
+    failureClass: failure.failureClass,
+    failureDetail: failure.detail,
     message: gatePassed
       ? `task ${task.id} · turn ${turn}: GREEN`
       : `task ${task.id} · turn ${turn}: red (${String(gateErrors.length)} error(s))${gateDetail}`,

@@ -40,6 +40,7 @@ const HARNESS_USER_PREFIXES: readonly string[] = [
   "⚠ NEAR-GREEN",
   "⚠ REGRESSION",
   "⚠ generation interrupted",
+  "Harness attribution:",
   "The acceptance command still fails:",
   "Detected packs:",
   "You are only one or two errors from done",

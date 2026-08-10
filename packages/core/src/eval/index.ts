@@ -15,6 +15,8 @@ export { countLoc, countTaskLoc, type ITaskLoc } from "./loc";
 export { analyzeEvents, type IRunMetrics } from "./metrics";
 export {
   classifyRun,
+  classifyFromGate,
+  attributionLeadIn,
   FAILURE_CLASS,
   type FailureClass,
   type IFailureSummary,
