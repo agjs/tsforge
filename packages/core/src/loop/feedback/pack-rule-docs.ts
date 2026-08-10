@@ -58,9 +58,9 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/component-file-purity": {
     what: "A component .tsx holds ONLY imports + the component. Inline types, constants, and helpers fail the gate — move types to <feature>.types.ts, constants to <feature>.constants.ts (`as const`), pure helpers to src/lib/, then import them back.",
-    bad: '\n      const STAGE_LABEL = { lead: "Lead" };\n      type Stage = keyof typeof STAGE_LABEL;\n      export function DealsTable() { return <div>{STAGE_LABEL.lead}</div>; }\n    ',
-    good: '\n      import { Table } from "@/components/ui/table";\n      import { dealColumns } from "../dashboard.constants";\n      import type { IDeal } from "../dashboard.types";\n\n      export function DealsTable({ deals }: { deals: readonly IDeal[] }) {\n        return <Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />;\n      }\n    ',
-    exampleFile: "src/views/Dashboard/components/DealsTable.tsx",
+    bad: '\n      const STATUS_LABEL = { draft: "Draft" };\n      type Status = keyof typeof STATUS_LABEL;\n      export function ItemsTable() { return <div>{STATUS_LABEL.draft}</div>; }\n    ',
+    good: '\n      import { Table } from "@/components/ui/table";\n      import { itemColumns } from "../dashboard.constants";\n      import type { IItem } from "../dashboard.types";\n\n      export function ItemsTable({ items }: { items: readonly IItem[] }) {\n        return <Table columns={itemColumns} data={items} rowKey={(row) => row.id} />;\n      }\n    ',
+    exampleFile: "src/views/Dashboard/components/ItemsTable.tsx",
   },
   "tsforge/consistent-status-via-set": {
     what: "Inside Elysia route handlers, set HTTP status via `set.status = N`, not by returning a `new Response(body, { status: N })`.",
@@ -168,9 +168,9 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-derived-state-in-effect": {
     what: "Decide: is this I/O or derived data? OK — useEffect that fetches/subscribes then setState from the async result (TDD data-loading). NOT OK — syncing props into state or computing a value from other state/props inside an effect (double-render / tear). For derived values use render or useMemo; for async I/O keep the effect.",
-    bad: "export function Total({ items }: { items: number[] }) {\n  const [total, setTotal] = useState(0);\n\n  useEffect(() => {\n    setTotal(items.reduce((a, b) => a + b, 0));\n  }, [items]);\n\n  return <p>{total}</p>;\n}",
-    good: "export function Total({ items }: { items: number[] }) {\n  const total = useMemo(() => items.reduce((a, b) => a + b, 0), [items]);\n\n  return <p>{total}</p>;\n}",
-    exampleFile: "src/Counter.tsx",
+    bad: 'import { useEffect, useState } from "react";\n\nexport function Total({ items }: { items: number[] }) {\n  const [total, setTotal] = useState(0);\n\n  useEffect(() => {\n    setTotal(items.reduce((a, b) => a + b, 0));\n  }, [items]);\n\n  return <p>{total}</p>;\n}',
+    good: 'import { useMemo } from "react";\n\nexport function Total({ items }: { items: number[] }) {\n  const total = useMemo(\n    () => items.reduce((a, b) => a + b, 0),\n    [items],\n  );\n\n  return <p>{total}</p>;\n}',
+    exampleFile: "src/Total.tsx",
   },
   "tsforge/no-direct-process-env": {
     what: "Read env through one validated config module, so a missing variable fails at boot, not mid-request.",
@@ -227,7 +227,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     what: "Loading states must render a <Skeleton/>, not loading text or a spinner",
     bad: "export function View() { return <div>Loading...</div>; }",
     good: 'export function View() { return <Skeleton className="h-8 w-full" />; }',
-    exampleFile: "src/views/Deals/index.tsx",
+    exampleFile: "src/views/Items/index.tsx",
   },
   "tsforge/no-narration-comments": {
     what: "Don't narrate what the next line plainly says. Comment the WHY, or delete it.",
@@ -242,14 +242,14 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-next-head-in-app": {
     what: "`next/head` does nothing under app/. Use the Metadata API.",
-    bad: 'import Head from "next/head";\n\nexport default function Page() {\n  return <Head><title>Deals</title></Head>;\n}',
-    good: 'export const metadata = { title: "Deals" };\n\nexport default function Page() {\n  return <main>Deals</main>;\n}',
+    bad: 'import Head from "next/head";\n\nexport default function Page() {\n  return <Head><title>Home</title></Head>;\n}',
+    good: 'export const metadata = { title: "Home" };\n\nexport default function Page() {\n  return <main>Home</main>;\n}',
     exampleFile: "app/page.tsx",
   },
   "tsforge/no-pages-router-data-fetching-in-app": {
     what: "`getServerSideProps`/`getStaticProps` are pages-router APIs and are ignored under app/. Fetch in the component.",
-    bad: "export async function getServerSideProps() {\n  return { props: { deals: [] } };\n}\n\nexport default function Page() {\n  return <main />;\n}",
-    good: "export default async function Page() {\n  const deals = await loadDeals();\n\n  return <main>{deals.length}</main>;\n}",
+    bad: "export async function getServerSideProps() {\n  return { props: { items: [] } };\n}\n\nexport default function Page() {\n  return <main />;\n}",
+    good: "export default async function Page() {\n  const items = await loadItems();\n\n  return <main>{items.length}</main>;\n}",
     exampleFile: "app/page.tsx",
   },
   "tsforge/no-pr-reference-comments": {

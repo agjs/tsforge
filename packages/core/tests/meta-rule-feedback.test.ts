@@ -217,6 +217,14 @@ test("all meta-rules have documentation entries", () => {
   expect(missingDocs).toEqual([]);
 });
 
+test("test-sibling-required docs steer React testing-library install", () => {
+  const doc = META_RULE_DOCS["test-sibling-required"];
+
+  expect(doc).toBeDefined();
+  expect(doc).toContain("@testing-library/react");
+  expect(doc).toContain("install");
+});
+
 test("meta-rule violations are sorted deterministically", async () => {
   await withDir(async (dir) => {
     await Bun.write(

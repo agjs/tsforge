@@ -230,16 +230,26 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   expect(isReadOnlyCommand("bun -v")).toBe(true);
   expect(isReadOnlyCommand("npm --version")).toBe(true);
 
-  // Safe && chains of read-only segments (greenfield probes).
+  // Safe && / ; chains of read-only segments (greenfield probes).
   expect(isReadOnlyCommand("pwd && ls -la")).toBe(true);
   expect(isReadOnlyCommand("node --version && bun --version")).toBe(true);
+  expect(isReadOnlyCommand("node --version; bun --version")).toBe(true);
+  expect(isReadOnlyCommand("echo ---")).toBe(true);
+  expect(isReadOnlyCommand("ls src 2>/dev/null")).toBe(true);
+  expect(isReadOnlyCommand("ls src 2>/dev/null && cat package.json")).toBe(
+    true
+  );
+  expect(isReadOnlyCommand("pwd 2>&1")).toBe(true);
 
   // Mutation or escape hatches.
   expect(isReadOnlyCommand("rm -rf x")).toBe(false);
   expect(isReadOnlyCommand("git commit -m x")).toBe(false);
   expect(isReadOnlyCommand("git checkout .")).toBe(false);
   expect(isReadOnlyCommand("rg foo > out.txt")).toBe(false);
+  expect(isReadOnlyCommand("ls > out.txt")).toBe(false);
+  expect(isReadOnlyCommand("echo hi > f")).toBe(false);
   expect(isReadOnlyCommand("ls && rm x")).toBe(false);
+  expect(isReadOnlyCommand("ls; rm x")).toBe(false);
   expect(isReadOnlyCommand("cat a | tee b")).toBe(false);
   expect(isReadOnlyCommand("echo $(rm x)")).toBe(false);
   expect(isReadOnlyCommand("npm install")).toBe(false);

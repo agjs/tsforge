@@ -138,6 +138,7 @@ const READ_ONLY_COMMANDS = new Set([
   "pwd",
   "tsc",
   "git",
+  "echo",
 ]);
 
 /** Runtimes whose `--version` / `-v` is a pure info probe (greenfield plan mode). */
@@ -147,12 +148,24 @@ const VERSION_PROBE_BINS = new Set(["node", "bun", "npm", "pnpm", "yarn"]);
 const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "branch"]);
 
 /**
+ * Strip stderr discards that are safe in plan mode (`2>/dev/null`, `2>&1`) so
+ * greenfield probes like `ls … 2>/dev/null && cat …` are not rejected solely for
+ * the `>` glyph. Does NOT strip stdout file redirects (`> file`, `>> file`).
+ */
+function stripSafeStderrRedirects(command: string): string {
+  return command
+    .replace(/\s+2>\s*\/dev\/null\b/gu, "")
+    .replace(/\s+2>&1\b/gu, "");
+}
+
+/**
  * Shell metacharacters that make a command non-inspectable for plan mode.
- * Allows `&&` chains of read-only segments (greenfield: `pwd && ls`); still
- * rejects pipes, redirects, `;`, background `&`, and command substitution.
+ * Allows `&&` / `;` chains of read-only segments; still rejects pipes, stdout
+ * redirects, background `&`, and command substitution. Call after
+ * {@link stripSafeStderrRedirects}.
  */
 function hasDisallowedShellMeta(command: string): boolean {
-  if (/[>|`]|\$\(|;/.test(command)) {
+  if (/[>|`]|\$\(/.test(command)) {
     return true;
   }
 
@@ -286,12 +299,15 @@ function tscIsReadOnly(rest: string[]): boolean {
  * environment without a path to mutating the workspace.
  */
 export function isReadOnlyCommand(command: string): boolean {
-  if (hasDisallowedShellMeta(command)) {
+  const cleaned = stripSafeStderrRedirects(command);
+
+  if (hasDisallowedShellMeta(cleaned)) {
     return false;
   }
 
-  const segments = command
-    .split(/\s*&&\s*/u)
+  // `&&` and `;` both sequence read-only probes (dogfood: `node --version; bun --version`).
+  const segments = cleaned
+    .split(/\s*(?:&&|;)\s*/u)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
@@ -561,9 +577,10 @@ export async function runShell(
     return reject(
       ctx,
       "run",
-      "plan mode: only read-only commands are allowed (ls, cat, rg, pwd, " +
+      "plan mode: only read-only commands are allowed (ls, cat, rg, pwd, echo, " +
         "node/bun/npm --version, git status/log/diff, tsc --noEmit — no pipes/" +
-        `redirects; \`&&\` OK if every segment is read-only). Blocked: ${r.command}`
+        "stdout redirects; `&&`/`;` OK if every segment is read-only; " +
+        `\`2>/dev/null\` OK). Blocked: ${r.command}`
     );
   }
 
@@ -1023,10 +1040,16 @@ export async function doCreate(
     : "";
 
   if (exists && !isSyntacticallyBroken(before, create.file)) {
+    const view = await currentFileView(ctx.cwd, create.file);
+    const body =
+      view === null
+        ? " Use `edit` (or `edit_lines` with a hash from `read`) — do not retry `create`."
+        : ` Its CURRENT content is below — copy a region into \`edit\` oldString (or use \`edit_lines\` with a hash from \`read\`); do not retry \`create\`:\n\n${view}`;
+
     return reject(
       ctx,
       "create:exists",
-      `create ${create.file} REJECTED: file already exists. Use \`edit\` to change it (full-file rewrite is fine).`
+      `create ${create.file} REJECTED: file already exists.${body}`
     );
   }
 
