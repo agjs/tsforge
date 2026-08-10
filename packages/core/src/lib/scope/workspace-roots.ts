@@ -13,23 +13,31 @@ export const OUTSIDE_PROJECT_REJECT =
 
 /** OS prefixes the shell may reference without counting as "leaving the project".
  *  Keep this tight: `/var` alone would also match macOS `/var/folders` (tmpdir),
- *  which is exactly where foreign clones / harness trees can sit. */
+ *  which is exactly where foreign clones / harness trees can sit.
+ *  Do NOT list `/tmp` here — Linux `os.tmpdir()` is `/tmp/...`, and allowing it
+ *  would let `rg` of a foreign tree under `/tmp` slip through confinement. Scratch
+ *  writes under tmp are handled separately in `outsideWorkspacePaths`. */
 const SYSTEM_PREFIXES: readonly string[] = [
   "/usr",
   "/bin",
   "/sbin",
   "/opt/homebrew",
   "/opt/local",
-  "/tmp",
-  "/var/tmp",
   "/dev",
   "/etc",
   "/System",
   "/Library",
-  "/private/tmp",
-  "/private/var/tmp",
   "/nix",
   "/Applications",
+];
+
+/** Scratch dirs where shell *redirects* are fine (`echo x > /tmp/out`) but
+ *  reading/grepping a foreign tree is not. */
+const TMP_PREFIXES: readonly string[] = [
+  "/tmp",
+  "/var/tmp",
+  "/private/tmp",
+  "/private/var/tmp",
 ];
 
 /** Resolve and normalize a root directory. */
@@ -59,7 +67,16 @@ export function isPathUnderRoots(
   return roots.some((root) => isPathUnderRoot(root, absPath));
 }
 
-/** True for OS/tooling paths that are fine outside the project (bins, tmp, …). */
+/** True when `absPath` sits under a OS temp scratch prefix. */
+export function isTmpScratchPath(absPath: string): boolean {
+  const target = resolve(absPath);
+
+  return TMP_PREFIXES.some(
+    (prefix) => target === prefix || target.startsWith(`${prefix}/`)
+  );
+}
+
+/** True for OS/tooling paths that are fine outside the project (bins, …). */
 export function isAllowedSystemPath(absPath: string): boolean {
   const target = resolve(absPath);
 
@@ -71,13 +88,31 @@ export function isAllowedSystemPath(absPath: string): boolean {
     return (
       lower.includes("\\windows\\") ||
       lower.includes("\\program files") ||
-      lower.startsWith("c:\\windows")
+      lower.startsWith("c:\\windows") ||
+      lower.includes("\\temp\\") ||
+      lower.endsWith("\\temp")
     );
   }
 
   return SYSTEM_PREFIXES.some(
     (prefix) => target === prefix || target.startsWith(`${prefix}/`)
   );
+}
+
+/**
+ * True when `token` is only used as a shell redirect destination in `segment`
+ * (`>`, `>>`, `2>`, `&>`, …) — not as a read/search argument.
+ */
+export function isShellRedirectTarget(segment: string, token: string): boolean {
+  const idx = segment.indexOf(token);
+
+  if (idx < 0) {
+    return false;
+  }
+
+  const before = segment.slice(0, idx).trimEnd();
+
+  return /(?:&>>?|[0-9]*>>?|&>)$/u.test(before);
 }
 
 /** Build the effective root list: cwd first, then extra roots. */
@@ -233,6 +268,12 @@ export function outsideWorkspacePaths(
         : resolve(cwd, expanded);
 
       if (isPathUnderRoots(roots, abs) || isAllowedSystemPath(abs)) {
+        continue;
+      }
+
+      // Scratch redirects (`echo hi > /tmp/out`) are intentional; grepping a
+      // foreign tree under /tmp is not (Linux CI tmpdir lives there).
+      if (isTmpScratchPath(abs) && isShellRedirectTarget(segment, token)) {
         continue;
       }
 

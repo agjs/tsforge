@@ -36,6 +36,15 @@ import {
   toolCallsAttemptWrite,
   WRITE_FORCE_TOOL_NAMES,
 } from "./readonly-spin";
+import {
+  HISTORY_META_PARK_AT,
+  HISTORY_META_RESTEER,
+  HISTORY_META_RESTEER_AT,
+  isHistoryMetaOnlyWriteTurn,
+  nextHistoryMetaStreak,
+  streakAfterHistoryMetaResteer,
+  turnHadHistoryMetaReject,
+} from "./history-meta-spin";
 import type {
   IRunResult,
   IRunOptions,
@@ -417,6 +426,7 @@ async function processToolCallTurn(args: {
   state: ILoopState;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
   turn: number;
   turnStart: number;
   taskStart: number;
@@ -424,17 +434,66 @@ async function processToolCallTurn(args: {
   action: "continue" | "retry" | "check-gate" | IRunResult;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
   forceWriteNext: boolean;
 }> {
+  const messagesStart = args.ctx.messages.length;
   const touchedEditable = await runToolCalls(
     args.toolCalls,
     args.ctx,
     args.state
   );
+  const hadHistoryMeta = turnHadHistoryMetaReject(
+    args.ctx.messages,
+    messagesStart
+  );
+  const historyMetaStreak = nextHistoryMetaStreak({
+    previous: args.historyMetaStreak,
+    hadHistoryMeta,
+    successfulWrite: touchedEditable,
+  });
+
+  const meta = historyMetaSpinStop({
+    historyMetaStreak,
+    report: args.ctx.report,
+    taskId: args.ctx.task.id,
+    turn: args.turn,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
+    messages: args.ctx.messages,
+  });
+
+  if (meta.action === "retry") {
+    return {
+      action: "retry",
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: streakAfterHistoryMetaResteer(),
+      forceWriteNext: false,
+    };
+  }
+
+  if (meta.action !== null) {
+    return {
+      action: meta.action,
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak,
+      forceWriteNext: false,
+    };
+  }
+
+  const attemptedWrite =
+    toolCallsAttemptWrite(args.toolCalls) &&
+    !isHistoryMetaOnlyWriteTurn({
+      calls: args.toolCalls,
+      hadHistoryMeta,
+      successfulWrite: touchedEditable,
+    });
   const updatedStreak = nextReadonlyStreak({
     previous: args.readonlyStreak,
     progressed: touchedEditable,
-    attemptedWrite: toolCallsAttemptWrite(args.toolCalls),
+    attemptedWrite,
   });
 
   // Read-only-spin guard: consecutive read-only turns without edits.
@@ -443,6 +502,7 @@ async function processToolCallTurn(args: {
       action: touchedEditable ? "check-gate" : "continue",
       readonlyStreak: 0,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -464,6 +524,7 @@ async function processToolCallTurn(args: {
       action: "retry",
       readonlyStreak: streakAfterReadonlyResteer(READONLY_STREAK_LIMIT),
       readonlyRecoveries: spin.readonlyRecoveries,
+      historyMetaStreak,
       forceWriteNext: true,
     };
   }
@@ -473,6 +534,7 @@ async function processToolCallTurn(args: {
       action: spin.action,
       readonlyStreak: updatedStreak,
       readonlyRecoveries: spin.readonlyRecoveries,
+      historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -481,8 +543,78 @@ async function processToolCallTurn(args: {
     action: "continue",
     readonlyStreak: updatedStreak,
     readonlyRecoveries: args.readonlyRecoveries,
+    historyMetaStreak,
     forceWriteNext: false,
   };
+}
+
+function historyMetaSpinStop(args: {
+  historyMetaStreak: number;
+  report: Reporter;
+  taskId: string;
+  turn: number;
+  turnStart: number;
+  taskStart: number;
+  messages: IChatMessage[];
+}): { action: IRunResult | "retry" | null } {
+  if (args.historyMetaStreak < HISTORY_META_RESTEER_AT) {
+    return { action: null };
+  }
+
+  if (args.historyMetaStreak >= HISTORY_META_PARK_AT) {
+    const handoff: IHandoff = {
+      block: STUCK_REASON.historyMetaSpin,
+      rungHistory: [],
+      errors: [],
+      ask: "model kept re-submitting history stub create/edit args",
+      resumable: true,
+      resume: { triedLevers: [] },
+    };
+
+    args.report({
+      kind: "stuck",
+      task: args.taskId,
+      cycles: args.turn,
+      message:
+        "⚠ model kept re-submitting history stub create/edit args after " +
+        "re-steering — stopped.",
+    });
+
+    emitTiming(
+      args.report,
+      args.taskId,
+      args.turn,
+      args.turnStart,
+      args.taskStart
+    );
+
+    return {
+      action: {
+        task: args.taskId,
+        redConfirmed: true,
+        status: RUN_STATUS.stuck,
+        cycles: args.turn,
+        reason: STUCK_REASON.historyMetaSpin,
+        handoff,
+        edits: 0,
+        regressions: 0,
+      },
+    };
+  }
+
+  if (args.historyMetaStreak !== HISTORY_META_RESTEER_AT) {
+    return { action: null };
+  }
+
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message:
+      "⚠ history stub create/edit loop — steering toward read + real write",
+  });
+  args.messages.push({ role: "user", content: HISTORY_META_RESTEER });
+
+  return { action: "retry" };
 }
 
 /** Handle a model response: check TTSR/degeneration, run tools or settle gate.
@@ -495,6 +627,7 @@ async function handleModelResponse(args: {
   messages: IChatMessage[];
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
   turn: number;
   turnStart: number;
   taskStart: number;
@@ -506,6 +639,7 @@ async function handleModelResponse(args: {
   action: "continue" | IRunResult;
   readonlyStreak: number;
   readonlyRecoveries: number;
+  historyMetaStreak: number;
   forceWriteNext: boolean;
 }> {
   // TTSR interrupt: continue without settling gate
@@ -526,6 +660,7 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -542,6 +677,7 @@ async function handleModelResponse(args: {
       action: looped,
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -581,6 +717,7 @@ async function handleModelResponse(args: {
         action: settled,
         readonlyStreak: args.readonlyStreak,
         readonlyRecoveries: args.readonlyRecoveries,
+        historyMetaStreak: args.historyMetaStreak,
         forceWriteNext: false,
       };
     }
@@ -592,17 +729,19 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: args.readonlyStreak,
       readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
       forceWriteNext: false,
     };
   }
 
-  // Tool calls: process with read-only-spin guard and possibly settle gate
+  // Tool calls: process with history-meta + read-only-spin guards and possibly settle gate
   const tool = await processToolCallTurn({
     toolCalls: args.res.toolCalls,
     ctx: args.ctx,
     state: args.state,
     readonlyStreak: args.readonlyStreak,
     readonlyRecoveries: args.readonlyRecoveries,
+    historyMetaStreak: args.historyMetaStreak,
     turn: args.turn,
     turnStart: args.turnStart,
     taskStart: args.taskStart,
@@ -614,11 +753,12 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
       forceWriteNext: tool.forceWriteNext,
     };
   }
 
-  // Terminal readonly-spin stop
+  // Terminal readonly-spin / history-meta-spin stop
   if (tool.action instanceof Object && "status" in tool.action) {
     return {
       action: {
@@ -628,6 +768,7 @@ async function handleModelResponse(args: {
       },
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -646,6 +787,7 @@ async function handleModelResponse(args: {
       action: "continue",
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -670,6 +812,7 @@ async function handleModelResponse(args: {
       },
       readonlyStreak: tool.readonlyStreak,
       readonlyRecoveries: tool.readonlyRecoveries,
+      historyMetaStreak: tool.historyMetaStreak,
       forceWriteNext: false,
     };
   }
@@ -678,6 +821,7 @@ async function handleModelResponse(args: {
     action: "continue",
     readonlyStreak: tool.readonlyStreak,
     readonlyRecoveries: tool.readonlyRecoveries,
+    historyMetaStreak: tool.historyMetaStreak,
     forceWriteNext: false,
   };
 }
@@ -751,6 +895,7 @@ async function runMainLoop(args: {
 }): Promise<IRunResult> {
   let readonlyStreak = 0;
   let readonlyRecoveries = 0;
+  let historyMetaStreak = 0;
   let forceWriteNext = false;
   let lastUsage: ITokenUsage | undefined;
   const taskStart = performance.now();
@@ -875,6 +1020,7 @@ async function runMainLoop(args: {
       messages: args.messages,
       readonlyStreak,
       readonlyRecoveries,
+      historyMetaStreak,
       turn,
       turnStart,
       taskStart,
@@ -886,6 +1032,7 @@ async function runMainLoop(args: {
 
     readonlyStreak = handled.readonlyStreak;
     readonlyRecoveries = handled.readonlyRecoveries;
+    historyMetaStreak = handled.historyMetaStreak;
     forceWriteNext = handled.forceWriteNext;
 
     if (handled.action !== "continue") {

@@ -366,7 +366,7 @@ test("turn loop: nested arguments create is repaired and writes", async () => {
   }
 });
 
-test("turn loop: create with only file gets field-level diagnose (not opaque)", async () => {
+test("turn loop: create with only file is history-meta (wire-scrub copy)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-repair-"));
   const reports: string[] = [];
 
@@ -381,9 +381,8 @@ test("turn loop: create with only file gets field-level diagnose (not opaque)", 
       }
     );
 
-    expect(r).toContain("have {file}");
-    expect(r).toContain("need content");
-    expect(reports.some((m) => m.includes("create:L3-re-ask"))).toBe(true);
+    expect(r).toContain("history stub");
+    expect(reports.some((m) => m.includes("create:history-meta"))).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

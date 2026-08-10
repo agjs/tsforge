@@ -69,11 +69,21 @@ import {
   toolCallsAttemptWrite,
 } from "./readonly-spin";
 import {
+  HISTORY_META_PARK_AT,
+  HISTORY_META_RESTEER,
+  HISTORY_META_RESTEER_AT,
+  isHistoryMetaOnlyWriteTurn,
+  nextHistoryMetaStreak,
+  streakAfterHistoryMetaResteer,
+  turnHadHistoryMetaReject,
+} from "./history-meta-spin";
+import {
   DEFAULT_TEMPERATURE,
   LOOP_LIMITS,
   RUN_STATUS,
   READONLY_STREAK_LIMIT,
   MAX_READONLY_RECOVERIES,
+  STUCK_REASON,
 } from "./loop.constants";
 import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
@@ -2336,11 +2346,9 @@ export class Session {
   }
 
   /** A working turn (the model emitted tool calls): run them via `runEditTurn`,
-   *  then apply the read-only-spin guard. Returns the carried counters plus an
-   *  `action` — a terminal `ISendResult` to stop on, or "continue" to keep
-   *  looping. Keeps the guard's bookkeeping out of `drive`'s loop body. A turn
-   *  that touched an editable file resets the streak; a pure read/search/run turn
-   *  extends it, and past the limit `readonlySpinStop` re-steers (bounded) or stops. */
+   *  then apply history-meta + read-only-spin guards. Returns the carried counters
+   *  plus an `action` — a terminal `ISendResult` to stop on, or "continue" to keep
+   *  looping. Keeps the guard's bookkeeping out of `drive`'s loop body. */
   private async runToolTurn(
     res: IModelResponse,
     carry: {
@@ -2349,6 +2357,7 @@ export class Session {
       checkEvery: number;
       readonlyStreak: number;
       readonlyRecoveries: number;
+      historyMetaStreak: number;
     },
     turn: number,
     turnStart: number,
@@ -2359,8 +2368,10 @@ export class Session {
     editsSinceCheck: number;
     readonlyStreak: number;
     readonlyRecoveries: number;
+    historyMetaStreak: number;
     forceWriteNext: boolean;
   }> {
+    const messagesStart = this.ctx.messages.length;
     const { edited, editsSinceCheck, progressed } = await this.runEditTurn(
       res,
       {
@@ -2395,20 +2406,65 @@ export class Session {
         editsSinceCheck,
         readonlyStreak: carry.readonlyStreak,
         readonlyRecoveries: carry.readonlyRecoveries,
+        historyMetaStreak: carry.historyMetaStreak,
         forceWriteNext: false,
       };
     }
+
+    const hadHistoryMeta = turnHadHistoryMetaReject(
+      this.ctx.messages,
+      messagesStart
+    );
+    const historyMetaStreak = nextHistoryMetaStreak({
+      previous: carry.historyMetaStreak,
+      hadHistoryMeta,
+      successfulWrite: progressed,
+    });
+    const attemptedWrite =
+      toolCallsAttemptWrite(res.toolCalls) &&
+      !isHistoryMetaOnlyWriteTurn({
+        calls: res.toolCalls,
+        hadHistoryMeta,
+        successfulWrite: progressed,
+      });
 
     const base = {
       action: "continue" as const,
       edited,
       editsSinceCheck,
+      historyMetaStreak,
       forceWriteNext: false,
     };
+
+    const meta = await this.historyMetaSpinStop(
+      historyMetaStreak,
+      turn,
+      edited
+    );
+
+    if (meta === "retry") {
+      return {
+        ...base,
+        readonlyStreak: carry.readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+        historyMetaStreak: streakAfterHistoryMetaResteer(),
+        forceWriteNext: false,
+      };
+    }
+
+    if (meta !== null) {
+      return {
+        ...base,
+        action: meta,
+        readonlyStreak: carry.readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+      };
+    }
+
     const readonlyStreak = nextReadonlyStreak({
       previous: carry.readonlyStreak,
       progressed,
-      attemptedWrite: toolCallsAttemptWrite(res.toolCalls),
+      attemptedWrite,
     });
 
     if (readonlyStreak === 0) {
@@ -2468,6 +2524,7 @@ export class Session {
       checkEvery: number;
       readonlyStreak: number;
       readonlyRecoveries: number;
+      historyMetaStreak: number;
     },
     turn: number,
     turnStart: number,
@@ -2479,6 +2536,7 @@ export class Session {
     editsSinceGate: number;
     readonlyStreak: number;
     readonlyRecoveries: number;
+    historyMetaStreak: number;
     forceTool: boolean;
   }> {
     const editsBefore = this.state.edits;
@@ -2490,6 +2548,7 @@ export class Session {
         checkEvery: carry.checkEvery,
         readonlyStreak: carry.readonlyStreak,
         readonlyRecoveries: carry.readonlyRecoveries,
+        historyMetaStreak: carry.historyMetaStreak,
       },
       turn,
       turnStart,
@@ -2503,6 +2562,7 @@ export class Session {
       editsSinceCheck: r.editsSinceCheck,
       readonlyStreak: r.readonlyStreak,
       readonlyRecoveries: r.readonlyRecoveries,
+      historyMetaStreak: r.historyMetaStreak,
     };
 
     if (r.action !== "continue") {
@@ -2857,6 +2917,51 @@ export class Session {
     );
   }
 
+  private historyMetaSpinStop(
+    streak: number,
+    turn: number,
+    edited: boolean
+  ): Promise<ISendResult | "retry" | null> {
+    if (streak < HISTORY_META_RESTEER_AT) {
+      return Promise.resolve(null);
+    }
+
+    if (streak >= HISTORY_META_PARK_AT) {
+      const handoff = buildSyntheticHandoff(
+        STUCK_REASON.historyMetaSpin,
+        this.state.prevGateErrors.map((e) => e.message),
+        "model kept re-submitting history stub create/edit args"
+      );
+
+      this.report({
+        kind: "stuck",
+        task: SESSION_ID,
+        message:
+          "⚠ model kept re-submitting history stub create/edit args after " +
+          "re-steering — stopped. Read the file and pass real content.",
+      });
+
+      return Promise.resolve(this.raiseHandOrStuck(handoff, turn, edited));
+    }
+
+    if (streak !== HISTORY_META_RESTEER_AT) {
+      return Promise.resolve(null);
+    }
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message:
+        "⚠ history stub create/edit loop — steering toward read + real write",
+    });
+    this.ctx.messages.push({
+      role: "user",
+      content: HISTORY_META_RESTEER,
+    });
+
+    return Promise.resolve("retry");
+  }
+
   private async readonlySpinStop(
     streak: number,
     recoveries: number,
@@ -2959,6 +3064,7 @@ export class Session {
     this.forceWriteTools = false;
     let readonlyStreak = 0;
     let readonlyRecoveries = 0;
+    let historyMetaStreak = 0;
     // Edits since the last incremental check — drives "check every few edits".
     let editsSinceCheck = 0;
     // Edits since the last FULL gate — forces a gate when the model edit-churns
@@ -3075,6 +3181,7 @@ export class Session {
             checkEvery,
             readonlyStreak,
             readonlyRecoveries,
+            historyMetaStreak,
           },
           turn,
           turnStart,
@@ -3086,6 +3193,7 @@ export class Session {
         editsSinceGate = w.editsSinceGate;
         readonlyStreak = w.readonlyStreak;
         readonlyRecoveries = w.readonlyRecoveries;
+        historyMetaStreak = w.historyMetaStreak;
         forceTool = w.forceTool;
 
         if (w.action !== "continue") {

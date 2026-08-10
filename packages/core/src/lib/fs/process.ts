@@ -63,12 +63,21 @@ export async function runShellCommand(
   command: string,
   opts: IShellRunOptions = {}
 ): Promise<IShellRun> {
-  // Prefer pipefail when the shell supports it (bash/zsh) so
-  // `bun test 2>&1 | cat` reports the runner's exit, not cat's 0.
-  // dash (Debian /bin/sh) rejects `set -o pipefail` — probe in a subshell first.
-  const withPipefail = `(set -o pipefail) 2>/dev/null && set -o pipefail; ${command}`;
+  // Prefer bash so `set -o pipefail` actually sticks. Debian/Ubuntu CI uses
+  // dash as `/bin/sh`, which rejects pipefail — the old "probe then set"
+  // form ran the command without pipefail and `false | cat` exited 0.
+  return runArgvCommand(cwd, shellArgvWithPipefail(command), opts);
+}
 
-  return runArgvCommand(cwd, ["sh", "-c", withPipefail], opts);
+/** Build `argv` for a shell that honors pipefail when bash is present. */
+export function shellArgvWithPipefail(command: string): string[] {
+  const bash = Bun.which("bash");
+
+  if (bash !== null) {
+    return [bash, "-c", `set -o pipefail; ${command}`];
+  }
+
+  return ["sh", "-c", command];
 }
 
 /**

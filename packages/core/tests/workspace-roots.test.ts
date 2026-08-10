@@ -53,13 +53,25 @@ describe("workspace-roots helpers", () => {
     );
   });
 
-  test("isAllowedSystemPath allows common OS bins; not arbitrary homes", () => {
+  test("isAllowedSystemPath allows common OS bins; not tmp trees or homes", () => {
     expect(isAllowedSystemPath("/usr/bin/rg")).toBe(true);
     expect(isAllowedSystemPath("/bin/ls")).toBe(true);
-    expect(isAllowedSystemPath("/tmp/out.txt")).toBe(true);
+    // /tmp must NOT be a free-read zone — Linux os.tmpdir() lives there.
+    expect(isAllowedSystemPath("/tmp/out.txt")).toBe(false);
     expect(
       isAllowedSystemPath("/Users/ag/Documents/Code/tsforge/packages/core")
     ).toBe(false);
+  });
+
+  test("outsideWorkspacePaths allows /tmp redirect targets; rejects /tmp greps", () => {
+    const cwd = "/work/app";
+
+    expect(
+      outsideWorkspacePaths(cwd, "echo hi > /tmp/tsforge-scratch.txt")
+    ).toEqual([]);
+    expect(
+      outsideWorkspacePaths(cwd, 'rg leak "/tmp/tsforge-foreign-abc"')
+    ).toEqual(["/tmp/tsforge-foreign-abc"]);
   });
 
   test("extractPathTokens pulls quoted + unquoted absolute / ../ paths", () => {

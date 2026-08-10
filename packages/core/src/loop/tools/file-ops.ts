@@ -26,8 +26,8 @@ import { peelNestedToolArgs } from "../../agent/tool-repair";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { condenseToolOutput } from "./condense";
 import {
-  hasHarnessOmittedArgs,
   looksLikeHarnessOmitMarker,
+  isIncompleteWriteStub,
 } from "../context-hygiene";
 import {
   parseOrRepair,
@@ -703,9 +703,9 @@ export async function doEdit(
   // missed the omit flag (Ledgerkit: 43× L3 on {_harnessArgsOmitted,file}).
   const peeled = peelNestedToolArgs(args);
 
-  // Stub re-submit (omit flag / legacy meta) with no real payload — catch before
-  // the generic malformed wall. Real oldString/newString (or aliases) still parse.
-  if (hasHarnessOmittedArgs(peeled) && !hasEditPayload(peeled)) {
+  // Stub re-submit (omit flag / legacy meta / file-only wire scrub copy) with no
+  // real payload — catch before the generic malformed wall.
+  if (isIncompleteWriteStub(peeled) && !hasEditPayload(peeled)) {
     return reject(ctx, "edit:history-meta", HARNESS_META_ARGS_REJECT);
   }
 
@@ -937,9 +937,9 @@ export async function doCreate(
   // Peel nested envelopes before history-meta (same Ledgerkit bypass as edit).
   const peeled = peelNestedToolArgs(args);
 
-  // History redaction leaves `_harnessArgsOmitted` / legacy `contentMeta` —
-  // models re-submit that shape; catch it before the generic "malformed" wall.
-  if (hasHarnessOmittedArgs(peeled) && !hasCreatePayload(peeled)) {
+  // History redaction / wire-scrub copies leave file-only or omit-flag stubs —
+  // catch before the generic "malformed" wall.
+  if (isIncompleteWriteStub(peeled) && !hasCreatePayload(peeled)) {
     return reject(ctx, "create:history-meta", HARNESS_META_ARGS_REJECT);
   }
 

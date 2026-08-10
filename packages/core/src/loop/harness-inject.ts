@@ -51,6 +51,7 @@ const HARNESS_USER_PREFIXES: readonly string[] = [
   "You have made many tool calls",
   "NOTE: auto-fixed",
   "An expert engineer just repaired",
+  "STOP copying prior create/edit",
 ];
 
 /**

@@ -108,6 +108,59 @@ export function hasHarnessOmittedArgs(args: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Outbound wire projection for create/edit args. In-memory history keeps the
+ * omit flag for reject detection; the model must NEVER see `_harnessArgsOmitted`
+ * (Ledgerkit: ~80 dead turns copying that token). Stubs go out as `{file}` only.
+ */
+export function projectWriteArgsForWire(
+  toolName: string,
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  if (toolName !== TOOL_NAME.create && toolName !== TOOL_NAME.edit) {
+    return args;
+  }
+
+  if (!hasHarnessOmittedArgs(args)) {
+    return args;
+  }
+
+  const file = typeof args.file === "string" ? args.file : undefined;
+
+  return file === undefined ? {} : { file };
+}
+
+/**
+ * True when peeled create/edit args have no real write payload — file-only
+ * (or empty) copies of a wire-scrubbed stub. Same reject family as omit-flag.
+ */
+export function isIncompleteWriteStub(args: Record<string, unknown>): boolean {
+  if (hasHarnessOmittedArgs(args)) {
+    return true;
+  }
+
+  const keys = Object.keys(args);
+
+  if (keys.length === 0) {
+    return true;
+  }
+
+  const fileKeys = new Set([
+    "file",
+    "path",
+    "filename",
+    "filepath",
+    "filePath",
+  ]);
+
+  return keys.every((k) => fileKeys.has(k));
+}
+
+/** Tool-result text from create/edit:history-meta rejects. */
+export function isHistoryMetaRejectContent(content: string): boolean {
+  return content.includes("harness history stub");
+}
+
 function stubFileOnly(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {
     [HARNESS_ARGS_OMITTED]: true,
