@@ -16,6 +16,7 @@ import { noLoadingTextUseSkeletonRule } from "./rules/no-loading-text-use-skelet
 import { noNestedComponentRule } from "./rules/no-nested-component";
 import { noReactFcRule } from "./rules/no-react-fc";
 import { noStateInComponentBodyRule } from "./rules/no-state-in-component-body";
+import { oneComponentPerFileRule } from "./rules/one-component-per-file";
 import type { IRulePack } from "../rule-packs.types";
 
 const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
@@ -35,6 +36,7 @@ const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
   "no-nested-component": noNestedComponentRule,
   "no-react-fc": noReactFcRule,
   "no-state-in-component-body": noStateInComponentBodyRule,
+  "one-component-per-file": oneComponentPerFileRule,
 };
 
 export const reactComponentArchitecturePack: IRulePack = {
@@ -64,6 +66,7 @@ export const reactComponentArchitecturePack: IRulePack = {
     "no-nested-component": "error",
     "no-react-fc": "error",
     "no-state-in-component-body": "error",
+    "one-component-per-file": "error",
   },
 };
 

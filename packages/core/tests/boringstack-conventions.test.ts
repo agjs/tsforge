@@ -116,6 +116,18 @@ describe("convention registry", () => {
     // build8 park (#67): the rhf resolver input≠output type mismatch from .optional()/.default().
     expect(g).toContain("SubmitHandler");
     expect(g).toContain("defaultValues");
+    // Form↔purity thrash: generic Form + typed defaults, not bare `as const`.
+    expect(g).toContain("FieldValues");
+    expect(g).toContain("CreateXInput");
+    expect(g).toContain("as const");
+  });
+
+  test("file-layout guide qualifies as const for RHF defaults", () => {
+    const g = conventionGuide("file-layout");
+
+    expect(g).toContain("as const");
+    expect(g).toContain("CreateXInput");
+    expect(g).toContain("z.infer");
   });
 
   test("data-fetching guide states the apiClient pattern and forbids response.error", () => {
@@ -282,6 +294,27 @@ describe("unseenGuidesForErrors (the PUSH dedup)", () => {
 
     expect(
       unseenGuidesForErrors([{ rule: undefined }, { rule: "unknown" }], seen)
+    ).toEqual([]);
+  });
+
+  test("Form/FieldValues gate messages pull the forms guide", () => {
+    const seen = new Set<string>();
+    const guides = unseenGuidesForErrors(
+      [
+        {
+          message:
+            "Type 'UseFormReturn<FieldValues>' is not assignable to type 'UseFormReturn<CreateGamerInput>'",
+        },
+      ],
+      seen
+    );
+
+    expect(guides).toHaveLength(1);
+    expect(guides[0]).toContain("Form");
+    expect(guides[0]).toContain("FieldValues");
+    expect(seen.has("forms")).toBe(true);
+    expect(
+      unseenGuidesForErrors([{ message: "FieldValues again" }], seen)
     ).toEqual([]);
   });
 });

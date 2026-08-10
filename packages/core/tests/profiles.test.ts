@@ -38,6 +38,7 @@ test("opinionated profile enables the STRUCTURE rules", () => {
   expect(overrides["component-folder-structure"]).toBe("error");
   expect(overrides["no-state-in-component-body"]).toBe("error");
   expect(overrides["index-must-reexport-default"]).toBe("error");
+  expect(overrides["one-component-per-file"]).toBe("error");
   // The strictest profile must never LOWER a quality rule below the default — these are
   // "error", never "warn" (a past leftover) or "off".
   expect(overrides["no-inline-jsx-functions"]).toBe("error");
@@ -72,6 +73,7 @@ const OPT_IN_STRUCTURE_RULES = [
   "index-must-reexport-default",
   "no-state-in-component-body",
   "max-hooks-per-file",
+  "one-component-per-file",
 ] as const;
 
 const NON_OPINIONATED_PROFILES = ["recommended", "strict", "security"] as const;

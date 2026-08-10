@@ -138,9 +138,11 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "FILE PURITY (boringstack). A component `.tsx` holds ONLY imports + the component " +
     "— nothing else atop it. Move each out and import it back: a type → " +
     "`<feature>.types.ts`; a constant / label-map / column-spec → " +
-    "`<feature>.constants.ts` (`as const`); a pure helper (formatX, timeAgo) → " +
-    "`src/lib/<name>.ts`. Inline types/constants/helpers are a gate error " +
-    "(component-file-purity).",
+    "`<feature>.constants.ts` (`as const` for label maps / literal unions; for RHF " +
+    "`defaultValues` with mutable arrays, type as `CreateXInput` / " +
+    "`z.infer<typeof schema>` — bare `as const` makes arrays readonly and breaks " +
+    "`useForm`); a pure helper (formatX, timeAgo) → `src/lib/<name>.ts`. Inline " +
+    "types/constants/helpers are a gate error (component-file-purity).",
   jsx:
     "JSX (boringstack). No COMPUTATION inside JSX — the markup only READS " +
     "already-computed values. A derived value → a `useMemo` in `<feature>.hooks.ts`; " +
@@ -187,9 +189,14 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "`Resolver<In, any, Out>` that won't match `useForm`/`SubmitHandler` (a persistent 'Resolver … " +
     "not assignable' / 'not assignable to SubmitHandler' error). Keep every field required in the " +
     "schema and supply its initial value in `useForm({ defaultValues })`; type the hook as " +
-    "`useForm<z.infer<typeof schema>>` so onSubmit's input matches `SubmitHandler`. Map " +
-    "server/validation errors back onto the fields (`setError`); keep " +
-    "the component rendering the field state the hook returns.",
+    "`useForm<z.infer<typeof schema>>` so onSubmit's input matches `SubmitHandler`. " +
+    "SHADCN Form + FieldValues trap (dogfood): make `Form` generic — " +
+    "`function Form<T extends FieldValues>(props: UseFormReturn<T> & { children: ReactNode })` " +
+    "under `components/ui/` (purity-exempt). Put `defaultValues` in `<feature>.constants.ts` " +
+    "typed as the form input (`CreateXInput` / `z.infer<typeof schema>`), NOT bare `as const`. " +
+    "Order: extract defaults → Form generic → wire the page — do not fix FieldValues by dumping " +
+    "consts into the page `.tsx`. Map server/validation errors back onto the fields (`setError`); " +
+    "keep the component rendering the field state the hook returns.",
   "data-fetching":
     "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
     "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). PATH STRINGS are the #1 thing " +
@@ -436,8 +443,12 @@ export function topicForRule(rule: string): ConventionTopic | null {
  * beside the error, not after the steering ladder escalates. One guide per topic
  * per run: enough to teach, not a wall.
  */
+/** Gate messages that mean the Form/FieldValues typing thrash — push the forms guide. */
+const FORM_FIELDVALUES_FEEDBACK =
+  /UseFormReturn|FieldValues|FormProvider|zodResolver|defaultValues/iu;
+
 export function unseenGuidesForErrors(
-  errors: readonly { readonly rule?: string }[],
+  errors: readonly { readonly rule?: string; readonly message?: string }[],
   seen: Set<string>
 ): string[] {
   const out: string[] = [];
@@ -455,6 +466,18 @@ export function unseenGuidesForErrors(
 
     seen.add(topic);
     out.push(conventionGuide(topic));
+  }
+
+  // Form typing errors often have no mapped rule id — pull forms when the message
+  // names RHF/FieldValues (dogfood: Form↔purity thrash).
+  if (
+    !seen.has("forms") &&
+    errors.some((e) =>
+      FORM_FIELDVALUES_FEEDBACK.test(`${e.rule ?? ""} ${e.message ?? ""}`)
+    )
+  ) {
+    seen.add("forms");
+    out.push(conventionGuide("forms"));
   }
 
   return out;

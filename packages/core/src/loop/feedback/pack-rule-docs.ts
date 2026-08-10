@@ -57,7 +57,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     fixIsDirective: true,
   },
   "tsforge/component-file-purity": {
-    what: "A component .tsx holds ONLY imports + the component. Inline types, constants, and helpers fail the gate — move types to <feature>.types.ts, constants to <feature>.constants.ts (`as const`), pure helpers to src/lib/, then import them back.",
+    what: "A component .tsx holds ONLY imports + the component. Inline types, constants, and helpers fail the gate — move types to <feature>.types.ts, constants to <feature>.constants.ts, pure helpers to src/lib/, then import them back. Use `as const` for label maps; for RHF defaultValues with mutable arrays, type as the form input (CreateXInput / z.infer<typeof schema>), not bare `as const`.",
     bad: '\n      const STATUS_LABEL = { draft: "Draft" };\n      type Status = keyof typeof STATUS_LABEL;\n      export function ItemsTable() { return <div>{STATUS_LABEL.draft}</div>; }\n    ',
     good: '\n      import { Table } from "@/components/ui/table";\n      import { itemColumns } from "../dashboard.constants";\n      import type { IItem } from "../dashboard.types";\n\n      export function ItemsTable({ items }: { items: readonly IItem[] }) {\n        return <Table columns={itemColumns} data={items} rowKey={(row) => row.id} />;\n      }\n    ',
     exampleFile: "src/views/Dashboard/components/ItemsTable.tsx",
@@ -304,6 +304,12 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: "",
     procedure:
       "1) Create/open `Component.hooks.ts` next to the component. 2) Move the state/effect hooks into a `useComponent()` custom hook that returns the values and handlers the JSX needs. 3) Call the hook once at the top of the component and destructure. (`useId`/`useTransition`/`useDeferredValue` may stay inline.)",
+  },
+  "tsforge/one-component-per-file": {
+    what: "One top-level React component per .tsx file — a second PascalCase component in the same file fails the gate.",
+    bad: "export function Alpha() { return <div />; }\nexport function Beta() { return <span />; }",
+    good: 'import { Beta } from "./Beta";\nexport function Alpha() { return <div><Beta /></div>; }',
+    exampleFile: "src/views/Feed/components/Alpha.tsx",
   },
   "tsforge/no-user-controlled-fetch-url": {
     what: "The request ORIGIN must be fixed in source. Interpolating the path is fine; interpolating the host is not. There is no allowlist or builder to opt into \u2014 write the host literally.",

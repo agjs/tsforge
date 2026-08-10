@@ -44,7 +44,6 @@ function extractFeatureName(
   const normalized = filename.replace(/\\/g, "/");
   const featuresDirNorm = featuresDir.replace(/\\/g, "/");
 
-  // Match: <anything>/src/features/<featureName>/...
   const pattern = new RegExp(
     `(^|/)${featuresDirNorm.split("/").join("/")}[/]([^/]+)[/]`
   );
@@ -57,25 +56,26 @@ function resolveImportSource(
   importSource: string,
   currentDir: string
 ): string | null {
-  // Handle @/ alias
   if (importSource.startsWith("@/")) {
     return importSource;
   }
 
-  // Handle relative imports
   if (importSource.startsWith(".")) {
     let resolved = path.resolve(currentDir, importSource);
 
     resolved = resolved.replace(/\\/g, "/");
 
-    // Normalize to @/ format if it resolves to features
-    if (resolved.includes("/src/features/")) {
-      const match = /^(.*)\/src\/features\/([^/]+)(\/.*)?$/.exec(resolved);
+    for (const root of ["features", "views"] as const) {
+      if (resolved.includes(`/src/${root}/`)) {
+        const match = new RegExp(`^(.*)/src/${root}/([^/]+)(/.*)?$`).exec(
+          resolved
+        );
 
-      if (match?.[2]) {
-        const suffix = match[3] ?? "";
+        if (match?.[2]) {
+          const suffix = match[3] ?? "";
 
-        return `@/features/${match[2]}${suffix}`;
+          return `@/${root}/${match[2]}${suffix}`;
+        }
       }
     }
 
@@ -90,7 +90,8 @@ export const noCrossFeatureImportsRule = createRule<RuleOptions, MessageIds>({
   meta: {
     type: "problem",
     docs: {
-      description: "Prevent imports across different features",
+      description:
+        "Prevent imports across different features under src/features or src/views",
     },
     schema: [optionSchema],
     messages: {
@@ -113,43 +114,57 @@ export const noCrossFeatureImportsRule = createRule<RuleOptions, MessageIds>({
     );
 
     const filename = context.filename;
-    const currentFeature = extractFeatureName(filename, featuresDir);
+    const roots =
+      featuresDir === "src/features"
+        ? (["src/features", "src/views"] as const)
+        : ([featuresDir] as const);
 
-    // Only check files inside features
-    if (!currentFeature) {
+    let currentFeature: string | null = null;
+
+    for (const root of roots) {
+      currentFeature = extractFeatureName(filename, root);
+
+      if (currentFeature !== null) {
+        break;
+      }
+    }
+
+    if (currentFeature === null) {
       return {};
     }
 
     return {
       ImportDeclaration(node: TSESTree.ImportDeclaration) {
-        // If allowSiblingTypes is true and this is a type-only import, skip
         if (allowSiblingTypes && node.importKind === "type") {
           return;
         }
 
         const importSource = node.source.value;
 
-        // Check if this is a feature import
-        if (!importSource.includes("/features/")) {
+        if (
+          !importSource.includes("/features/") &&
+          !importSource.includes("/views/")
+        ) {
           return;
         }
 
         const currentDir = path.dirname(filename);
         const resolved = resolveImportSource(importSource, currentDir);
 
-        if (!resolved?.includes("/features/")) {
+        if (
+          resolved === null ||
+          (!resolved.includes("/features/") && !resolved.includes("/views/"))
+        ) {
           return;
         }
 
-        // Extract feature name from import
-        const match = /\/features\/([^/]+)/.exec(resolved);
-        const importedFeature = match ? match[1] : null;
+        const match = /\/(?:features|views)\/([^/]+)/.exec(resolved);
+        const importedFeature = match?.[1] ?? null;
 
-        if (!importedFeature || importedFeature === currentFeature) {
+        if (importedFeature === null || importedFeature === currentFeature) {
           return;
         }
 
-        // Check if this is in the allow list
         const allowKey = `${currentFeature}→${importedFeature}`;
 
         if (allowList.has(allowKey)) {

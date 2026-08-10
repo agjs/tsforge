@@ -485,7 +485,7 @@
     "good": ""
   },
   "tsforge/component-folder-structure": {
-    "what": "A component .tsx must live in src/views/<Feature>/components/ (feature component), src/components/ui/ (shared primitive), or be the view root src/views/<Feature>/index.tsx",
+    "what": "A component .tsx must live in src/views/<Feature>/components/ or src/features/<Feature>/components/ (feature component), src/components/ui/ (shared primitive), or be the view root src/views|features/<Feature>/index.tsx",
     "bad": "",
     "good": ""
   },
@@ -520,7 +520,7 @@
     "good": ""
   },
   "tsforge/no-cross-feature-imports": {
-    "what": "Prevent imports across different features",
+    "what": "Prevent imports across different features under src/features or src/views",
     "bad": "",
     "good": ""
   },
@@ -556,6 +556,11 @@
   },
   "tsforge/no-state-in-component-body": {
     "what": "State hooks must be in .hooks.ts files, not directly in components",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/one-component-per-file": {
+    "what": "One top-level React component per .tsx file — move extras to their own files",
     "bad": "",
     "good": ""
   },

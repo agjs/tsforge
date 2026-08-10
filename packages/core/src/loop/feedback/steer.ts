@@ -69,7 +69,10 @@ const PLAYBOOKS: Record<string, string> = {
   "component-file-purity":
     "A component file may hold ONLY imports + the component. Move the flagged " +
     "declaration out and import it back: types → `<feature>.types.ts`, constants → " +
-    "`<feature>.constants.ts` (`as const`), pure helpers → `src/lib/`.",
+    "`<feature>.constants.ts`, pure helpers → `src/lib/`. Use `as const` for label " +
+    "maps / literal unions. For RHF `defaultValues` with mutable arrays, type as " +
+    "the form input (`CreateXInput` / `z.infer<typeof schema>`) — bare `as const` " +
+    "makes arrays readonly and breaks `useForm`.",
   "no-derived-state-in-effect":
     "Effect + setState is for I/O (fetch, subscribe), not for deriving values. " +
     "If the next state is a pure function of props/state → compute in render or " +

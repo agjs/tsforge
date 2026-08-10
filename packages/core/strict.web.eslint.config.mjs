@@ -171,9 +171,10 @@ const webBundledRules = {
   "@typescript-eslint/no-explicit-any": "error",
   "@typescript-eslint/no-non-null-assertion": "error",
   "@typescript-eslint/no-inferrable-types": "error",
-  // ONE React component per .tsx file (boringstack). Enforced by the custom
-  // rule defined above — eslint-plugin-react/no-multi-comp crashes on ESLint 10
-  // and @eslint-react has no equivalent, so we ship our own.
+  // ONE React component per .tsx — also registered as
+  // `tsforge/one-component-per-file` in the react-component-architecture pack
+  // (STRUCTURE_RULES / opinionated). This boringstack-prefixed copy remains for
+  // the legacy strict.web config only; new gates use the pack rule.
   "boringstack/one-component-per-file": "error",
   "react/jsx-key": "error",
   "react/no-array-index-key": "error",

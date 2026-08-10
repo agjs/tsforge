@@ -2048,6 +2048,7 @@ describe("react-component-architecture pack", () => {
       "no-nested-component",
       "no-react-fc",
       "no-state-in-component-body",
+      "one-component-per-file",
     ]);
   });
 
@@ -2159,6 +2160,75 @@ describe("react-component-architecture pack", () => {
     );
 
     expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
+  });
+
+  test("component-folder-structure: kebab basename under src/pages/ is wrong location", () => {
+    const code = `export function FeedPage() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/pages/feed-page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
+  });
+
+  test("component-folder-structure: allows kebab feature component under views/.../components/", () => {
+    const code = `export function GamerCard() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/views/Feed/components/gamer-card.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("component-folder-structure: allows feature component under features/<F>/components/", () => {
+    const code = `export function ClanCard() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/features/Clans/components/ClanCard.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-state-in-component-body: kebab page with useState still reports", () => {
+    const code = `
+      import { useState } from "react";
+      export function FeedPage() {
+        const [n, setN] = useState(0);
+        return <div>{n}</div>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-state-in-component-body",
+      code,
+      "src/pages/feed-page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noStateInComponent");
+  });
+
+  test("one-component-per-file: second top-level component reports", () => {
+    const code = `
+      export function Alpha() { return <div />; }
+      export function Beta() { return <span />; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "one-component-per-file",
+      code,
+      "src/views/Feed/components/Alpha.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("multi");
   });
 
   test("component-file-purity: rule exists and is callable", () => {

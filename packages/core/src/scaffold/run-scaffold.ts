@@ -4,6 +4,7 @@ import { bootStack, type IBootDeps } from "./boot";
 import { answersToPlan } from "./plan";
 import { parseManifest } from "./boringstack-manifest";
 import { realRunner, realFs, realPoller, type IScaffoldFs } from "./io";
+import { seedReactGreenfieldOpinionated } from "../config/seed-greenfield-profile";
 import type {
   IArchetypeProfile,
   IScaffoldAnswers,
@@ -163,6 +164,12 @@ export async function runScaffold(
   const configured = await applyScaffold(dest, manifest, plan, deps);
   const gateCwd =
     profile.subPath === undefined ? dest : `${dest}/${profile.subPath}`;
+
+  // React UI scaffolds own the house layout — seed opinionated so STRUCTURE_RULES
+  // gate. Generic gate setup must never do this; only React-owned handoffs.
+  if (answers.archetype === "boringstack") {
+    await seedReactGreenfieldOpinionated(gateCwd);
+  }
 
   // maybeBoot reports its own "starting services" phase from the exact path that
   // boots, so the message can never diverge from whether a boot actually happens.

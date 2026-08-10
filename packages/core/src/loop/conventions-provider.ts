@@ -14,7 +14,7 @@ export interface IConventionProvider {
   /** Reactive PUSH: the guides for gate-error rules not yet seen this run (was
    *  `unseenGuidesForErrors`). Mutates `seen` to dedupe per run. */
   unseenForErrors(
-    errors: readonly { readonly rule?: string }[],
+    errors: readonly { readonly rule?: string; readonly message?: string }[],
     seen: Set<string>
   ): string[];
   /** On-demand PULL: the guide for one topic; null if the topic is unknown. */

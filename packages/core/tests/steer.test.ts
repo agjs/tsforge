@@ -35,6 +35,14 @@ describe("playbookFor", () => {
     expect(play).toContain("v is Status");
   });
 
+  test("component-file-purity playbook qualifies as const for RHF defaults", () => {
+    const play = playbookFor("component-file-purity");
+
+    expect(play).toContain("as const");
+    expect(play).toContain("CreateXInput");
+    expect(play).toContain("z.infer");
+  });
+
   test("unknown / undefined rules have no playbook", () => {
     expect(playbookFor("some-unknown-rule")).toBeNull();
     expect(playbookFor(undefined)).toBeNull();

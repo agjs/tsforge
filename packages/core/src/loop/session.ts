@@ -424,11 +424,14 @@ const PLAN_MODE_NOTE =
   "4. PLAN — once you know enough, call the `present_plan` tool with " +
   "{ goal, items: [{ title, detail?, files?, verify?, kind?, children? }] }. " +
   "Do NOT paste the JSON into chat — the harness renders it for the human. " +
-  "Decompose for execution: (a) order contracts/types → implementation → " +
-  "sibling tests (nest tests as children when useful); (b) one outcome per item " +
-  "with an actionable title (e.g. Create src/notes.ts — not vague prose); " +
-  "(c) when known, set `files` to 1–3 relative paths and split by module " +
-  "boundary if more; (d) prefer a parent feature + children over one mega-item; " +
+  "Decompose for execution: (a) GREENFIELD — prefer VERTICAL feature slices " +
+  "(scaffold + one visible proof → feature end-to-end → next feature → polish), " +
+  "NOT layer-first (types then mocks then api then pages); nest contracts/tests " +
+  "under the slice that needs them; (b) one shippable outcome per item with an " +
+  "actionable title (e.g. Feed page end-to-end — not vague prose); (c) `files` " +
+  "is a hint when known — a vertical slice may list more than 3 paths; do NOT " +
+  "split a working feature across items just to keep file counts small; " +
+  "(d) prefer a parent feature + children over one mega-item; " +
   "(e) NEVER a checklist item for 'run tests / lint / the gate' — the harness " +
   "gate validates each task_complete; `verify` is an optional hint only; " +
   "`kind` may be investigate|create|modify|test (advisory). " +
@@ -450,7 +453,7 @@ export const PLAN_APPROVED_NOTE =
   "task_complete RUNS THE GATE and only marks done when green — never invent " +
   "done, never mark an item complete while the gate is red. Finishing requires " +
   "BOTH gate green AND every checklist item done. Walk items in plan order " +
-  "(contracts before impl before tests). Implement now: task_focus the first " +
+  "(vertical slices in the order approved). Implement now: task_focus the first " +
   "open item, then emit the tool calls. Do not re-explore or restate the plan.";
 
 const CHECKLIST_CONTRACT_MARKER = "## Active plan checklist";

@@ -1,5 +1,8 @@
 import { test, expect, describe } from "bun:test";
-import { advisePlanDecomposition } from "../src/loop/worklist/plan-advice";
+import {
+  advisePlanDecomposition,
+  isLayerShapedTitle,
+} from "../src/loop/worklist/plan-advice";
 import type { IPlanDocument } from "../src/loop/worklist/checklist.types";
 
 function plan(
@@ -16,43 +19,90 @@ function plan(
   };
 }
 
+describe("isLayerShapedTitle", () => {
+  test("flags horizontal layer titles", () => {
+    expect(isLayerShapedTitle("Define types")).toBe(true);
+    expect(isLayerShapedTitle("Add mocks")).toBe(true);
+    expect(isLayerShapedTitle("Wire API layer")).toBe(true);
+    expect(isLayerShapedTitle("Create hooks")).toBe(true);
+  });
+
+  test("vertical feature titles are not layers", () => {
+    expect(isLayerShapedTitle("Feed page end-to-end")).toBe(false);
+    expect(isLayerShapedTitle("Clan detail")).toBe(false);
+    expect(isLayerShapedTitle("Scaffold + one visible card")).toBe(false);
+    expect(isLayerShapedTitle("Add gamer form")).toBe(false);
+  });
+});
+
 describe("advisePlanDecomposition", () => {
-  test("quiet when items are small and concrete", () => {
+  test("quiet when items are vertical and concrete", () => {
     expect(
       advisePlanDecomposition(
         plan(
           [
             {
               id: "a",
-              title: "Create src/notes.ts",
+              title: "Feed page end-to-end",
               status: "pending",
-              files: ["src/notes.ts"],
+              files: [
+                "src/data/seed.ts",
+                "src/mocks/handlers.ts",
+                "src/api/clans.ts",
+                "src/hooks/use-clans.ts",
+                "src/views/Feed/index.tsx",
+                "src/views/Feed/components/ClanCard.tsx",
+              ],
               kind: "create",
               children: [
                 {
                   id: "a1",
-                  title: "Create src/notes.test.ts",
+                  title: "Create src/api/clans.test.ts",
                   status: "pending",
                   kind: "test",
-                  files: ["src/notes.test.ts"],
+                  files: ["src/api/clans.test.ts"],
                 },
               ],
             },
           ],
-          "Build notes CLI"
+          "Build Clanboard"
         )
       )
     ).toEqual([]);
   });
 
-  test("warns on too many files and gate-chore titles", () => {
+  test("does not scold a vertical slice for listing more than 3 files", () => {
+    const warnings = advisePlanDecomposition(
+      plan(
+        [
+          {
+            id: "a",
+            title: "Feed page end-to-end",
+            status: "pending",
+            files: ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts"],
+          },
+          {
+            id: "b",
+            title: "Detail page",
+            status: "pending",
+            files: ["src/views/Detail/index.tsx"],
+          },
+        ],
+        "Build Clanboard"
+      )
+    );
+
+    expect(warnings.some((w) => w.includes("files"))).toBe(false);
+  });
+
+  test("warns on gate-chore titles", () => {
     const warnings = advisePlanDecomposition(
       plan([
         {
           id: "a",
           title: "Run tests and lint",
           status: "pending",
-          files: ["a.ts", "b.ts", "c.ts", "d.ts"],
+          files: ["a.ts"],
         },
         {
           id: "b",
@@ -63,8 +113,44 @@ describe("advisePlanDecomposition", () => {
       ])
     );
 
-    expect(warnings.some((w) => w.includes("4 files"))).toBe(true);
     expect(warnings.some((w) => w.includes("gate chore"))).toBe(true);
+  });
+
+  test("warns on a layer-first types/mocks/api plan", () => {
+    const warnings = advisePlanDecomposition(
+      plan(
+        [
+          {
+            id: "a",
+            title: "Define types",
+            status: "pending",
+            files: ["src/types/clan.ts"],
+          },
+          {
+            id: "b",
+            title: "Add mocks",
+            status: "pending",
+            files: ["src/mocks/handlers.ts"],
+          },
+          {
+            id: "c",
+            title: "Wire API layer",
+            status: "pending",
+            files: ["src/api/clans.ts"],
+          },
+          {
+            id: "d",
+            title: "Create hooks",
+            status: "pending",
+            files: ["src/hooks/use-clans.ts"],
+          },
+        ],
+        "Build Clanboard"
+      )
+    );
+
+    expect(warnings.some((w) => w.includes("layer-first"))).toBe(true);
+    expect(warnings.some((w) => w.includes("vertical"))).toBe(true);
   });
 
   test("warns on a lone mega-item for a multi-part goal", () => {

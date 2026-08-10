@@ -43,6 +43,7 @@ import {
   type INearGreenCheckpoint,
   type INearGreenSample,
 } from "./near-green-checkpoint";
+import { formPurityRollbackAppendix } from "./near-green-form-purity";
 // The SHARED rollback substrate (aliased — turn.ts has its own polish-only `snapshotFiles`
 // returning a plain Map). `snapshotFilesForRollback` captures an IFileSnapshot and
 // `restoreFiles` rewrites edited files AND tombstones files a spray created (incl.
@@ -2527,6 +2528,8 @@ export async function rollbackNearGreen(
           .join("\n")}`
       : "";
 
+  const formPurityNote = formPurityRollbackAppendix(cp.errors, introduced);
+
   ctx.messages.push({
     role: "user",
     content:
@@ -2534,7 +2537,8 @@ export async function rollbackNearGreen(
       `to ${String(sprayCount)} error(s) — so I reverted those edits back to your best ` +
       `state (${String(cp.errorCount)} error(s) left). Do NOT rewrite files or start over. ` +
       `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}` +
-      introducedNote,
+      introducedNote +
+      formPurityNote,
   });
 }
 
