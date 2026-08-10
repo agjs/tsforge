@@ -271,7 +271,14 @@ function userCardPadRow(color: boolean, columns: number): string {
   return paint(`│${" ".repeat(inner)}│`, STYLE.cyan, color);
 }
 
-/** A USER turn: closed cyan card — same geometry as AGENT (`┐` / `│…│` / `└┘`). */
+/**
+ * A USER turn: closed cyan card — same geometry as AGENT (`┐` / `│…│` / `└┘`).
+ *
+ * Wrap plain text first, then paint each closed row as one SGR span. Painting
+ * before the rail used to open cyan on the first visual line only: each
+ * soft-wrap closes with `paint(│)` which emits RESET, so continuation rows
+ * fell back to the default (gray) foreground mid-message.
+ */
 export function userBubble(
   content: string,
   color: boolean,
@@ -281,16 +288,17 @@ export function userBubble(
   const badge = filledRoleBadge("USER", color);
   const top =
     badge + roleHairline(cols, STYLE.cyan, color, "┐", roleBadgeCols(badge));
+  // Plain rails while wrapping — color is applied per completed row below.
   const rail = makeAgentRail(
-    roleGutter("│", STYLE.cyan, color),
+    "│" + " ".repeat(ROLE_INNER_PAD),
     () => Math.max(1, cols - ROLE_BOX_CHROME_COLS),
-    paint("│", STYLE.cyan, color)
+    "│"
   );
-  const painted = content
+  const wrapped = `${rail.feed(content)}${rail.flush()}`.replace(/\n$/, "");
+  const body = wrapped
     .split("\n")
-    .map((line) => paint(line, STYLE.cyan + STYLE.bold, color))
+    .map((row) => paint(stripSgr(row), STYLE.cyan + STYLE.bold, color))
     .join("\n");
-  const body = `${rail.feed(painted)}${rail.flush()}`.replace(/\n$/, "");
   const padRow = userCardPadRow(color, cols);
   const bottom = paint(
     `└${"─".repeat(Math.max(0, cols - 2))}┘`,
