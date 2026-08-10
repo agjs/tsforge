@@ -365,9 +365,10 @@ function handleReadonlyRetry(args: {
   args.messages.push({
     role: "user",
     content:
-      "STOP READING. You already have enough context — further reads will be rejected. " +
-      "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
-      "with real file contents NOW. Do not call read, run, or search.",
+      "STOP READING. You already have enough context — further survey reads will be rejected. " +
+      "Your ONLY allowed tools now are create / edit / edit_lines / check. Call `check` if you " +
+      "need the current gate errors, then emit ONE write with real file contents. Do not call " +
+      "read, run, or search.",
   });
 
   return {

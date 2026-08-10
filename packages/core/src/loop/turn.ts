@@ -459,6 +459,9 @@ export interface ILoopState {
    *  each error has persisted. Drives the primary `samePersist` no-progress stop. */
   errorAge: Map<string, number>;
   lastGateCount: number;
+  /** Gate error count from the previous settle (before lastGateCount was updated).
+   *  Feeds progress-aware steer headers when the count dropped but a block remains. */
+  priorGateCount?: number;
   edits: number;
   regressions: number;
   /** Count of TTSR rule interrupts this task. Hard cap at 3 to prevent loops. */
@@ -1782,7 +1785,8 @@ function applyRungLogic(
   rungLevel: number,
   gateErrors: readonly IErrorItem[],
   reason: string,
-  blockFp: string
+  blockFp: string,
+  progress?: { readonly current: number; readonly prior: number }
 ): void {
   const webEnabled = flags.webTools();
 
@@ -1799,7 +1803,8 @@ function applyRungLogic(
       gateErrors,
       reason,
       webEnabled,
-      true // diagnosisOnly
+      true, // diagnosisOnly
+      progress
     );
     // Phase A does NOT set pendingRung — it's recorded tried only after Phase B
 
@@ -1829,7 +1834,9 @@ function applyRungLogic(
     rungLevel,
     gateErrors,
     reason,
-    webEnabled
+    webEnabled,
+    false,
+    progress
   );
 }
 
@@ -2051,7 +2058,10 @@ export function checkStuck(
   // Set up rung-specific logic: R1 diagnosis-only, R2 model overrides, R3 narrow.
   // Pass the sticky block key so a rung's pendingBlockFingerprint matches what the
   // recording hook will compare against next cycle.
-  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockKey);
+  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockKey, {
+    current: gateErrors.length,
+    prior: state.priorGateCount ?? state.lastGateCount,
+  });
 
   // At the TOP rung (change-strategy), also RESET the conversation: the flailing
   // history anchors the model to the dead-end approach it's been repeating. Pruning
@@ -2782,6 +2792,7 @@ export async function settleGate(
     state.regressions += 1;
   }
 
+  state.priorGateCount = state.lastGateCount;
   state.lastGateCount = curr;
 
   // Harness-owned attribution from the CURRENT gate (events optional — mid-run

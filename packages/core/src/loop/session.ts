@@ -594,9 +594,10 @@ const REPETITION_RESTEER =
 
 /** Pushed on a read-only spin in a BUILD (gated) session — demand a concrete edit. */
 const READONLY_RESTEER_BUILD =
-  "STOP READING. You already have enough context — further reads will be rejected. " +
-  "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
-  "with real file contents NOW. Do not call read, run, or search.";
+  "STOP READING. You already have enough context — further survey reads will be rejected. " +
+  "Your ONLY allowed tools now are create / edit / edit_lines / check. Call `check` if you " +
+  "need the current gate errors, then emit ONE write with real file contents. Do not call " +
+  "read, run, or search.";
 
 /** Pushed on a read-only spin in a CONVERSATIONAL (no-gate) session — demand an
  *  answer (there is nothing to edit, so the failure is never wrapping up). */
@@ -693,15 +694,24 @@ const MALFORMED_CALL_NUDGE =
 const TASK_CONTRACT_MARKER = "## Current task contract";
 
 /** The dynamic contract: what's editable right now + how acceptance is checked. */
-function taskContract(files: string[], accept: string | undefined): string {
+function taskContract(
+  files: string[],
+  accept: string | undefined,
+  offerCheck = false
+): string {
   const wholeRepo = files.length === 0 || files.includes("**/*");
   const scope = wholeRepo
     ? "Scope: you may read, run, and edit any file in the workspace."
     : `Scope: edit ONLY these paths — ${files.join(", ")}. Every other file is READ-ONLY; never edit it.`;
-  const check =
-    accept !== undefined && accept.length > 0
-      ? `Check: \`${summarizeGateCommand(accept)}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`
-      : "";
+  let check = "";
+
+  if (accept !== undefined && accept.length > 0) {
+    const label = summarizeGateCommand(accept);
+
+    check = offerCheck
+      ? `Check: \`${label}\` — call the \`check\` tool any time for the full structured error set; the harness also runs it when you stop calling tools. Fix failures until it passes. Do NOT run the gate through the shell.`
+      : `Check: \`${label}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`;
+  }
 
   return [TASK_CONTRACT_MARKER, scope, check]
     .filter((s) => s.length > 0)
@@ -715,6 +725,11 @@ function taskContract(files: string[], accept: string | undefined): string {
  *  advertised tool list in lockstep is the flag↔prompt invariant. */
 function conventionsOffered(cfg: ISessionConfig): boolean {
   return cfg.pullConventions === true && cfg.conventions !== undefined;
+}
+
+/** `check` is live only when the backend opts in AND the prompt is drive-to-green. */
+function isOfferCheckActive(cfg: ISessionConfig): boolean {
+  return cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 }
 
 /** The STATIC system policy (identity, tools, conventions, workspace map, guidance) +
@@ -759,7 +774,11 @@ function systemPrompt(
     ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
     : "";
 
-  const contract = taskContract(cfg.files ?? [], cfg.accept);
+  const contract = taskContract(
+    cfg.files ?? [],
+    cfg.accept,
+    isOfferCheckActive(cfg)
+  );
 
   return `${base}\n\n${tdd}${conv}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
@@ -835,14 +854,17 @@ function buildSyntheticHandoff(
 }
 
 /** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`. */
-function rebuildTaskContract(ctx: Pick<ILoopCtx, "messages" | "task">): void {
+function rebuildTaskContract(
+  ctx: Pick<ILoopCtx, "messages" | "task">,
+  offerCheck = false
+): void {
   const system = ctx.messages[0];
 
   if (system?.role !== "system") {
     return;
   }
 
-  const fresh = taskContract(ctx.task.files, ctx.task.accept);
+  const fresh = taskContract(ctx.task.files, ctx.task.accept, offerCheck);
   const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
 
   system.content =
@@ -861,7 +883,8 @@ function rebuildTaskContract(ctx: Pick<ILoopCtx, "messages" | "task">): void {
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
-  parse: ErrorParser | undefined
+  parse: ErrorParser | undefined,
+  offerCheck = false
 ): { runner: IGate; state: { active: boolean } } {
   const state = { active: true };
   let prevPacks: string[] | null = null;
@@ -879,7 +902,7 @@ function makeAutoGateRunner(
 
         ctx.task.accept = r.command;
         ctx.gate.stackProfile = r.stackProfile;
-        rebuildTaskContract(ctx);
+        rebuildTaskContract(ctx, offerCheck);
 
         if (packsGrew(prevPacks, packs) && prevPacks !== null) {
           const activated = newlyActivatedPacks(prevPacks, packs);
@@ -973,6 +996,9 @@ export class Session {
   private readonly sendEvents: ILoopEvent[] = [];
   /** After a readonly-spin re-steer: next askModel offers only create/edit/edit_lines. */
   private forceWriteTools = false;
+  /** Live `check` tool is offered (drive-to-green + cfg.offerCheck) — keeps the
+   *  task-contract Check: line aligned with toolsFor when the auto-gate refreshes. */
+  private readonly offerCheckActive: boolean;
 
   private constructor(
     cfg: ISessionConfig,
@@ -1006,9 +1032,9 @@ export class Session {
     // not advertise check in a chat session whose prompt would omit + contradict it.
     // (`resumeMessages` keeps the persisted prompt in lockstep with this on resume, so
     // the advertised tool set and the prompt can never disagree in either direction.)
-    const offerCheck =
-      cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
+    const offerCheck = isOfferCheckActive(cfg);
 
+    this.offerCheckActive = offerCheck;
     // pull_conventions is offered only when the capability is on AND a provider is
     // actually injected — advertising a knowledge tool with no knowledge base would
     // promise a topic listing the dispatch can't deliver ("no convention library"),
@@ -1243,7 +1269,12 @@ export class Session {
     let autoGateState: { active: boolean } | undefined;
 
     if (cfg.gate === undefined && cfg.autoGate !== undefined) {
-      const auto = makeAutoGateRunner(ctx, cfg.autoGate, cfg.parse);
+      const auto = makeAutoGateRunner(
+        ctx,
+        cfg.autoGate,
+        cfg.parse,
+        isOfferCheckActive(cfg)
+      );
 
       ctx.gate.runner = auto.runner;
       autoGateState = auto.state;
@@ -1684,7 +1715,7 @@ export class Session {
    *  `ctx.task`, replacing the old block in place. The static policy above the
    *  marker is untouched. No system message yet (shouldn't happen) ⇒ no-op. */
   private refreshTaskContract(): void {
-    rebuildTaskContract(this.ctx);
+    rebuildTaskContract(this.ctx, this.offerCheckActive);
   }
 
   /** Update the context window mid-session (e.g. after a `/model` hot-swap to a

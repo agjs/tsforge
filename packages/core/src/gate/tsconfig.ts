@@ -59,6 +59,13 @@ const STRICT_TSCONFIG_OVERLAY = `{
 const GATE_TSCONFIG_DIR = ".tsforge";
 const GATE_TSCONFIG_FILE = "tsconfig.gate.json";
 
+/**
+ * Model-facing one-liner for the gate TypeScript floor (must stay aligned with
+ * STRICT_TSCONFIG / OVERLAY — both set strict + noUncheckedIndexedAccess).
+ */
+export const GATE_TYPECHECK_IDENTITY =
+  "Typecheck: strict + noUncheckedIndexedAccess (gate tsconfig — stricter than a loose project tsconfig)";
+
 /** The project's own TypeScript config (the model-editable one). */
 export const PROJECT_TSCONFIG = "tsconfig.json";
 /** Persistent incremental-typecheck cache (in .tsforge/, git-ignored). Reused

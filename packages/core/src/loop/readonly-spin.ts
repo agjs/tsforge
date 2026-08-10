@@ -19,11 +19,14 @@ export const WRITE_ATTEMPT_TOOLS: ReadonlySet<string> = new Set([
   TOOL_NAME.addDependency,
 ]);
 
-/** Offered after a readonly re-steer — model cannot pick `read` again. */
+/** Offered after a readonly re-steer — model cannot pick survey reads again.
+ *  Includes `check` so it can re-gate without shelling out to tsc (DeepSeek
+ *  dogfood: STOP READING left no way to verify mid-force-write). */
 export const WRITE_FORCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_NAME.create,
   TOOL_NAME.edit,
   TOOL_NAME.editLines,
+  TOOL_NAME.check,
 ]);
 
 /** Restrict an offered tool list to write-force names (post-readonly-resteer). */

@@ -3,6 +3,8 @@
  * the auto-gate shell pipeline (env vars, absolute tsc paths, eslint JSON flags).
  */
 
+import { GATE_TYPECHECK_IDENTITY } from "../gate/tsconfig";
+
 /** Stable, sorted copy for pack-set comparison / display. */
 export function sortedPacks(packs: readonly string[]): string[] {
   return [...packs].sort();
@@ -85,8 +87,17 @@ export function formatGateIdentity(
 ): string {
   const cmd = summarizeGateCommand(command);
   const packList = packs.length > 0 ? sortedPacks(packs).join(", ") : "(none)";
+  const lines = [`Check: ${cmd}`, `Packs: ${packList}`];
+  const usesGateTsconfig =
+    command.includes("tsconfig.gate") ||
+    command.includes("TSFORGE_PACKS=") ||
+    cmd.startsWith("auto gate");
 
-  return `Check: ${cmd}\nPacks: ${packList}`;
+  if (usesGateTsconfig) {
+    lines.push(GATE_TYPECHECK_IDENTITY);
+  }
+
+  return lines.join("\n");
 }
 
 /** Harness inject when stack detection activates more packs mid-session. */

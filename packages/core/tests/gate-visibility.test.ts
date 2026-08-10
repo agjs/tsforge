@@ -48,6 +48,18 @@ describe("gate-visibility helpers", () => {
     expect(text).toBe("Check: bun test\nPacks: code-flow, env-access");
   });
 
+  test("formatGateIdentity surfaces gate tsconfig floor for auto-gate shells", () => {
+    const text = formatGateIdentity(
+      "TSFORGE_PACKS='code-flow' tsc -p .tsforge/tsconfig.gate.json && eslint .",
+      ["code-flow"]
+    );
+
+    expect(text).toContain("Check: auto gate");
+    expect(text).toContain(
+      "Typecheck: strict + noUncheckedIndexedAccess (gate tsconfig"
+    );
+  });
+
   test("formatGateIdentity never embeds TSFORGE_PACKS shell walls", () => {
     const text = formatGateIdentity(
       "TSFORGE_PACKS='code-flow' /opt/tsc --noEmit && bunx eslint .",

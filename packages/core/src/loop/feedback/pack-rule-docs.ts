@@ -57,8 +57,8 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     fixIsDirective: true,
   },
   "tsforge/component-file-purity": {
-    what: "A component .tsx contains only imports and the component itself \u2014 types go to <feature>.types.ts, constants to <feature>.constants.ts, helpers to src/lib",
-    bad: '\n      const STAGE_LABEL = { lead: "Lead" };\n      export function DealsTable() { return <div>{STAGE_LABEL.lead}</div>; }\n    ',
+    what: "A component .tsx holds ONLY imports + the component. Inline types, constants, and helpers fail the gate — move types to <feature>.types.ts, constants to <feature>.constants.ts (`as const`), pure helpers to src/lib/, then import them back.",
+    bad: '\n      const STAGE_LABEL = { lead: "Lead" };\n      type Stage = keyof typeof STAGE_LABEL;\n      export function DealsTable() { return <div>{STAGE_LABEL.lead}</div>; }\n    ',
     good: '\n      import { Table } from "@/components/ui/table";\n      import { dealColumns } from "../dashboard.constants";\n      import type { IDeal } from "../dashboard.types";\n\n      export function DealsTable({ deals }: { deals: readonly IDeal[] }) {\n        return <Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />;\n      }\n    ',
     exampleFile: "src/views/Dashboard/components/DealsTable.tsx",
   },
@@ -167,7 +167,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: '\n      const app = new Elysia()\n        .decorate("db", createDb())\n        .decorate("cache", createCache());\n    ',
   },
   "tsforge/no-derived-state-in-effect": {
-    what: "State set from an effect renders twice and can tear. If the value can be computed from props or other state, derive it during render \u2014 `useMemo` when the computation is expensive.",
+    what: "Decide: is this I/O or derived data? OK — useEffect that fetches/subscribes then setState from the async result (TDD data-loading). NOT OK — syncing props into state or computing a value from other state/props inside an effect (double-render / tear). For derived values use render or useMemo; for async I/O keep the effect.",
     bad: "export function Total({ items }: { items: number[] }) {\n  const [total, setTotal] = useState(0);\n\n  useEffect(() => {\n    setTotal(items.reduce((a, b) => a + b, 0));\n  }, [items]);\n\n  return <p>{total}</p>;\n}",
     good: "export function Total({ items }: { items: number[] }) {\n  const total = useMemo(() => items.reduce((a, b) => a + b, 0), [items]);\n\n  return <p>{total}</p>;\n}",
     exampleFile: "src/Counter.tsx",
