@@ -15,6 +15,9 @@ type RuleOptions = [NoDirectProcessEnvOptions];
 type MessageIds = "directProcessEnv";
 
 const DEFAULT_ALLOWED_FILES: readonly string[] = [
+  // Singleton file AND folder form — `env/**` alone misses `env.ts` (Reservely
+  // dogfood: gate flagged process.env inside the one file that must read it).
+  "src/config/env.ts",
   "src/config/env/**",
   "**/*.config.{ts,js,mjs}",
   "scripts/**",

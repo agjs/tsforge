@@ -385,6 +385,17 @@ describe("env-access: no-direct-process-env", () => {
     expect(messages.map((m) => m.messageId)).toContain("directProcessEnv");
   });
 
+  test("allows process.env in src/config/env.ts (singleton file, not only env/**)", () => {
+    const messages = lint(
+      "env-access",
+      "no-direct-process-env",
+      'export const env = { port: Number(process.env["PORT"]) };',
+      "src/config/env.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
   test("allows process.env in src/config/env/** allowlisted files", () => {
     const messages = lint(
       "env-access",
