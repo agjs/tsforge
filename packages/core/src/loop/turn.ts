@@ -335,6 +335,8 @@ export interface ILoopCtxTool {
    *  (`injectFeedback`). Absent ⇒ no stack conventions. Keeps stack CONTENT out of
    *  the core loop. */
   conventions?: IConventionProvider;
+  /** Topic ids successfully pulled this session (pull-before-first-write). */
+  pulledTopics?: Set<string>;
   /** Cancellation for the in-flight turn — threaded into tool `run` commands and
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */

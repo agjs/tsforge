@@ -345,4 +345,20 @@ describe("attributionLeadIn", () => {
       })
     ).toContain("do not cast");
   });
+
+  test("hallucinated-import steers install-first for npm packages", () => {
+    const line = attributionLeadIn({
+      failureClass: FAILURE_CLASS.hallucinatedImport,
+      detail: "TS2307",
+    });
+
+    expect(line).toContain("hallucinated-import");
+    expect(line).toContain("install");
+    expect(line).toContain("@types/*");
+    expect(line).toContain("project-relative");
+    // Must not be the old "create the module" steer alone (Shiftboard: react/vite missing).
+    expect(line).not.toMatch(
+      /^Harness attribution: hallucinated-import \(TS2307\) — create the missing module/u
+    );
+  });
 });

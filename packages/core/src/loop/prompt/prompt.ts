@@ -107,7 +107,7 @@ export function buildDriveToGreenSystem(
   // check / pull_conventions guidance below it.
   const extraTools = [
     offerConventions
-      ? "`pull_conventions` (re-fetch a stack convention guide on demand — the core guides are already in this prompt)"
+      ? "`pull_conventions` (REQUIRED before first create/edit of an untouched path — pull only topics for that path, not the whole catalog; full guides are not in this prompt)"
       : "",
     offerCheck
       ? "`check` (run the gate now, get your whole structured error set)"

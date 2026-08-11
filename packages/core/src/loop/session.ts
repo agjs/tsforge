@@ -38,6 +38,7 @@ import {
 } from "../validate";
 import { ruleHelp } from "./feedback";
 import type { IConventionProvider } from "./conventions-provider";
+import { houseConventionProvider } from "./conventions";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -224,13 +225,13 @@ export interface ISessionConfig {
   profile?: ProfileId;
   /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
-   *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
+   *  patterns on demand. Drive-to-green sessions without a provider get the house
+   *  library injected automatically. Decoupled from any flag: chat leaves it off. */
   pullConventions?: boolean;
-  /** The build ADAPTER's convention library, injected as a generic provider (see
-   *  `IConventionProvider`), so the core no longer imports stack-specific CONTENT. ALL
-   *  three delivery paths draw from it: the FRONT-LOADED guides in the system prompt
-   *  (gated with `pullConventions`), the reactive PUSH, and the `pull_conventions` tool
-   *  (both via `ILoopCtx.tool.conventions`). Absent ⇒ no stack conventions. */
+  /** The build ADAPTER's (or house) convention library, injected as a generic provider
+   *  (see `IConventionProvider`). Delivery: short pull contract in the system prompt,
+   *  full bodies via `pull_conventions` + reactive PUSH after red. Absent ⇒ no
+   *  stack conventions (unless drive-to-green defaults to house). */
   conventions?: IConventionProvider;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
@@ -731,6 +732,34 @@ function conventionsOffered(cfg: ISessionConfig): boolean {
   return cfg.pullConventions === true && cfg.conventions !== undefined;
 }
 
+/**
+ * Drive-to-green without an adapter provider gets the house convention library
+ * (pull-before-first-write). Explicit `pullConventions: false` opts out. Chat /
+ * ungated stays off. BoringStack (and other adapters) keep their injected compose.
+ */
+function withDefaultHouseConventions(cfg: ISessionConfig): ISessionConfig {
+  if (cfg.executionMode !== "drive-to-green") {
+    return cfg;
+  }
+
+  // Explicit opt-out wins (chat-like gated runs that still use drive-to-green framing).
+  if (cfg.pullConventions === false) {
+    return cfg;
+  }
+
+  if (cfg.conventions !== undefined) {
+    return cfg.pullConventions === true
+      ? cfg
+      : { ...cfg, pullConventions: true };
+  }
+
+  return {
+    ...cfg,
+    pullConventions: true,
+    conventions: houseConventionProvider,
+  };
+}
+
 /** `check` is live only when the backend opts in AND the prompt is drive-to-green. */
 function isOfferCheckActive(cfg: ISessionConfig): boolean {
   return cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
@@ -769,11 +798,8 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
-  // WS-A1: front-load the actual stack convention GUIDES (not just a topic index) when the
-  // backend ships a convention library (pullConventions). The compliant pattern for every core
-  // topic is in the prompt UP FRONT, so the model writes it right the FIRST time — the Bucket-1
-  // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
-  // for reinforcement and the long tail, not the primary teaching.
+  // Short pull-before-first-write contract + topic names only — never full guide bodies.
+  // Full text arrives via `pull_conventions` (and optional PUSH after a red).
   const conv = conventionsOffered(cfg)
     ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
     : "";
@@ -1139,7 +1165,8 @@ export class Session {
   }
 
   /** Build a session (async because it spins up the TS LanguageService). */
-  static async create(cfg: ISessionConfig): Promise<Session> {
+  static async create(rawCfg: ISessionConfig): Promise<Session> {
+    const cfg = withDefaultHouseConventions(rawCfg);
     const task: ITask = {
       id: SESSION_ID,
       accept: cfg.accept ?? "",
@@ -1249,7 +1276,10 @@ export class Session {
         // hallucinated pull_conventions call when the feature is off finds no provider
         // (returns "not configured"), never a withheld-capability that still executes.
         ...(cfg.pullConventions === true && cfg.conventions !== undefined
-          ? { conventions: cfg.conventions }
+          ? {
+              conventions: cfg.conventions,
+              pulledTopics: new Set<string>(),
+            }
           : {}),
       },
       gate: {

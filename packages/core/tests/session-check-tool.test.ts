@@ -215,6 +215,9 @@ test("check goes RED on a META_RULE error even when the gate command is GREEN (t
       files: ["**/*"],
       executionMode: "drive-to-green",
       offerCheck: true,
+      // This test isolates check×META_RULES — opt out of pull-before-write so the
+      // create is not blocked before the meta-rule can fire on the written file.
+      pullConventions: false,
       // Gate COMMAND is green — only the meta-rule (no-eslint-disable-comments,
       // change-scoped to the file the model just wrote) makes it red.
       gate: fixedGate(GREEN),

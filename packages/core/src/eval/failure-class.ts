@@ -344,7 +344,9 @@ const ATTRIBUTION_GUIDANCE: Record<FailureClass, string> = {
   [FAILURE_CLASS.typeError]:
     "fix types with guards/narrowing; do not cast around the error",
   [FAILURE_CLASS.hallucinatedImport]:
-    "create the missing module or fix the import path; do not invent packages",
+    "if the missing module is an npm package, install it (and `@types/*` if it ships no types) " +
+    "before more feature code; only create a local file when the import is a project-relative " +
+    "path — do not invent packages",
   [FAILURE_CLASS.editReject]:
     "fix the path/scope of the write; do not retry the same rejected target",
   [FAILURE_CLASS.toolMalformed]:

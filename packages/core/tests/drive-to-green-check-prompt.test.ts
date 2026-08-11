@@ -138,6 +138,7 @@ test("the Tools inventory lists check and pull_conventions when they are offered
 
   expect(both).toContain("`check` (run the gate now");
   expect(both).toContain("`pull_conventions`");
+  expect(both).toContain("not the whole catalog");
 
   // Neither leaks into the inventory when not offered.
   const neither = buildDriveToGreenSystem(DEFAULT_CONVENTIONS, false, false);
@@ -224,7 +225,7 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
 
     await session.send("continue");
 
-    expect(cap.system).toContain("HOW THIS STACK WRITES CODE");
+    expect(cap.system).toContain("pull-before-first-write");
     expect(cap.system).not.toContain("OLD PROMPT");
     expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
   } finally {

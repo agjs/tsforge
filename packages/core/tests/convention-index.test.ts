@@ -44,11 +44,10 @@ const fakeConventions = (guides: string): IConventionProvider => ({
   topics: () => [],
 });
 
-// WS-A1: front-load the actual convention GUIDES (the compliant patterns), not merely a
-// topic index — so the model writes it right the FIRST time (Bucket 1) instead of pulling
-// only reactively after the gate rejects it.
+// Pull-before-first-write: system prompt carries the short pull contract (+ topic
+// names); full guide bodies stay in pull_conventions / reactive PUSH.
 
-test("buildConventionGuides front-loads the actual guide CONTENT for every topic", () => {
+test("buildConventionGuides joins the actual guide CONTENT for every topic", () => {
   const guides = buildConventionGuides();
 
   // The full compliant pattern for each topic is present — not just its name.
@@ -67,15 +66,15 @@ test("buildConventionGuides carries the concrete patterns that prevent the trace
   expect(guides).toContain("hooks.ts"); // state lives in hooks, not the body
 });
 
-test("buildConventionGuides tells the model to write it right BEFORE the gate", () => {
+test("buildConventionGuides is for pull/push content — not the system-prompt wall", () => {
   const guides = buildConventionGuides();
 
-  expect(guides).toContain("BEFORE you write");
-  expect(guides).toContain("FIRST");
+  expect(guides).toContain("HOW THIS STACK WRITES CODE");
+  expect(guides).toContain("full guide bodies");
 });
 
-// Behavioral: the guides reach the model's SYSTEM prompt only when the backend ships a
-// convention library (pullConventions), so plain sessions stay minimal.
+// Behavioral: the SHORT pull contract reaches the system prompt when conventions
+// are offered — never the full guide wall.
 function systemCapturingProvider(cap: { system: string }): IProvider {
   return {
     async complete(messages: IChatMessage[]) {
@@ -88,7 +87,7 @@ function systemCapturingProvider(cap: { system: string }): IProvider {
   };
 }
 
-test("the convention guides are in the system prompt with pullConventions, absent without", async () => {
+test("the pull contract is in the system prompt with pullConventions, not full guides", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-"));
 
   try {
@@ -104,30 +103,53 @@ test("the convention guides are in the system prompt with pullConventions, absen
 
     await on.send("go");
 
-    expect(withConv.system).toContain("HOW THIS STACK WRITES CODE");
-    // The actual pattern is inline, not just a menu entry.
-    expect(withConv.system).toContain("@/lib/api/client");
+    expect(withConv.system).toContain("pull-before-first-write");
+    expect(withConv.system).toContain("data-fetching");
+    // Full bodies must NOT be dumped into the system prompt.
+    expect(withConv.system).not.toContain("@/lib/api/client");
+    expect(withConv.system).not.toContain("FILE PURITY (boringstack)");
 
-    const noConv = { system: "" };
-    const off = await Session.create({
-      provider: systemCapturingProvider(noConv),
+    const houseOnly = { system: "" };
+    const house = await Session.create({
+      provider: systemCapturingProvider(houseOnly),
       cwd: dir,
       files: ["**/*"],
       executionMode: "drive-to-green",
     });
 
-    await off.send("go");
+    await house.send("go");
 
-    expect(noConv.system).not.toContain("HOW THIS STACK WRITES CODE");
+    // Drive-to-green defaults to house conventions.
+    expect(houseOnly.system).toContain("pull-before-first-write");
+    expect(houseOnly.system).toContain("component-anatomy");
+    expect(houseOnly.system).not.toContain("data-fetching");
+    expect(houseOnly.system).not.toContain("@/lib/api/client");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("front-loaded guides come from the INJECTED provider, not a static import", async () => {
-  // Locks the WS1a seam: with pullConventions on but NO provider injected, the guides must be
-  // ABSENT. A revert to session.ts importing buildConventionGuides directly would re-inject the
-  // BoringStack text here and fail — proving the core no longer sources the content itself.
+test("chat mode does not inject house conventions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-chat-"));
+
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "chat",
+    });
+
+    await s.send("go");
+
+    expect(cap.system).not.toContain("pull-before-first-write");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("pullConventions true without provider still gets house (not BoringStack bodies)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-seam-"));
 
   try {
@@ -142,6 +164,7 @@ test("front-loaded guides come from the INJECTED provider, not a static import",
 
     await s.send("go");
 
+    expect(cap.system).toContain("pull-before-first-write");
     expect(cap.system).not.toContain("HOW THIS STACK WRITES CODE");
     expect(cap.system).not.toContain("@/lib/api/client");
   } finally {
@@ -149,7 +172,7 @@ test("front-loaded guides come from the INJECTED provider, not a static import",
   }
 });
 
-test("the INJECTED provider's guide content reaches the prompt — not a static import", async () => {
+test("the INJECTED provider's buildGuides reaches the prompt — not a static import", async () => {
   // The decisive seam test: a FAKE provider returns a sentinel. If session.ts sourced the guides
   // itself (static import) the sentinel would be ABSENT and the BoringStack text PRESENT. So we
   // assert the sentinel IS present and the real BoringStack lib is NOT — content is injected.
@@ -169,15 +192,13 @@ test("the INJECTED provider's guide content reaches the prompt — not a static 
     await s.send("go");
 
     expect(cap.system).toContain("FAKE_GUIDE_SENTINEL_9Z");
-    expect(cap.system).not.toContain("HOW THIS STACK WRITES CODE");
+    expect(cap.system).not.toContain("@/lib/api/client");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("the pullConventions gate still governs — a provider WITHOUT the flag does not front-load", async () => {
-  // Independently verifies the OTHER half: provider present, but pullConventions omitted ⇒ no
-  // front-load. Guards against a regression to gating on provider-presence alone.
+test("explicit pullConventions false opts out even with a provider", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-gate-"));
 
   try {
@@ -187,6 +208,7 @@ test("the pullConventions gate still governs — a provider WITHOUT the flag doe
       cwd: dir,
       files: ["**/*"],
       executionMode: "drive-to-green",
+      pullConventions: false,
       conventions: fakeConventions("FAKE_GUIDE_SENTINEL_9Z"),
     });
 
@@ -379,10 +401,9 @@ test("Session advertises pull_conventions with the provider's topics as the enum
   }
 });
 
-test("Session does NOT advertise pull_conventions when the capability is on but no provider is injected", async () => {
-  // A knowledge tool with no knowledge base is incoherent: dispatch would always return "no
-  // convention library" and the schema would falsely promise a topic listing. So the tool is
-  // offered only when a provider is actually present — pullConventions alone is not enough.
+test("Session injects house conventions when drive-to-green has no provider", async () => {
+  // Gated sessions without an adapter still get the house library so pull-before-first-write
+  // works on Vite/empty-dir builds. BoringStack bodies must NOT appear.
   const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-noprov-"));
   const captured: { names: readonly string[]; system: string } = {
     names: [],
@@ -419,20 +440,16 @@ test("Session does NOT advertise pull_conventions when the capability is on but 
       cwd: dir,
       files: ["**/*"],
       executionMode: "drive-to-green",
-      pullConventions: true,
-      // no `conventions` provider injected
+      // no `conventions` provider injected — house is defaulted
     });
 
     await s.send("go");
 
-    // Non-vacuous: the provider WAS called with a real tool list (base tools present), so the
-    // absence of pull_conventions is a genuine observation, not an empty captured.names.
     expect(captured.names).toContain(TOOL_NAME.read);
-    expect(captured.names).not.toContain(TOOL_NAME.pullConventions);
-
-    // The flag↔prompt invariant: the system prompt's tool inventory must NOT advertise
-    // pull_conventions either — otherwise the model is told about a tool the tools list omits.
-    expect(captured.system).not.toContain("pull_conventions");
+    expect(captured.names).toContain(TOOL_NAME.pullConventions);
+    expect(captured.system).toContain("pull_conventions");
+    expect(captured.system).toContain("pull-before-first-write");
+    expect(captured.system).not.toContain("@/lib/api/client");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -474,7 +491,7 @@ test("a hallucinated pull_conventions call with pullConventions OFF gets no prov
       cwd: dir,
       files: ["**/*"],
       executionMode: "drive-to-green",
-      // pullConventions OFF — but a provider is still on the config.
+      pullConventions: false,
       conventions: {
         buildGuides: () => "",
         unseenForErrors: () => [],
@@ -581,6 +598,11 @@ test("the lint-gotchas guide covers the top strict-lint offenders", () => {
   expect(g).toContain("no-floating-promises");
   expect(g).toContain("await-thenable");
   expect(g).toContain("drop the `await`");
+  // Shiftboard dogfood: I-prefix + clock (no-bare-date-now).
+  expect(g).toContain("I` prefix");
+  expect(g).toContain("naming-convention");
+  expect(g).toContain("time.ts");
+  expect(g).toContain("no-bare-date-now");
 });
 
 // Lock the rule→lint-gotchas mapping so unseenGuidesForErrors re-injects this guide on exactly
@@ -592,9 +614,20 @@ test("the strict-lint rules map to the lint-gotchas guide", () => {
     "no-confusing-void-expression",
     "no-error-stringify",
     "no-duplicate-string",
+    "naming-convention",
+    "no-bare-date-now",
+    "@typescript-eslint/naming-convention",
+    "tsforge/no-bare-date-now",
   ]) {
     expect(topicForRule(rule)).toBe("lint-gotchas");
   }
+});
+
+test("the testing guide covers jsdom typings and clock sibling tests", () => {
+  const g = conventionGuide("testing");
+
+  expect(g).toContain("@types/jsdom");
+  expect(g).toContain("time.test.ts");
 });
 
 // Spec 1A — the design-system guides codify BoringStack's existing tokens/ShadCN/theming/responsive/

@@ -37,6 +37,17 @@ import {
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
 import { trace } from "../../lib/trace";
+import { missingConventionPullReject } from "../conventions";
+
+/** Refuse first writes until mapped convention topics were pulled this session. */
+function conventionPullGate(file: string, ctx: IToolContext): string | null {
+  return missingConventionPullReject(file, {
+    conventionsActive: ctx.conventions !== undefined,
+    touched: ctx.touched,
+    pulledTopics: ctx.pulledTopics,
+    availableTopics: ctx.conventions?.topics() ?? [],
+  });
+}
 
 /** Refuse writes that paste harness history markers onto disk (seen live). */
 const HARNESS_MARKER_REJECT =
@@ -795,6 +806,12 @@ export async function doEdit(
     );
   }
 
+  const pullBlock = conventionPullGate(edit.file, ctx);
+
+  if (pullBlock !== null) {
+    return reject(ctx, "edit:conventions", pullBlock);
+  }
+
   // No edit-size policing. Forcing "small, targeted" edits is a documented
   // dead-end: when the fix genuinely needs a large replacement the model thrashes
   // — failing edits, trying `create`, reaching for `rm`/redirect — instead of just
@@ -1021,6 +1038,12 @@ export async function doCreate(
       "create",
       `create ${create.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`
     );
+  }
+
+  const pullBlock = conventionPullGate(create.file, ctx);
+
+  if (pullBlock !== null) {
+    return reject(ctx, "create:conventions", pullBlock);
   }
 
   // `create` refuses to overwrite an existing file that still PARSES. This is NOT
