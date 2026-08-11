@@ -1,4 +1,5 @@
 import type { IStatusInfo } from "./render.types";
+import { humanDuration } from "./human-duration";
 import { STYLE, paint } from "./style";
 import { displayWidth, graphemes } from "./width";
 
@@ -34,15 +35,6 @@ export interface IStatusBarTerminal {
 interface ISegment {
   readonly text: string;
   readonly code: string;
-}
-
-/** Compact seconds/minutes for the elapsed segment. */
-function humanSeconds(ms: number): string {
-  const total = Math.round(ms / 1000);
-
-  return total < 60
-    ? `${total}s`
-    : `${Math.floor(total / 60)}m${String(total % 60).padStart(2, "0")}s`;
 }
 
 /** The context-usage meter, colored green / amber / red by fill. */
@@ -103,7 +95,7 @@ function barSegments(info: IStatusInfo): ISegment[] {
 
   if (info.turns > 0) {
     segs.push({
-      text: `↻ ${info.turns}·${humanSeconds(info.elapsedMs)}`,
+      text: `↻ ${info.turns}·${humanDuration(info.elapsedMs)}`,
       code: STYLE.dim,
     });
   }

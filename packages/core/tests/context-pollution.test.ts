@@ -115,6 +115,30 @@ describe("upsertGateFeedback / injectFeedback one live slot", () => {
     expect(gates[0]?.content).toContain("boom2");
   });
 
+  test("injectFeedback prepends harness attribution from lastFailureClass", async () => {
+    const messages: IChatMessage[] = [];
+    const ctx = makeInjectCtx(messages);
+    const state = freshState();
+
+    state.lastFailureClass = "lint-rule";
+    state.lastFailureDetail = "no-process-exit";
+
+    const err: IErrorItem = {
+      key: "k",
+      message: "process.exit forbidden",
+      rule: "no-process-exit",
+      file: "src/api.ts",
+    };
+
+    await injectFeedback(ctx, state, [err], [], []);
+
+    const wall = messages.find((m) => m.role === "user")?.content ?? "";
+
+    expect(wall).toContain("Harness attribution: lint-rule (no-process-exit)");
+    expect(wall).toContain("The acceptance command still fails:");
+    expect(wall).toContain("do not disable");
+  });
+
   test("upsert replaces earlier slots without appending", () => {
     const messages: IChatMessage[] = [
       {

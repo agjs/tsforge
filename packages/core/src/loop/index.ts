@@ -71,6 +71,7 @@ export {
   buildTsService,
   runToolCalls,
   settleGate,
+  announceTaskDone,
   countsAsMutation,
   type ILoopCtx,
   type ILoopState,

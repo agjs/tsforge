@@ -1,4 +1,5 @@
 import type { ILoopEvent } from "../loop";
+import { humanDuration } from "./human-duration";
 import { STYLE, RESET } from "./style";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -12,14 +13,19 @@ export interface ISpinnerOut {
   isTTY?: boolean;
 }
 
-/** Animated activity line (`⠋ thinking · 12s`) for the silent stretches of a
- *  turn — hidden chain-of-thought, prompt processing, a slow first token. TTY
- *  only. Any rendered event clears it before printing (the next tick redraws),
- *  so it never interleaves with streamed text or boxes. */
+/** Animated activity line (`⠋ thinking · 12s` / `25m00s`) for the silent
+ *  stretches of a turn — hidden chain-of-thought, prompt processing, a slow
+ *  first token. TTY only. Any rendered event clears it before printing (the
+ *  next tick redraws), so it never interleaves with streamed text or boxes.
+ *
+ *  The elapsed clock is session-scoped: `start()` does not reset it, so a new
+ *  drive after plan-approve / ask_user does not jump the status strip back to
+ *  `0s`. Call `resetClock()` on `/clear` (or a fresh session). */
 export function makeSpinner(out: ISpinnerOut = process.stdout): {
   start: () => void;
   clear: () => void;
   stop: () => void;
+  resetClock: () => void;
   setLabel: (label: string) => void;
   onTick: (cb: () => void) => void;
   setInlineGate: (fn: () => boolean) => void;
@@ -39,8 +45,8 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
   // typing) is suppressed. Default true for the no-bar fallback (pipes, tiny TTY).
   let inlineGate: () => boolean = () => true;
 
-  const secsNow = (): number =>
-    startedAt === 0 ? 0 : Math.round((performance.now() - startedAt) / 1000);
+  const elapsedLabel = (): string =>
+    humanDuration(startedAt === 0 ? 0 : performance.now() - startedAt);
 
   // Erase iff WE drew a line. The guard is `drawn`, NOT `inlineGate()`: do not
   // add a gate check here. `drawn` is only ever set by a tick that already passed
@@ -59,7 +65,7 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
 
     if (inlineGate()) {
       out.write(
-        `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s${RESET}`
+        `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${elapsedLabel()}${RESET}`
       );
       drawn = true;
     }
@@ -75,14 +81,20 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
     frameLabel: (): string =>
       timer === null
         ? ""
-        : `${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s`,
+        : `${SPINNER_FRAMES[frame] ?? ""} ${label} · ${elapsedLabel()}`,
     start: (): void => {
       if (out.isTTY !== true || timer !== null) {
         return;
       }
 
       label = "thinking";
-      startedAt = performance.now();
+
+      // Keep the session wall clock across drive boundaries (plan approve →
+      // implement, ask_user resume, etc.). Only the first start arms it.
+      if (startedAt === 0) {
+        startedAt = performance.now();
+      }
+
       timer = setInterval(tick, SPINNER_TICK_MS);
     },
     clear,
@@ -93,6 +105,9 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
       }
 
       clear();
+    },
+    resetClock: (): void => {
+      startedAt = 0;
     },
     setLabel: (l: string): void => {
       label = l;

@@ -595,4 +595,32 @@ describe("edit_lines syntax-regression guard", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("rejects replace that would wipe a non-empty file to empty", async () => {
+    // Dogfood: replace 1..N with a missing +payload wrote "" (hash #5D05) and
+    // reported success — then create/edit could not restore the CSS file.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-wipe-"));
+
+    try {
+      const original =
+        '@import "tailwindcss";\n@theme { --font-sans: Inter; }\n';
+      const file = "index.css";
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      // replace covering the whole file, no + lines → would splice to "".
+      const input = `¶${file}#${hash}\nreplace 1..2:`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("REJECTED");
+      expect(out).toContain("wipe");
+      expect(await Bun.file(join(dir, file)).text()).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

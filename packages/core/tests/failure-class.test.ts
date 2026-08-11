@@ -1,7 +1,12 @@
 import { test, expect, describe } from "bun:test";
 import type { ILoopEvent } from "../src/loop/loop.types";
 import type { ErrorSet } from "../src/validate/validate.types";
-import { classifyRun, FAILURE_CLASS } from "../src/eval/failure-class";
+import {
+  attributionLeadIn,
+  classifyFromGate,
+  classifyRun,
+  FAILURE_CLASS,
+} from "../src/eval/failure-class";
 import { parseEventLog } from "../src/eval/parse-log";
 
 function ev(
@@ -274,6 +279,86 @@ describe("parseEventLog", () => {
 
     expect(classifyRun(parseEventLog(jsonl)).failureClass).toBe(
       FAILURE_CLASS.typeError
+    );
+  });
+});
+
+describe("classifyFromGate (live settle)", () => {
+  test("empty ErrorSet is none even without a done event", () => {
+    expect(classifyFromGate([]).failureClass).toBe(FAILURE_CLASS.none);
+  });
+
+  test("lint-dominated ErrorSet → lint-rule with detail", () => {
+    const errors: ErrorSet = [
+      {
+        key: "a",
+        message: "no-process-exit",
+        rule: "no-process-exit",
+        file: "src/api.ts",
+      },
+      {
+        key: "b",
+        message: "no-process-exit",
+        rule: "no-process-exit",
+        file: "src/b.ts",
+      },
+      { key: "c", message: "eqeqeq", rule: "eqeqeq", file: "src/c.ts" },
+    ];
+    const out = classifyFromGate(errors);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.lintRule);
+    expect(out.detail).toBe("no-process-exit");
+  });
+
+  test("type-dominated ErrorSet → type-error", () => {
+    const out = classifyFromGate([
+      { key: "a", message: "TS2345", rule: "TS2345" },
+      { key: "b", message: "TS2345", rule: "TS2345" },
+    ]);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.typeError);
+    expect(out.detail).toBe("TS2345");
+  });
+});
+
+describe("attributionLeadIn", () => {
+  test("none yields empty string", () => {
+    expect(attributionLeadIn({ failureClass: FAILURE_CLASS.none })).toBe("");
+  });
+
+  test("lint-rule names class, detail, and forbids weakening the rule", () => {
+    const line = attributionLeadIn({
+      failureClass: FAILURE_CLASS.lintRule,
+      detail: "no-process-exit",
+    });
+
+    expect(line).toContain("Harness attribution: lint-rule (no-process-exit)");
+    expect(line).toContain("do not disable");
+    expect(line).toContain("unallowlisted");
+  });
+
+  test("type-error forbids casting around the error", () => {
+    expect(
+      attributionLeadIn({
+        failureClass: FAILURE_CLASS.typeError,
+        detail: "TS2345",
+      })
+    ).toContain("do not cast");
+  });
+
+  test("hallucinated-import steers install-first for npm packages", () => {
+    const line = attributionLeadIn({
+      failureClass: FAILURE_CLASS.hallucinatedImport,
+      detail: "TS2307",
+    });
+
+    expect(line).toContain("hallucinated-import");
+    expect(line).toContain("install");
+    expect(line).toContain("@types/*");
+    expect(line).toContain("project-relative");
+    // Must not be the old "create the module" steer alone (Shiftboard: react/vite missing).
+    expect(line).not.toMatch(
+      /^Harness attribution: hallucinated-import \(TS2307\) — create the missing module/u
     );
   });
 });

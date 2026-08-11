@@ -88,7 +88,7 @@ describe("doPresentPlan", () => {
     expect(result).toMatch(/presented/i);
     expect(result).toMatch(/Decomposition advice/i);
     expect(result).toMatch(/gate chore/i);
-    expect(result).toMatch(/4 files/i);
+    expect(result).toMatch(/single top-level item/i);
   });
 
   test("persists advisory kind through present_plan", () => {

@@ -74,6 +74,7 @@ import {
   buildTsService,
   runToolCalls,
   settleGate,
+  announceTaskDone,
   emitTiming,
   handleR1Diagnosis,
   hasPendingDiagnosis,
@@ -365,9 +366,10 @@ function handleReadonlyRetry(args: {
   args.messages.push({
     role: "user",
     content:
-      "STOP READING. You already have enough context — further reads will be rejected. " +
-      "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
-      "with real file contents NOW. Do not call read, run, or search.",
+      "STOP READING. You already have enough context — further survey reads will be rejected. " +
+      "Your ONLY allowed tools now are create / edit / edit_lines / check. Call `check` if you " +
+      "need the current gate errors, then emit ONE write with real file contents. Do not call " +
+      "read, run, or search.",
   });
 
   return {
@@ -713,6 +715,10 @@ async function handleModelResponse(args: {
     );
 
     if (settled !== null) {
+      if (settled.status === RUN_STATUS.done) {
+        announceTaskDone(args.report, args.taskId, settled.cycles);
+      }
+
       return {
         action: settled,
         readonlyStreak: args.readonlyStreak,
@@ -804,6 +810,10 @@ async function handleModelResponse(args: {
   );
 
   if (settled !== null) {
+    if (settled.status === RUN_STATUS.done) {
+      announceTaskDone(args.report, args.taskId, settled.cycles);
+    }
+
     return {
       action: {
         ...settled,

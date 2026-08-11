@@ -578,6 +578,9 @@ test("create refuses to overwrite an existing VALID locale JSON file (no create 
     );
 
     expect(msg).toContain("REJECTED");
+    expect(msg).toContain("already exists");
+    expect(msg).toContain("edit");
+    expect(msg).toContain("deleteError");
     // Untouched.
     expect(await Bun.file(join(dir, LOCALE)).text()).toBe(original);
   } finally {

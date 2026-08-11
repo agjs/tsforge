@@ -542,6 +542,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     32_768;
   const report = makeReporter(logFile, id, id);
   const profile = resolveCliProfile(args.profile);
+  const gatedBuild = autoGate !== undefined || accept.length > 0;
   const config = {
     provider,
     cwd: args.dir,
@@ -560,6 +561,11 @@ async function initReplSession(args: ICliArgs): Promise<{
     // enables framework rule-packs (React, etc.) as soon as the model writes them,
     // instead of staying on the empty-dir `generic-ts` fallback. Absent ⇒ commandGate.
     ...(autoGate === undefined ? {} : { autoGate }),
+    // Gated interactive builds (auto-gate or accept) get drive-to-green + on-demand
+    // `check` — DeepSeek greenfield dogfood burned turns waiting for end-of-turn settle.
+    ...(gatedBuild
+      ? { executionMode: "drive-to-green" as const, offerCheck: true as const }
+      : {}),
     ...(resumed === null ? {} : { history: resumed.messages }),
     // Opt into the SCOPED format janitor (replaces the old whole-repo `fix`): the loop's
     // autoFixStep runs a strict eslint --fix + prettier over the files the model wrote
@@ -1143,6 +1149,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     planMode = false;
     planDiscussed = false;
     session.setPlanMode(false);
+    setMode("normal");
     await persist();
     echo("  ✓ plan approved — implementing\n");
     await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
@@ -1233,6 +1240,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   const clearConversation = async (): Promise<void> => {
     // Rebuild the session with the current state (config is not reused;
     // repl's /clear creates a fresh Session.create call)
+    spinner.resetClock();
     const profile = resolveCliProfile(args.profile);
     // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
     // silently drop the deferred gate: the gate fires on mutation state (`edited`),
@@ -1261,6 +1269,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       // once a manual /gate has taken over (autoGateActive false), so the rebuild
       // never silently re-arms the auto gate over the user's command.
       ...autoGateCarry(autoGate, session.autoGateActive),
+      // Same gated-build contract as init — /clear must not drop on-demand `check`.
+      ...(autoGate !== undefined || session.gate.length > 0
+        ? {
+            executionMode: "drive-to-green" as const,
+            offerCheck: true as const,
+          }
+        : {}),
       // Plain boolean (no branch): the constructor only seeds the flag when true.
       pausedWithEdit: carryDeferredGate,
       ...(profile === undefined ? {} : { profile }),

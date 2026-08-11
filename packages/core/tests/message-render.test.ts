@@ -8,6 +8,7 @@ import {
   agentCardRow,
   roleCardCols,
 } from "../src/render";
+import { STYLE } from "../src/render/style";
 import { planHint } from "../src/cli/banner";
 import { displayWidth } from "../src/render/width";
 
@@ -193,6 +194,33 @@ describe("userBubble", () => {
     expect(rows[2]).toMatch(/│ {2}hi\s+│/);
     expect(rows.at(-1)?.startsWith("└")).toBe(true);
     expect(rows.at(-1)?.endsWith("┘")).toBe(true);
+  });
+
+  test("soft-wrapped body rows keep cyan on every visual line", () => {
+    const long =
+      "Essentially the entire app has to be built end-to-end with TDD tests " +
+      "first. Of course our harness has a gate and it will guide you through " +
+      "everything. Note that you are building a full-fledged app.";
+    const rows = userBubble(long, true, 48).split("\n");
+    const bodyRows = rows.filter((row) => {
+      const plain = stripAnsi(row);
+
+      return (
+        plain.startsWith("│") &&
+        plain.endsWith("│") &&
+        /\S/.test(plain.slice(1, -1))
+      );
+    });
+
+    expect(bodyRows.length).toBeGreaterThan(1);
+
+    for (const row of bodyRows) {
+      const plain = stripAnsi(row);
+
+      // One SGR span for the whole closed row — no mid-line RESET that drops
+      // continuation text to the default (gray) foreground after soft-wrap.
+      expect(row).toBe(`${STYLE.cyan}${STYLE.bold}${plain}${ESC}[0m`);
+    }
   });
 });
 

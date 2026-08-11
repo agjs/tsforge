@@ -110,6 +110,9 @@ export interface IToolContext {
    *  tool reads its `guide`/`topics` from here instead of importing stack content.
    *  Absent ⇒ `pull_conventions` returns a "not configured" message. */
   conventions?: IConventionProvider;
+  /** Topic ids successfully returned by `pull_conventions` this session — enforces
+   *  pull-before-first-write on create/edit/edit_lines. */
+  pulledTopics?: Set<string>;
   /** Editable scope — `edit`/`create` outside it are rejected. */
   files: string[];
   /** Optional edit guard: vetoes an applied edit (reverted on veto). Absent ⇒ no

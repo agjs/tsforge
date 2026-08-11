@@ -20,11 +20,25 @@ export async function applyEdit(cwd: string, edit: IEdit): Promise<EditResult> {
     return { ok: false, file: edit.file, reason: EDIT_FAIL_REASON.missingFile };
   }
 
+  const content = await f.text();
+
+  // Empty oldString is unsafe on non-empty files (`"".split` matches everywhere).
+  // On an empty/whitespace-only file it means "write the whole file" — the escape
+  // hatch when create is preferred but the model reaches for edit instead.
   if (edit.oldString === "") {
+    if (content.trim().length === 0) {
+      if (edit.newString === content) {
+        return { ok: true, file: edit.file, changed: false };
+      }
+
+      await Bun.write(path, edit.newString);
+
+      return { ok: true, file: edit.file, changed: true };
+    }
+
     return { ok: false, file: edit.file, reason: EDIT_FAIL_REASON.notFound };
   }
 
-  const content = await f.text();
   const matches = content.split(edit.oldString).length - 1;
 
   if (matches === 0) {
@@ -53,6 +67,72 @@ export async function applyEdit(cwd: string, edit: IEdit): Promise<EditResult> {
   await Bun.write(path, next);
 
   return { ok: true, file: edit.file, changed: true };
+}
+
+/**
+ * Apply one str_replace against in-memory `content`. Returns the next content,
+ * or a failure reason (+ optional match count for ambiguous). Empty oldString
+ * only rewrites when this is a single-edit batch on an empty/whitespace file.
+ */
+function applyOneReplacement(
+  content: string,
+  replacement: IReplacement,
+  editCount: number
+):
+  | { ok: true; content: string }
+  | {
+      ok: false;
+      reason:
+        typeof EDIT_FAIL_REASON.notFound | typeof EDIT_FAIL_REASON.ambiguous;
+      matches?: number;
+    } {
+  if (replacement.oldString === "") {
+    if (editCount === 1 && content.trim().length === 0) {
+      return { ok: true, content: replacement.newString };
+    }
+
+    return { ok: false, reason: EDIT_FAIL_REASON.notFound };
+  }
+
+  const matches = content.split(replacement.oldString).length - 1;
+
+  if (matches === 1) {
+    return {
+      ok: true,
+      content: content.split(replacement.oldString).join(replacement.newString),
+    };
+  }
+
+  if (matches > 1) {
+    return {
+      ok: false,
+      reason: EDIT_FAIL_REASON.ambiguous,
+      matches,
+    };
+  }
+
+  // Exact match failed — try an indentation-tolerant LINE match (the common
+  // LLM miss: right code, slightly-off leading whitespace). Applies ONLY on a
+  // unique window; never guesses. The gate re-validates as a backstop.
+  const fuzzy = fuzzyLineReplace(
+    content,
+    replacement.oldString,
+    replacement.newString
+  );
+
+  if (fuzzy.matches === 1) {
+    return { ok: true, content: fuzzy.text };
+  }
+
+  if (fuzzy.matches > 1) {
+    return {
+      ok: false,
+      reason: EDIT_FAIL_REASON.ambiguous,
+      matches: fuzzy.matches,
+    };
+  }
+
+  return { ok: false, reason: EDIT_FAIL_REASON.notFound };
 }
 
 /**
@@ -85,51 +165,23 @@ export async function applyEdits(
   for (let i = 0; i < edits.length; i += 1) {
     const replacement = edits[i];
 
-    if (replacement === undefined || replacement.oldString === "") {
+    if (replacement === undefined) {
       return { ok: false, file, index: i, reason: EDIT_FAIL_REASON.notFound };
     }
 
-    const matches = content.split(replacement.oldString).length - 1;
+    const step = applyOneReplacement(content, replacement, edits.length);
 
-    if (matches === 0) {
-      // Exact match failed — try an indentation-tolerant LINE match (the common
-      // LLM miss: right code, slightly-off leading whitespace). Applies ONLY on a
-      // unique window; never guesses. The gate re-validates as a backstop.
-      const fuzzy = fuzzyLineReplace(
-        content,
-        replacement.oldString,
-        replacement.newString
-      );
-
-      if (fuzzy.matches === 1) {
-        content = fuzzy.text;
-        continue;
-      }
-
-      if (fuzzy.matches > 1) {
-        return {
-          ok: false,
-          file,
-          index: i,
-          reason: EDIT_FAIL_REASON.ambiguous,
-          matches: fuzzy.matches,
-        };
-      }
-
-      return { ok: false, file, index: i, reason: EDIT_FAIL_REASON.notFound };
-    }
-
-    if (matches > 1) {
+    if (!step.ok) {
       return {
         ok: false,
         file,
         index: i,
-        reason: EDIT_FAIL_REASON.ambiguous,
-        matches,
+        reason: step.reason,
+        ...(step.matches === undefined ? {} : { matches: step.matches }),
       };
     }
 
-    content = content.split(replacement.oldString).join(replacement.newString);
+    content = step.content;
   }
 
   // A batch that resolves to byte-identical content (all replacements were no-ops

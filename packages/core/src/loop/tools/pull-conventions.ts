@@ -6,11 +6,11 @@ import type { IToolContext } from "./tool-context";
  * model fetches the stack's how-to for a topic ON DEMAND (before writing that kind of
  * code), the complement to the harness PUSHing guides on first violation. Reads the
  * convention library from the injected `IConventionProvider` (`ctx.conventions`) — the
- * core tool stays stack-agnostic; the boringstack adapter supplies the content.
+ * core tool stays stack-agnostic; adapters / house supply the content.
  */
 export function doPullConventions(
   args: Record<string, unknown>,
-  ctx: Pick<IToolContext, "conventions">
+  ctx: Pick<IToolContext, "conventions" | "pulledTopics">
 ): string {
   const provider = ctx.conventions;
 
@@ -27,6 +27,10 @@ export function doPullConventions(
       `Valid topics: ${provider.topics().join(", ")}.`
     );
   }
+
+  const pulled = (ctx.pulledTopics ??= new Set<string>());
+
+  pulled.add(topic);
 
   return guide;
 }

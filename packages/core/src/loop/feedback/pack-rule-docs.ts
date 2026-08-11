@@ -57,10 +57,10 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     fixIsDirective: true,
   },
   "tsforge/component-file-purity": {
-    what: "A component .tsx contains only imports and the component itself \u2014 types go to <feature>.types.ts, constants to <feature>.constants.ts, helpers to src/lib",
-    bad: '\n      const STAGE_LABEL = { lead: "Lead" };\n      export function DealsTable() { return <div>{STAGE_LABEL.lead}</div>; }\n    ',
-    good: '\n      import { Table } from "@/components/ui/table";\n      import { dealColumns } from "../dashboard.constants";\n      import type { IDeal } from "../dashboard.types";\n\n      export function DealsTable({ deals }: { deals: readonly IDeal[] }) {\n        return <Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />;\n      }\n    ',
-    exampleFile: "src/views/Dashboard/components/DealsTable.tsx",
+    what: "A component .tsx holds ONLY imports + the component. Inline types, constants, and helpers fail the gate — move types to <feature>.types.ts, constants to <feature>.constants.ts, pure helpers to src/lib/, then import them back. Use `as const` for label maps; for RHF defaultValues with mutable arrays, type as the form input (CreateXInput / z.infer<typeof schema>), not bare `as const`.",
+    bad: '\n      const STATUS_LABEL = { draft: "Draft" };\n      type Status = keyof typeof STATUS_LABEL;\n      export function ItemsTable() { return <div>{STATUS_LABEL.draft}</div>; }\n    ',
+    good: '\n      import { Table } from "@/components/ui/table";\n      import { itemColumns } from "../dashboard.constants";\n      import type { IItem } from "../dashboard.types";\n\n      export function ItemsTable({ items }: { items: readonly IItem[] }) {\n        return <Table columns={itemColumns} data={items} rowKey={(row) => row.id} />;\n      }\n    ',
+    exampleFile: "src/views/Dashboard/components/ItemsTable.tsx",
   },
   "tsforge/consistent-status-via-set": {
     what: "Inside Elysia route handlers, set HTTP status via `set.status = N`, not by returning a `new Response(body, { status: N })`.",
@@ -167,10 +167,10 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: '\n      const app = new Elysia()\n        .decorate("db", createDb())\n        .decorate("cache", createCache());\n    ',
   },
   "tsforge/no-derived-state-in-effect": {
-    what: "State set from an effect renders twice and can tear. If the value can be computed from props or other state, derive it during render \u2014 `useMemo` when the computation is expensive.",
-    bad: "export function Total({ items }: { items: number[] }) {\n  const [total, setTotal] = useState(0);\n\n  useEffect(() => {\n    setTotal(items.reduce((a, b) => a + b, 0));\n  }, [items]);\n\n  return <p>{total}</p>;\n}",
-    good: "export function Total({ items }: { items: number[] }) {\n  const total = useMemo(() => items.reduce((a, b) => a + b, 0), [items]);\n\n  return <p>{total}</p>;\n}",
-    exampleFile: "src/Counter.tsx",
+    what: "Decide: is this I/O or derived data? OK — useEffect that fetches/subscribes then setState from the async result (TDD data-loading). NOT OK — syncing props into state or computing a value from other state/props inside an effect (double-render / tear). For derived values use render or useMemo; for async I/O keep the effect.",
+    bad: 'import { useEffect, useState } from "react";\n\nexport function Total({ items }: { items: number[] }) {\n  const [total, setTotal] = useState(0);\n\n  useEffect(() => {\n    setTotal(items.reduce((a, b) => a + b, 0));\n  }, [items]);\n\n  return <p>{total}</p>;\n}',
+    good: 'import { useMemo } from "react";\n\nexport function Total({ items }: { items: number[] }) {\n  const total = useMemo(\n    () => items.reduce((a, b) => a + b, 0),\n    [items],\n  );\n\n  return <p>{total}</p>;\n}',
+    exampleFile: "src/Total.tsx",
   },
   "tsforge/no-direct-process-env": {
     what: "Read env through one validated config module, so a missing variable fails at boot, not mid-request.",
@@ -227,7 +227,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     what: "Loading states must render a <Skeleton/>, not loading text or a spinner",
     bad: "export function View() { return <div>Loading...</div>; }",
     good: 'export function View() { return <Skeleton className="h-8 w-full" />; }',
-    exampleFile: "src/views/Deals/index.tsx",
+    exampleFile: "src/views/Items/index.tsx",
   },
   "tsforge/no-narration-comments": {
     what: "Don't narrate what the next line plainly says. Comment the WHY, or delete it.",
@@ -242,14 +242,14 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-next-head-in-app": {
     what: "`next/head` does nothing under app/. Use the Metadata API.",
-    bad: 'import Head from "next/head";\n\nexport default function Page() {\n  return <Head><title>Deals</title></Head>;\n}',
-    good: 'export const metadata = { title: "Deals" };\n\nexport default function Page() {\n  return <main>Deals</main>;\n}',
+    bad: 'import Head from "next/head";\n\nexport default function Page() {\n  return <Head><title>Home</title></Head>;\n}',
+    good: 'export const metadata = { title: "Home" };\n\nexport default function Page() {\n  return <main>Home</main>;\n}',
     exampleFile: "app/page.tsx",
   },
   "tsforge/no-pages-router-data-fetching-in-app": {
     what: "`getServerSideProps`/`getStaticProps` are pages-router APIs and are ignored under app/. Fetch in the component.",
-    bad: "export async function getServerSideProps() {\n  return { props: { deals: [] } };\n}\n\nexport default function Page() {\n  return <main />;\n}",
-    good: "export default async function Page() {\n  const deals = await loadDeals();\n\n  return <main>{deals.length}</main>;\n}",
+    bad: "export async function getServerSideProps() {\n  return { props: { items: [] } };\n}\n\nexport default function Page() {\n  return <main />;\n}",
+    good: "export default async function Page() {\n  const items = await loadItems();\n\n  return <main>{items.length}</main>;\n}",
     exampleFile: "app/page.tsx",
   },
   "tsforge/no-pr-reference-comments": {
@@ -304,6 +304,12 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: "",
     procedure:
       "1) Create/open `Component.hooks.ts` next to the component. 2) Move the state/effect hooks into a `useComponent()` custom hook that returns the values and handlers the JSX needs. 3) Call the hook once at the top of the component and destructure. (`useId`/`useTransition`/`useDeferredValue` may stay inline.)",
+  },
+  "tsforge/one-component-per-file": {
+    what: "One top-level React component per .tsx file — a second PascalCase component in the same file fails the gate.",
+    bad: "export function Alpha() { return <div />; }\nexport function Beta() { return <span />; }",
+    good: 'import { Beta } from "./Beta";\nexport function Alpha() { return <div><Beta /></div>; }',
+    exampleFile: "src/views/Feed/components/Alpha.tsx",
   },
   "tsforge/no-user-controlled-fetch-url": {
     what: "The request ORIGIN must be fixed in source. Interpolating the path is fine; interpolating the host is not. There is no allowlist or builder to opt into \u2014 write the host literally.",

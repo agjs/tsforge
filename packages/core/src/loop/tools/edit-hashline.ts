@@ -14,6 +14,7 @@ import {
   resolveWritable,
 } from "./tool-context";
 import { toHashlineEdit } from "../../agent";
+import { missingConventionPullReject } from "../conventions";
 
 /**
  * Hashline edit handler: content-hash-anchored line edits with stale-anchor recovery.
@@ -52,6 +53,17 @@ export async function doHashlineEdit(
       "edit_lines",
       `edit_lines ${edit.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`
     );
+  }
+
+  const pullBlock = missingConventionPullReject(edit.file, {
+    conventionsActive: ctx.conventions !== undefined,
+    touched: ctx.touched,
+    pulledTopics: ctx.pulledTopics,
+    availableTopics: ctx.conventions?.topics() ?? [],
+  });
+
+  if (pullBlock !== null) {
+    return reject(ctx, "edit_lines:conventions", pullBlock);
   }
 
   ctx.report({

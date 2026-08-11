@@ -31,12 +31,13 @@ test("the BoringStack build flags keep offerCheck + convention library + drive-t
   expect(BORINGSTACK_BUILD_SESSION.offerCheck).toBe(true);
   expect(BORINGSTACK_BUILD_SESSION.pullConventions).toBe(true);
   // The convention library is INJECTED as the generic provider seam (core no longer
-  // imports the stack-specific content); dropping it un-front-loads the guides.
+  // imports the stack-specific content); buildGuides is the short pull contract.
   expect(BORINGSTACK_BUILD_SESSION.conventions).toBeDefined();
-  // Assert REAL guide content, not merely a string — an empty/stub provider would silently
-  // un-front-load the guides on the live host path (createBoringstackHostSession spreads this).
   expect(BORINGSTACK_BUILD_SESSION.conventions.buildGuides()).toContain(
-    "HOW THIS STACK WRITES CODE"
+    "pull-before-first-write"
+  );
+  expect(BORINGSTACK_BUILD_SESSION.conventions.guide("no-casts")).toContain(
+    "TYPE GUARD"
   );
   expect(BORINGSTACK_BUILD_SESSION.executionMode).toBe("drive-to-green");
 });

@@ -169,9 +169,9 @@ test("the plan-mode note asks for prioritized clarifying questions and states th
     expect(note).toContain("the more detail and research");
     // Still ends in the present_plan + approval contract.
     expect(note).toContain("present_plan");
-    // Decomposition heuristics for execution-ready plans.
-    expect(note).toContain("contracts/types");
-    expect(note).toContain("1–3");
+    // Decomposition: vertical slices for greenfield, not layer-first / ≤3-files law.
+    expect(note).toContain("VERTICAL");
+    expect(note).toContain("layer-first");
     expect(note).toMatch(/NEVER a checklist item for 'run tests/i);
   });
 });
@@ -220,21 +220,40 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   // Read-only shapes.
   expect(isReadOnlyCommand("ls")).toBe(true);
   expect(isReadOnlyCommand("ls -la src")).toBe(true);
+  expect(isReadOnlyCommand("pwd")).toBe(true);
   expect(isReadOnlyCommand("rg -n foo src")).toBe(true);
   expect(isReadOnlyCommand("git log --oneline")).toBe(true);
   expect(isReadOnlyCommand("git diff")).toBe(true);
   expect(isReadOnlyCommand("tsc --noEmit")).toBe(true);
   expect(isReadOnlyCommand("cat package.json")).toBe(true);
+  expect(isReadOnlyCommand("node --version")).toBe(true);
+  expect(isReadOnlyCommand("bun -v")).toBe(true);
+  expect(isReadOnlyCommand("npm --version")).toBe(true);
+
+  // Safe && / ; chains of read-only segments (greenfield probes).
+  expect(isReadOnlyCommand("pwd && ls -la")).toBe(true);
+  expect(isReadOnlyCommand("node --version && bun --version")).toBe(true);
+  expect(isReadOnlyCommand("node --version; bun --version")).toBe(true);
+  expect(isReadOnlyCommand("echo ---")).toBe(true);
+  expect(isReadOnlyCommand("ls src 2>/dev/null")).toBe(true);
+  expect(isReadOnlyCommand("ls src 2>/dev/null && cat package.json")).toBe(
+    true
+  );
+  expect(isReadOnlyCommand("pwd 2>&1")).toBe(true);
 
   // Mutation or escape hatches.
   expect(isReadOnlyCommand("rm -rf x")).toBe(false);
   expect(isReadOnlyCommand("git commit -m x")).toBe(false);
   expect(isReadOnlyCommand("git checkout .")).toBe(false);
   expect(isReadOnlyCommand("rg foo > out.txt")).toBe(false);
+  expect(isReadOnlyCommand("ls > out.txt")).toBe(false);
+  expect(isReadOnlyCommand("echo hi > f")).toBe(false);
   expect(isReadOnlyCommand("ls && rm x")).toBe(false);
+  expect(isReadOnlyCommand("ls; rm x")).toBe(false);
   expect(isReadOnlyCommand("cat a | tee b")).toBe(false);
   expect(isReadOnlyCommand("echo $(rm x)")).toBe(false);
   expect(isReadOnlyCommand("npm install")).toBe(false);
+  expect(isReadOnlyCommand("node")).toBe(false); // bare node is a REPL
   expect(isReadOnlyCommand("")).toBe(false);
 
   // Allowlisted commands that MUTATE via a flag — the head/subcommand check used

@@ -112,6 +112,43 @@ function effectCallsSetter(
   });
 }
 
+const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"]);
+
+/**
+ * True when the effect looks like I/O (fetch/subscribe) rather than sync
+ * derivation. Docs/steer allow setState from async results; the old heuristic
+ * ("setter only called in this effect") false-positived every data-loading hook.
+ */
+function effectLooksLikeIo(
+  effectFn: TSESTree.ArrowFunctionExpression | TSESTree.FunctionExpression
+): boolean {
+  if (effectFn.async) {
+    return true;
+  }
+
+  return walkSome(effectFn.body, (current) => {
+    if (current.type === AST_NODE_TYPES.AwaitExpression) {
+      return true;
+    }
+
+    if (current.type !== AST_NODE_TYPES.CallExpression) {
+      return false;
+    }
+
+    const callee = current.callee;
+
+    if (callee.type !== AST_NODE_TYPES.MemberExpression) {
+      return false;
+    }
+
+    if (callee.computed || callee.property.type !== AST_NODE_TYPES.Identifier) {
+      return false;
+    }
+
+    return PROMISE_CHAIN_METHODS.has(callee.property.name);
+  });
+}
+
 export const noDerivedStateInEffectRule = createRule<[], MessageIds>({
   name: RULE_NAME,
   meta: {
@@ -168,6 +205,12 @@ export const noDerivedStateInEffectRule = createRule<[], MessageIds>({
           effectFn?.type !== AST_NODE_TYPES.ArrowFunctionExpression &&
           effectFn?.type !== AST_NODE_TYPES.FunctionExpression
         ) {
+          return false;
+        }
+
+        // Async / promise-chain effects are data-loading — setState from the
+        // result is the intended pattern (dogfood: use-gamer / use-gamers).
+        if (effectLooksLikeIo(effectFn)) {
           return false;
         }
 

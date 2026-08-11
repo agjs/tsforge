@@ -184,7 +184,9 @@ export function extractPathTokens(command: string): string[] {
   // Strip quoted regions so we don't double-count insides.
   const stripped = command.replace(/"[^"]*"|'[^']*'/gu, " ");
 
-  const unquotedAbs = /(?:^|[\s=])(\/(?:[^\s;|&<>]+))/gu;
+  // Include bare `/` (dogfood: `find / -path '…'`) — requiring a char after `/`
+  // used to miss filesystem-root spelunking entirely.
+  const unquotedAbs = /(?:^|[\s=])(\/(?:[^\s;|&<>]*))/gu;
 
   match = unquotedAbs.exec(stripped);
 

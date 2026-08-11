@@ -374,6 +374,25 @@ async function commitHashline(
 ): Promise<IHashlineResult> {
   const changed = text !== liveContent;
 
+  // Refuse accidental wipe-to-empty. Models often send `replace 1..N:` with a
+  // missing `+` payload (or an empty payload), which splices the whole file to
+  // "" and reports success with hash #5D05 — then create/edit deadlock on the
+  // empty file (dogfood: src/index.css). Empty→empty is a no-op below;
+  // empty→content is the recovery path and must stay allowed.
+  if (liveContent.trim().length > 0 && text.trim().length === 0) {
+    return {
+      ok: false,
+      file,
+      reason: "wipe-to-empty",
+      suggestions: [
+        `Would wipe ${file} to empty. Include the full replacement lines ` +
+          `(each prefixed with \`+\`) in your replace/insert payload, or use ` +
+          `\`edit\` with oldString covering the current content and newString ` +
+          `as the full rewrite.`,
+      ],
+    };
+  }
+
   if (changed) {
     await Bun.write(path, text);
     store.record(file, text);

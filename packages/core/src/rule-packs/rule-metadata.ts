@@ -19,6 +19,7 @@ const RULE_ENTRIES: Readonly<Record<string, IRuleCatalogEntry>> = {
   },
   "component-folder-structure": { tier: "architecture", tags: ["react"] },
   "component-file-purity": { tier: "architecture", tags: ["react"] },
+  "one-component-per-file": { tier: "architecture", tags: ["react"] },
   "no-state-in-component-body": { tier: "architecture", tags: ["react"] },
   "no-inline-jsx-functions": { tier: "architecture", tags: ["react"] },
   "no-anonymous-useEffect": {

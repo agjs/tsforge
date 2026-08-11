@@ -69,7 +69,7 @@ export const META_RULE_DOCS: Record<string, string> = {
 
   // Testing
   "test-sibling-required":
-    "Add a test file for each source file; follow naming conventions (foo.ts → foo.test.ts or foo.spec.ts).",
+    "Add a colocated test (foo.ts → foo.test.ts / foo.spec.ts). For React components/hooks, install `@testing-library/react` (and `@testing-library/jest-dom` if you import it) before writing assertions — missing RTL is a common cliff after GREEN.",
 
   // CI
   "workflow-actions-pinned":

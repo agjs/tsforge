@@ -6,6 +6,7 @@ import {
 } from "../loop/harness-inject";
 import type { IChatMessage } from "../inference";
 import { RESET, STYLE, paint } from "./style";
+import { humanDuration } from "./human-duration";
 import { displayWidth, sliceToWidth } from "./width";
 import { box, GLYPH, toolGlyph } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
@@ -38,17 +39,6 @@ function humanCount(n: number): string {
   const k = n / 1000;
 
   return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-}
-
-/** Compact duration: 9000 → "9s", 84000 → "1m24s". */
-function humanDuration(ms: number): string {
-  const total = Math.round(ms / 1000);
-
-  if (total < 60) {
-    return `${total}s`;
-  }
-
-  return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, "0")}s`;
 }
 
 /**
@@ -271,7 +261,14 @@ function userCardPadRow(color: boolean, columns: number): string {
   return paint(`│${" ".repeat(inner)}│`, STYLE.cyan, color);
 }
 
-/** A USER turn: closed cyan card — same geometry as AGENT (`┐` / `│…│` / `└┘`). */
+/**
+ * A USER turn: closed cyan card — same geometry as AGENT (`┐` / `│…│` / `└┘`).
+ *
+ * Wrap plain text first, then paint each closed row as one SGR span. Painting
+ * before the rail used to open cyan on the first visual line only: each
+ * soft-wrap closes with `paint(│)` which emits RESET, so continuation rows
+ * fell back to the default (gray) foreground mid-message.
+ */
 export function userBubble(
   content: string,
   color: boolean,
@@ -281,16 +278,17 @@ export function userBubble(
   const badge = filledRoleBadge("USER", color);
   const top =
     badge + roleHairline(cols, STYLE.cyan, color, "┐", roleBadgeCols(badge));
+  // Plain rails while wrapping — color is applied per completed row below.
   const rail = makeAgentRail(
-    roleGutter("│", STYLE.cyan, color),
+    "│" + " ".repeat(ROLE_INNER_PAD),
     () => Math.max(1, cols - ROLE_BOX_CHROME_COLS),
-    paint("│", STYLE.cyan, color)
+    "│"
   );
-  const painted = content
+  const wrapped = `${rail.feed(content)}${rail.flush()}`.replace(/\n$/, "");
+  const body = wrapped
     .split("\n")
-    .map((line) => paint(line, STYLE.cyan + STYLE.bold, color))
+    .map((row) => paint(stripSgr(row), STYLE.cyan + STYLE.bold, color))
     .join("\n");
-  const body = `${rail.feed(painted)}${rail.flush()}`.replace(/\n$/, "");
   const padRow = userCardPadRow(color, cols);
   const bottom = paint(
     `└${"─".repeat(Math.max(0, cols - 2))}┘`,
@@ -493,6 +491,33 @@ function toolVerb(message: string): string | undefined {
   return m?.[1];
 }
 
+/** Checklist success / gate-check lines: `done · Title`, `focus · …`, etc. */
+function checklistToolLine(
+  message: string
+): { glyph: string; accent: string } | undefined {
+  if (message.startsWith("done ·")) {
+    return { glyph: GLYPH.done, accent: STYLE.green };
+  }
+
+  if (message.startsWith("focus ·") || message.startsWith("gate ·")) {
+    return { glyph: GLYPH.read, accent: STYLE.brandLight };
+  }
+
+  if (message.startsWith("reopen ·")) {
+    return { glyph: GLYPH.reopen, accent: STYLE.chromeLight };
+  }
+
+  if (message.startsWith("add ·")) {
+    return { glyph: GLYPH.create, accent: STYLE.green };
+  }
+
+  if (message.startsWith("update ·")) {
+    return { glyph: GLYPH.edit, accent: STYLE.brandLight };
+  }
+
+  return undefined;
+}
+
 /**
  * Settled tool lines — same family as create/edit glyphLines (bright accent),
  * not dim grey that vanishes into the pane canvas.
@@ -509,6 +534,12 @@ function renderToolEvent(message: string, color: boolean): string {
 
   if (message.startsWith("↳")) {
     return glyphLine("↳", message.replace(/^↳\s*/u, ""), STYLE.brand, color);
+  }
+
+  const checklist = checklistToolLine(message);
+
+  if (checklist !== undefined) {
+    return glyphLine(checklist.glyph, message, checklist.accent, color);
   }
 
   const verb = toolVerb(message);

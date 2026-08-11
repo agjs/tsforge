@@ -11,7 +11,8 @@ test("boringstackConventionProvider satisfies IConventionProvider with real guid
   const guides = provider.buildGuides();
 
   expect(guides.length).toBeGreaterThan(0);
-  expect(guides).toContain("HOW THIS STACK WRITES CODE");
+  expect(guides).toContain("pull-before-first-write");
+  expect(provider.guide("no-casts")).toContain("TYPE GUARD");
 });
 
 test("the provider's guide/topics/unseenForErrors return real content (not stubs)", () => {

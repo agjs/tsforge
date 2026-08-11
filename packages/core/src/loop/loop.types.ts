@@ -2,6 +2,7 @@ import type { ErrorParser } from "../validate";
 import type { ProfileId } from "../config/profiles";
 import type { IGate } from "../gate/gate-runner";
 import type { MetaBaseline } from "../meta-rules";
+import type { FailureClass } from "../eval/failure-class";
 import {
   type RUN_STATUS,
   type STUCK_REASON,
@@ -26,6 +27,10 @@ export interface IHandoff {
   /** Machine state to resume without re-firing the same levers. Either the tried levers
    *  for the final block, or a ref to the checkpoint holding full ILoopState. */
   resume: { triedLevers: EscalationRung[] } | { checkpointRef: string };
+  /** Harness-owned failure class at park time (so resume/human sees our diagnosis). */
+  failureClass?: FailureClass;
+  /** Dominant rule/code for type-error|lint-rule when known. */
+  failureDetail?: string;
 }
 
 /** A progress event emitted as the loop runs, for live observability. */
@@ -92,6 +97,10 @@ export interface ILoopEvent {
    *  "no-restricted-syntax") — the structured substrate the failure classifier
    *  reads to tell a type error from a lint rule, not just a count. */
   rules?: readonly string[];
+  /** For `validated` events: harness-owned failure class from classifyFromGate. */
+  failureClass?: FailureClass;
+  /** For `validated` events: dominant rule/code when the class carries one. */
+  failureDetail?: string;
   passed?: boolean;
   /** For `stuck` events: a human-readable blocker diagnosis. */
   detail?: string;

@@ -25,6 +25,11 @@ import type {
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
+import {
+  attributionLeadIn,
+  classifyFromGate,
+  type FailureClass,
+} from "../eval/failure-class";
 import type { IConventionProvider } from "./conventions-provider";
 import {
   shouldCheckpoint,
@@ -38,6 +43,7 @@ import {
   type INearGreenCheckpoint,
   type INearGreenSample,
 } from "./near-green-checkpoint";
+import { formPurityRollbackAppendix } from "./near-green-form-purity";
 // The SHARED rollback substrate (aliased — turn.ts has its own polish-only `snapshotFiles`
 // returning a plain Map). `snapshotFilesForRollback` captures an IFileSnapshot and
 // `restoreFiles` rewrites edited files AND tombstones files a spray created (incl.
@@ -329,6 +335,8 @@ export interface ILoopCtxTool {
    *  (`injectFeedback`). Absent ⇒ no stack conventions. Keeps stack CONTENT out of
    *  the core loop. */
   conventions?: IConventionProvider;
+  /** Topic ids successfully pulled this session (pull-before-first-write). */
+  pulledTopics?: Set<string>;
   /** Cancellation for the in-flight turn — threaded into tool `run` commands and
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
@@ -454,6 +462,9 @@ export interface ILoopState {
    *  each error has persisted. Drives the primary `samePersist` no-progress stop. */
   errorAge: Map<string, number>;
   lastGateCount: number;
+  /** Gate error count from the previous settle (before lastGateCount was updated).
+   *  Feeds progress-aware steer headers when the count dropped but a block remains. */
+  priorGateCount?: number;
   edits: number;
   regressions: number;
   /** Count of TTSR rule interrupts this task. Hard cap at 3 to prevent loops. */
@@ -567,6 +578,11 @@ export interface ILoopState {
     enableThinking?: boolean;
     thinkingTokenBudget?: number;
   } | null;
+  /** Harness-owned failure class from the last settleGate classifyFromGate call.
+   *  Cleared to `none` on green. Feeds feedback lead-in and handoff. */
+  lastFailureClass?: FailureClass;
+  /** Dominant rule/code accompanying lastFailureClass when present. */
+  lastFailureDetail?: string;
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
@@ -1404,7 +1420,8 @@ async function runGateStep(
     report({
       kind: "tool",
       task: task.id,
-      message: `⚙ running gate · turn ${turn}…`,
+      message:
+        turn > 0 ? `⚙ running gate · turn ${String(turn)}…` : "⚙ running gate…",
     });
   }
 
@@ -1503,10 +1520,15 @@ export async function evaluateGate(
  *  `settleGate` uses, projected to the {@link ICheckOutcome} the tool returns —
  *  including `autoFixed`, so `check` can warn the model that mid-turn autofix
  *  rewrote files (the desync guard `settleGate` gives via its autofix notice).
- *  Wired onto the tool context by the build overlay (Session). `turn` is 0 — a
- *  mid-turn check is not a settle cycle; it only affects a cosmetic progress line. */
-export async function runCheckGate(ctx: ILoopCtx): Promise<ICheckOutcome> {
-  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, 0);
+ *  Wired onto the tool context by the build overlay (Session).
+ *  `turn` is the current drive turn (1-based) so the live progress line matches
+ *  settle — never hardcode 0 (that made task_complete/`check` look stuck on
+ *  "turn 0" for the whole gate run). */
+export async function runCheckGate(
+  ctx: ILoopCtx,
+  turn: number
+): Promise<ICheckOutcome> {
+  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, turn);
 
   return {
     passed,
@@ -1556,14 +1578,26 @@ function stuckResult(
   ).sort();
   const errorKeys = gateErrors.map((e) => e.message);
   const ask = buildHandoffAsk(finalSteer, errorKeys);
+  const failureClass = state.lastFailureClass;
+  const failureDetail = state.lastFailureDetail;
+  const attribution =
+    failureClass !== undefined
+      ? attributionLeadIn({
+          failureClass,
+          detail: failureDetail,
+        })
+      : "";
+  const askWithClass = attribution.length > 0 ? `${attribution} ${ask}` : ask;
 
   const handoff: IHandoff = {
     block,
     rungHistory,
     errors: errorKeys,
-    ask,
+    ask: askWithClass,
     resumable: true,
     resume: { triedLevers: rungHistory },
+    failureClass,
+    failureDetail,
   };
 
   ctx.report({
@@ -1760,7 +1794,8 @@ function applyRungLogic(
   rungLevel: number,
   gateErrors: readonly IErrorItem[],
   reason: string,
-  blockFp: string
+  blockFp: string,
+  progress?: { readonly current: number; readonly prior: number }
 ): void {
   const webEnabled = flags.webTools();
 
@@ -1777,7 +1812,8 @@ function applyRungLogic(
       gateErrors,
       reason,
       webEnabled,
-      true // diagnosisOnly
+      true, // diagnosisOnly
+      progress
     );
     // Phase A does NOT set pendingRung — it's recorded tried only after Phase B
 
@@ -1807,7 +1843,9 @@ function applyRungLogic(
     rungLevel,
     gateErrors,
     reason,
-    webEnabled
+    webEnabled,
+    false,
+    progress
   );
 }
 
@@ -2029,7 +2067,10 @@ export function checkStuck(
   // Set up rung-specific logic: R1 diagnosis-only, R2 model overrides, R3 narrow.
   // Pass the sticky block key so a rung's pendingBlockFingerprint matches what the
   // recording hook will compare against next cycle.
-  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockKey);
+  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockKey, {
+    current: gateErrors.length,
+    prior: state.priorGateCount ?? state.lastGateCount,
+  });
 
   // At the TOP rung (change-strategy), also RESET the conversation: the flailing
   // history anchors the model to the dead-end approach it's been repeating. Pruning
@@ -2246,6 +2287,14 @@ export async function injectFeedback(
     state.focusError ?? null,
     ctx.gate.stackProfile?.packs ?? []
   );
+  const attribution =
+    state.lastFailureClass !== undefined
+      ? attributionLeadIn({
+          failureClass: state.lastFailureClass,
+          detail: state.lastFailureDetail,
+        })
+      : "";
+  const attributionBlock = attribution.length > 0 ? `${attribution}\n\n` : "";
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
   // A pending steer (the model stalled) leads the feedback so it can't be missed.
   // R1 Phase A's diagnosis-only instruction takes precedence when set, and is NOT
@@ -2314,7 +2363,7 @@ export async function injectFeedback(
   // One live gate-feedback user slot (replace prior settle walls — do not append forever).
   upsertGateFeedback(
     ctx.messages,
-    `${rotation}${banner}${steer}${notice}${feedback}${how}`
+    `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`
   );
   // A new settle supersedes per-write guard blasts still sitting on create/edit tool results.
   pruneEphemeralToolResidue(ctx.messages);
@@ -2481,6 +2530,8 @@ export async function rollbackNearGreen(
           .join("\n")}`
       : "";
 
+  const formPurityNote = formPurityRollbackAppendix(cp.errors, introduced);
+
   ctx.messages.push({
     role: "user",
     content:
@@ -2488,7 +2539,8 @@ export async function rollbackNearGreen(
       `to ${String(sprayCount)} error(s) — so I reverted those edits back to your best ` +
       `state (${String(cp.errorCount)} error(s) left). Do NOT rewrite files or start over. ` +
       `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}` +
-      introducedNote,
+      introducedNote +
+      formPurityNote,
   });
 }
 
@@ -2752,7 +2804,16 @@ export async function settleGate(
     state.regressions += 1;
   }
 
+  state.priorGateCount = state.lastGateCount;
   state.lastGateCount = curr;
+
+  // Harness-owned attribution from the CURRENT gate (events optional — mid-run
+  // settle usually has only the ErrorSet; behavioral classes still work when the
+  // caller later passes a fuller event stream via classifyFromGate directly).
+  const failure = classifyFromGate(gateErrors);
+
+  state.lastFailureClass = failure.failureClass;
+  state.lastFailureDetail = failure.detail;
 
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate
@@ -2773,15 +2834,24 @@ export async function settleGate(
     // Structured rule/code list (not just a count) so the failure classifier can
     // tell a type error from a lint rule without re-parsing the gate output.
     rules: gateErrors.flatMap((e) => (e.rule === undefined ? [] : [e.rule])),
+    failureClass: failure.failureClass,
+    failureDetail: failure.detail,
     message: gatePassed
       ? `task ${task.id} · turn ${turn}: GREEN`
       : `task ${task.id} · turn ${turn}: red (${String(gateErrors.length)} error(s))${gateDetail}`,
   });
 
   if (gatePassed) {
-    // Gate passed — clear block tracking
+    // Gate passed — clear block tracking AND the last red ErrorSet. Leaving
+    // prevGateErrors populated made Phase-B continues (checklist still open)
+    // cite ghost "outstanding gate error(s)" on readonly-spin / handoff after
+    // GREEN (DeepSeek dogfood: model correctly called the message stale).
     state.blockFingerprint = "";
     state.focusError = null;
+    state.prevGateErrors = [];
+    state.errorAge = new Map();
+    state.lastFailureClass = undefined;
+    state.lastFailureDetail = undefined;
     // WS-B: the build is green — there's no near-green state left to protect.
     state.nearGreenCheckpoint = undefined;
     state.nearGreenBest = undefined;
@@ -2789,13 +2859,9 @@ export async function settleGate(
 
     await polishOnGreen(ctx);
 
-    report({
-      kind: "done",
-      task: task.id,
-      cycles: turn,
-      message: `task ${task.id}: done in ${turn} turn(s)`,
-    });
-
+    // Do NOT emit kind:"done" here — Session Phase B may continue with an open
+    // checklist (`⊙ gate green — checklist still open; continuing`). Callers that
+    // truly finish announce via {@link announceTaskDone}.
     return {
       task: task.id,
       redConfirmed: true,
@@ -2831,6 +2897,21 @@ export async function settleGate(
   await nearGreenCheckpointStep(ctx, state, curr, gateErrors);
 
   return null;
+}
+
+/** Emit the terminal `done` ledger event — only after the caller knows the
+ *  drive will not Phase-B continue (open checklist). */
+export function announceTaskDone(
+  report: Reporter,
+  taskId: string,
+  turns: number
+): void {
+  report({
+    kind: "done",
+    task: taskId,
+    cycles: turns,
+    message: `task ${taskId}: done in ${String(turns)} turn(s)`,
+  });
 }
 
 /** Handle a non-gate exit (timeout, degeneration, readonly-spin, malformed-tool-call)

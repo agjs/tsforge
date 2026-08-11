@@ -19,7 +19,8 @@ export interface IProfileDefinition {
  *  re-export). These are off by default so tsforge stays adoptable on an EXISTING repo
  *  that has its own valid structure; they turn on when the project opts into the
  *  `opinionated` profile (tsforge.config.json or `--profile opinionated`) — e.g. a
- *  greenfield app where tsforge owns the tree. The strictness moat — the
+ *  greenfield React app where tsforge owns the tree (boringstack scaffold seeds this;
+ *  empty Vite scratch builds pass `--profile opinionated`). The strictness moat — the
  *  layout-AGNOSTIC best practices (no `as`, no `any`, no JSX computation, component-file
  *  purity, named JSX handlers, forwardRef display names, …) — is ON in every profile. */
 export const STRUCTURE_RULES = [
@@ -27,6 +28,7 @@ export const STRUCTURE_RULES = [
   "index-must-reexport-default",
   "no-state-in-component-body",
   "max-hooks-per-file",
+  "one-component-per-file",
 ] as const;
 
 const structureOffOverrides = Object.fromEntries(
@@ -84,6 +86,7 @@ export const PROFILE_DEFINITIONS: Readonly<
       "index-must-reexport-default": "error",
       "forwardref-display-name": "error",
       "max-hooks-per-file": "error",
+      "one-component-per-file": "error",
       "prefer-early-return": "error",
     },
   },

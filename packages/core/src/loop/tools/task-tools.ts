@@ -23,6 +23,15 @@ type TaskMutateTool =
   | "task_add"
   | "task_update";
 
+/** User-facing verb for settled checklist tool lines (no plan UUID). */
+const TASK_REPORT_VERB: Record<TaskMutateTool, string> = {
+  task_focus: "focus",
+  task_complete: "done",
+  task_uncomplete: "reopen",
+  task_add: "add",
+  task_update: "update",
+};
+
 function parseKind(raw: unknown): ChecklistItemKind | undefined {
   return raw === "investigate" ||
     raw === "create" ||
@@ -62,16 +71,18 @@ function requirePlan(
 
 function persistAndNotify(
   ctx: IToolContext,
-  planId: string,
   plan: IPlanDocument,
-  tool: TaskMutateTool
+  tool: TaskMutateTool,
+  title: string
 ): void {
   savePlan(ctx.cwd, plan);
   ctx.onPlanChanged?.(plan);
+  const label = title.trim().length > 0 ? title.trim() : "(untitled)";
+
   ctx.report({
     kind: "tool",
     task: ctx.task,
-    message: `${tool}: plan ${planId} updated`,
+    message: `${TASK_REPORT_VERB[tool]} · ${label}`,
   });
 }
 
@@ -136,8 +147,9 @@ export function doTaskFocus(
     return reject(ctx, "task_focus", result.error);
   }
 
-  persistAndNotify(ctx, bound.planId, result.plan, "task_focus");
   const item = findItem(result.plan.items, id);
+
+  persistAndNotify(ctx, result.plan, "task_focus", item?.title ?? id);
 
   return [
     `focused: ${item?.title ?? id}`,
@@ -195,7 +207,7 @@ export async function doTaskComplete(
   ctx.report({
     kind: "tool",
     task: ctx.task,
-    message: "task_complete: running gate before marking done",
+    message: "gate · checking before done",
   });
 
   const gate = await ctx.runTaskGate();
@@ -225,8 +237,9 @@ export async function doTaskComplete(
     return reject(ctx, "task_complete", result.error);
   }
 
-  persistAndNotify(ctx, bound.planId, result.plan, "task_complete");
   const item = findItem(result.plan.items, id);
+
+  persistAndNotify(ctx, result.plan, "task_complete", item?.title ?? id);
 
   return `completed: ${item?.title ?? id}`;
 }
@@ -268,8 +281,9 @@ export function doTaskUncomplete(
     return reject(ctx, "task_uncomplete", result.error);
   }
 
-  persistAndNotify(ctx, bound.planId, result.plan, "task_uncomplete");
   const item = findItem(result.plan.items, id);
+
+  persistAndNotify(ctx, result.plan, "task_uncomplete", item?.title ?? id);
 
   return `reopened: ${item?.title ?? id}`;
 }
@@ -315,7 +329,7 @@ export function doTaskAdd(
     return reject(ctx, "task_add", result.error);
   }
 
-  persistAndNotify(ctx, bound.planId, result.plan, "task_add");
+  persistAndNotify(ctx, result.plan, "task_add", title);
 
   return `added: ${title} (${result.id})`;
 }
@@ -389,8 +403,9 @@ export function doTaskUpdate(
     return reject(ctx, "task_update", result.error);
   }
 
-  persistAndNotify(ctx, bound.planId, result.plan, "task_update");
   const item = findItem(result.plan.items, id);
+
+  persistAndNotify(ctx, result.plan, "task_update", item?.title ?? id);
 
   return `updated: ${item?.title ?? id}`;
 }

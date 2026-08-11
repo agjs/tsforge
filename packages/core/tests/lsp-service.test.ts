@@ -103,6 +103,33 @@ test("fixAll adds a missing import (fixMissingImport)", async () => {
   }
 });
 
+test("fixAll does NOT invent empty property stubs for missing fields", async () => {
+  // Dogfood: Artist gained followers/following → tsFixAll's fixMissingProperties
+  // stubbed `followers: [], following: []` into seed data, gate went green, model
+  // then thrashed replacing identical empty arrays. Missing required fields must
+  // stay as diagnostics for the model to fill with real data.
+  const dir = await project({
+    "types.ts":
+      "export type Artist = { id: string; followers: string[]; following: string[] };\n",
+    "seed.ts":
+      'import type { Artist } from "./types";\n' +
+      'export const seed: Artist[] = [{ id: "a1" }];\n',
+  });
+
+  try {
+    const svc = new TsService(dir);
+    const before = await Bun.file(join(dir, "seed.ts")).text();
+    const applied = svc.fixAll("seed.ts");
+    const after = await Bun.file(join(dir, "seed.ts")).text();
+
+    expect(after).toBe(before);
+    expect(applied).toBe(0);
+    expect(svc.diagnostics("seed.ts").some((d) => d.code === 2739)).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("typeAt returns the type at a position", async () => {
   const dir = await project({ "a.ts": "export const v = 41 + 1;\n" });
 

@@ -300,3 +300,90 @@ export function classifyRun(
 
   return { failureClass: classifyBehavior(signals), signals };
 }
+
+/** Empty signal tallies for a green mid-run settle (no event walk needed). */
+function emptySignals(): IFailureSignals {
+  return {
+    repairs: 0,
+    salvages: 0,
+    editRejects: 0,
+    degenerated: false,
+    timedOut: false,
+    toolUseFailed: false,
+    tsErrors: 0,
+    lintErrors: 0,
+    missingModule: 0,
+    browser: 0,
+    build: 0,
+  };
+}
+
+/**
+ * Live-loop classifier: stamp the CURRENT gate from its ErrorSet (+ optional
+ * recent events for behavioral signals). Unlike `classifyRun`, a green gate is
+ * `none` even when the event stream has not yet emitted `done` — settle needs
+ * that before the done event exists.
+ */
+export function classifyFromGate(
+  gateErrors: ErrorSet,
+  events: readonly ILoopEvent[] = []
+): IFailureSummary {
+  if (gateErrors.length === 0) {
+    return { failureClass: FAILURE_CLASS.none, signals: emptySignals() };
+  }
+
+  return classifyRun(events, gateErrors);
+}
+
+/** Forbidden rationalizations the model must not try for each failure class. */
+const ATTRIBUTION_GUIDANCE: Record<FailureClass, string> = {
+  [FAILURE_CLASS.none]: "gate is green",
+  [FAILURE_CLASS.lintRule]:
+    "fix implementation; do not disable, skip, or weaken the rule, and do not " +
+    "move the call into an unallowlisted path without updating the rule defaults",
+  [FAILURE_CLASS.typeError]:
+    "fix types with guards/narrowing; do not cast around the error",
+  [FAILURE_CLASS.hallucinatedImport]:
+    "if the missing module is an npm package, install it (and `@types/*` if it ships no types) " +
+    "before more feature code; only create a local file when the import is a project-relative " +
+    "path — do not invent packages",
+  [FAILURE_CLASS.editReject]:
+    "fix the path/scope of the write; do not retry the same rejected target",
+  [FAILURE_CLASS.toolMalformed]:
+    "emit well-formed tool calls; do not narrate file contents as chat",
+  [FAILURE_CLASS.noProgress]:
+    "change strategy; if the block stays unclear, raise a hand rather than thrashing",
+  [FAILURE_CLASS.degeneration]:
+    "stop repeating; take one concrete next step or raise a hand",
+  [FAILURE_CLASS.timeout]:
+    "infrastructure timeout — raise a hand; do not invent a code fix",
+  [FAILURE_CLASS.routePhantom]:
+    "wire a real route/page; do not leave stubs that render blank",
+  [FAILURE_CLASS.browserFail]:
+    "fix the runtime/render failure; do not paper over it in tests alone",
+  [FAILURE_CLASS.buildFail]:
+    "fix the bundler/build error; do not ignore the build step",
+  [FAILURE_CLASS.unknown]:
+    "cause is unclear — prefer raising a hand over guessing",
+};
+
+/**
+ * One-line harness-owned attribution for gate feedback. Empty when the gate is
+ * green (`none`) so callers can prepend without a special case.
+ */
+export function attributionLeadIn(summary: {
+  readonly failureClass: FailureClass;
+  readonly detail?: string;
+}): string {
+  if (summary.failureClass === FAILURE_CLASS.none) {
+    return "";
+  }
+
+  const detail =
+    summary.detail !== undefined && summary.detail.length > 0
+      ? ` (${summary.detail})`
+      : "";
+  const guidance = ATTRIBUTION_GUIDANCE[summary.failureClass];
+
+  return `Harness attribution: ${summary.failureClass}${detail} — ${guidance}.`;
+}

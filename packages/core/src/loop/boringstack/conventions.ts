@@ -1,20 +1,27 @@
 /**
  * The boringstack CONVENTION library — the "how to write it right" knowledge the
  * model needs AT write-time, distilled from boringstack's `docs/agents/*` and kept
- * in lockstep with what the gate enforces. Two delivery paths use it:
- *   • PUSH (primary) — the harness injects the relevant guide the moment the model
- *     does the matching thing (e.g. creates its first component), so it writes
- *     compliant code the FIRST time instead of writing wrong then refactoring.
- *   • PULL (secondary) — the `pull_conventions` tool lets the model fetch a guide
- *     on demand for the long tail the harness can't pre-anticipate.
- * Concise on purpose: a local model absorbs a focused 8-line guide, not a 368-line
- * wall. Each guide maps 1:1 to the rules that reject its violation.
+ * in lockstep with what the gate enforces. Delivery paths:
+ *   • PULL (primary) — `pull_conventions` before first write to an untouched path
+ *     (hard-required by the write tools when a provider is active).
+ *   • PUSH (backup) — after a gate red, inject the matching guide once for
+ *     reinforcement (not a substitute for pull-before-write).
+ * House (gate-aligned) topics are composed underneath; this module overrides with
+ * BoringStack wording and adds stack-only topics (data-fetching, i18n, …).
+ * Concise on purpose: a local model absorbs a focused guide, not a 368-line wall.
  */
 
 import type { IConventionProvider } from "../conventions-provider";
+import {
+  composeConventionProviders,
+  houseConventionProvider,
+  makeConventionProvider,
+} from "../conventions";
 
 /** The convention topics the model can be handed or pull. Single source of truth:
- *  the const tuple drives both the type and the runtime list (no `as` cast). */
+ *  the const tuple drives both the type and the runtime list (no `as` cast).
+ *  House topics (anatomy, forms, …) are overridden below with BoringStack wording;
+ *  stack-only topics (data-fetching, i18n, …) live only here. */
 const TOPICS = [
   "component-anatomy",
   "file-layout",
@@ -69,6 +76,9 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "no-confusing-void-expression",
       "no-error-stringify",
       "no-duplicate-string",
+      // Bare names after topicForRule strips plugin prefixes (Shiftboard dogfood).
+      "naming-convention",
+      "no-bare-date-now",
     ],
     // Tests were 61% of the edits on a live CRUD build (measured) — the model doesn't
     // know the stack's test idioms so it flails: guesses .test.ts vs .test.tsx (and makes
@@ -138,9 +148,11 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "FILE PURITY (boringstack). A component `.tsx` holds ONLY imports + the component " +
     "— nothing else atop it. Move each out and import it back: a type → " +
     "`<feature>.types.ts`; a constant / label-map / column-spec → " +
-    "`<feature>.constants.ts` (`as const`); a pure helper (formatX, timeAgo) → " +
-    "`src/lib/<name>.ts`. Inline types/constants/helpers are a gate error " +
-    "(component-file-purity).",
+    "`<feature>.constants.ts` (`as const` for label maps / literal unions; for RHF " +
+    "`defaultValues` with mutable arrays, type as `CreateXInput` / " +
+    "`z.infer<typeof schema>` — bare `as const` makes arrays readonly and breaks " +
+    "`useForm`); a pure helper (formatX, timeAgo) → `src/lib/<name>.ts`. Inline " +
+    "types/constants/helpers are a gate error (component-file-purity).",
   jsx:
     "JSX (boringstack). No COMPUTATION inside JSX — the markup only READS " +
     "already-computed values. A derived value → a `useMemo` in `<feature>.hooks.ts`; " +
@@ -187,9 +199,14 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "`Resolver<In, any, Out>` that won't match `useForm`/`SubmitHandler` (a persistent 'Resolver … " +
     "not assignable' / 'not assignable to SubmitHandler' error). Keep every field required in the " +
     "schema and supply its initial value in `useForm({ defaultValues })`; type the hook as " +
-    "`useForm<z.infer<typeof schema>>` so onSubmit's input matches `SubmitHandler`. Map " +
-    "server/validation errors back onto the fields (`setError`); keep " +
-    "the component rendering the field state the hook returns.",
+    "`useForm<z.infer<typeof schema>>` so onSubmit's input matches `SubmitHandler`. " +
+    "SHADCN Form + FieldValues trap (dogfood): make `Form` generic — " +
+    "`function Form<T extends FieldValues>(props: UseFormReturn<T> & { children: ReactNode })` " +
+    "under `components/ui/` (purity-exempt). Put `defaultValues` in `<feature>.constants.ts` " +
+    "typed as the form input (`CreateXInput` / `z.infer<typeof schema>`), NOT bare `as const`. " +
+    "Order: extract defaults → Form generic → wire the page — do not fix FieldValues by dumping " +
+    "consts into the page `.tsx`. Map server/validation errors back onto the fields (`setError`); " +
+    "keep the component rendering the field state the hook returns.",
   "data-fetching":
     "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
     "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). PATH STRINGS are the #1 thing " +
@@ -250,7 +267,10 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "• NEVER stringify an error into a log — pass the error object: " +
     '`log.error({ err }, "failed")`, never `` log.error(`${err}`) `` or `String(err)`.\n' +
     "• HOIST heavily-repeated string literals — the same literal 5+ times is a no-duplicate-string " +
-    "error; pull it into a `const` (or `<Feature>.constants.ts`) and reference that.",
+    "error; pull it into a `const` (or `<Feature>.constants.ts`) and reference that.\n" +
+    "• Interfaces need an `I` prefix (`interface IPerson`, not `Person` — naming-convention).\n" +
+    "• No bare `Date.now()` / `Math.random()` — put `now()` in `src/lib/time.ts` (or " +
+    "`clock.ts` / `now.ts`); that file is allowlisted for `tsforge/no-bare-date-now`.",
   testing:
     "TESTING (boringstack). Every logic file needs a co-located test (test-sibling-required), " +
     "and tests are where builds waste the MOST turns — because the model guesses the idioms. " +
@@ -276,6 +296,8 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "hook in a `QueryClient` with `retry:false` via `renderHook(() => useX(), { wrapper })` and " +
     "assert with `await waitFor(() => …)`. Imports: `vitest` (`describe, it, expect, vi, beforeEach`) " +
     "+ `@testing-library/react` (`renderHook, waitFor, act`) + `@tanstack/react-query`.\n" +
+    "• When Vitest uses jsdom, install `@types/jsdom` so declaration-file errors never appear; " +
+    "do not leave unused `screen` / `waitFor` imports. A new `src/lib/time.ts` needs `time.test.ts`.\n" +
     "• API tests (apps/api) run under `bun:test`, NOT vitest — `import { describe, expect, test } " +
     'from "bun:test"` (vitest + `vi.*` are UI-only; using them in an apps/api test fails to resolve). ' +
     "For a `*.service.ts` whose function hits the DB (Drizzle), do NOT unit-test it in isolation — you'll " +
@@ -395,15 +417,11 @@ export function conventionTopics(): ConventionTopic[] {
   return [...TOPICS];
 }
 
-/** The full PUSH body of every stack convention GUIDE (not just a topic index), joined for the
- *  build system prompt (WS-A1). Front-loading the actual compliant patterns — the exact shape
- *  for components, state, JSX, casts, data-fetching, etc. — lets the model write it right on the
- *  FIRST draft instead of guessing from memory and burning turns at the gate. The reactive PUSH
- *  (`unseenGuidesForErrors`) and `pull_conventions` remain fallbacks for reinforcement and the
- *  long tail, not the primary teaching. */
+/** Join every full guide body — for tests / tooling that assert guide CONTENT.
+ *  NOT injected into the system prompt (that is the short pull contract only). */
 export function buildConventionGuides(): string {
   return [
-    "HOW THIS STACK WRITES CODE — read this BEFORE you write, not after the gate rejects you. These are the exact compliant patterns the gate enforces; write your FIRST draft this way instead of guessing from memory and burning turns repairing. (`pull_conventions` re-fetches any of these on demand.)",
+    "HOW THIS STACK WRITES CODE — full guide bodies (for pull/push, not the system prompt).",
     "",
     ...conventionTopics().map((t) => conventionGuide(t)),
   ].join("\n\n");
@@ -436,8 +454,12 @@ export function topicForRule(rule: string): ConventionTopic | null {
  * beside the error, not after the steering ladder escalates. One guide per topic
  * per run: enough to teach, not a wall.
  */
+/** Gate messages that mean the Form/FieldValues typing thrash — push the forms guide. */
+const FORM_FIELDVALUES_FEEDBACK =
+  /UseFormReturn|FieldValues|FormProvider|zodResolver|defaultValues/iu;
+
 export function unseenGuidesForErrors(
-  errors: readonly { readonly rule?: string }[],
+  errors: readonly { readonly rule?: string; readonly message?: string }[],
   seen: Set<string>
 ): string[] {
   const out: string[] = [];
@@ -457,20 +479,38 @@ export function unseenGuidesForErrors(
     out.push(conventionGuide(topic));
   }
 
+  // Form typing errors often have no mapped rule id — pull forms when the message
+  // names RHF/FieldValues (dogfood: Form↔purity thrash).
+  if (
+    !seen.has("forms") &&
+    errors.some((e) =>
+      FORM_FIELDVALUES_FEEDBACK.test(`${e.rule ?? ""} ${e.message ?? ""}`)
+    )
+  ) {
+    seen.add("forms");
+    out.push(conventionGuide("forms"));
+  }
+
   return out;
 }
 
 /**
- * The BoringStack convention library packaged as the generic `IConventionProvider`
- * seam. The core loop (system-prompt front-load, reactive push, `pull_conventions`
- * tool) depends only on the INTERFACE — injected via `ISessionConfig.conventions` /
- * `ILoopCtx.tool.conventions`; this concrete provider is the BoringStack CONTENT,
- * supplied by the boringstack adapter (`build-config.ts`). This module lives under
- * `loop/boringstack/`, so no core file outside the adapter imports it.
+ * BoringStack extras + overrides: stack-only topics and BoringStack-flavored
+ * wording for shared house topics. Composed under {@link boringstackConventionProvider}.
  */
-export const boringstackConventionProvider: IConventionProvider = {
-  buildGuides: buildConventionGuides,
-  unseenForErrors: unseenGuidesForErrors,
-  guide: (topic) => (isConventionTopic(topic) ? conventionGuide(topic) : null),
-  topics: conventionTopics,
-};
+const boringstackExtrasProvider: IConventionProvider = makeConventionProvider({
+  topics: TOPICS,
+  guides: GUIDES,
+  topicRules: TOPIC_RULES,
+  messagePush: [{ topic: "forms", pattern: FORM_FIELDVALUES_FEEDBACK }],
+});
+
+/**
+ * House (gate rules) + BoringStack extras. Full guide bodies arrive via
+ * `pull_conventions` / reactive PUSH; `buildGuides()` is only the short pull contract.
+ */
+export const boringstackConventionProvider: IConventionProvider =
+  composeConventionProviders(
+    houseConventionProvider,
+    boringstackExtrasProvider
+  );

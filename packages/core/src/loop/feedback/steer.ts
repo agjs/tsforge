@@ -69,7 +69,15 @@ const PLAYBOOKS: Record<string, string> = {
   "component-file-purity":
     "A component file may hold ONLY imports + the component. Move the flagged " +
     "declaration out and import it back: types → `<feature>.types.ts`, constants → " +
-    "`<feature>.constants.ts` (`as const`), pure helpers → `src/lib/`.",
+    "`<feature>.constants.ts`, pure helpers → `src/lib/`. Use `as const` for label " +
+    "maps / literal unions. For RHF `defaultValues` with mutable arrays, type as " +
+    "the form input (`CreateXInput` / `z.infer<typeof schema>`) — bare `as const` " +
+    "makes arrays readonly and breaks `useForm`.",
+  "no-derived-state-in-effect":
+    "Effect + setState is for I/O (fetch, subscribe), not for deriving values. " +
+    "If the next state is a pure function of props/state → compute in render or " +
+    "`useMemo`. If you need server/async data → keep the effect, set state from " +
+    "the async result, and do not also sync props→state in another effect.",
   "no-self-import":
     "This file imports/re-exports from itself. If it's a barrel `index.ts` next to " +
     "an `index.tsx`, DELETE the barrel — the `.tsx` is already the module entry " +
@@ -168,15 +176,24 @@ function playbooksFor(errors: readonly ISteerError[]): string {
  * `reason` is the convergence-guard diagnosis. `webEnabled` gates the `web_search`
  * suggestion — never tell the model to use a tool the build doesn't have.
  * `diagnosisOnly` (R1 Phase A): if true, ask ONLY for diagnosis, not action
- * (the diagnosis becomes the next steer's input). */
+ * (the diagnosis becomes the next steer's input).
+ * `progress`: prior vs current gate error counts — when the count dropped, soften
+ * the "NOT converging" framing so a mid-fix multi-step approach is not abandoned. */
 export function buildSteerMessage(
   level: number,
   errors: readonly ISteerError[],
   reason: string,
   webEnabled = false,
-  diagnosisOnly = false
+  diagnosisOnly = false,
+  progress?: { readonly current: number; readonly prior: number }
 ): string {
-  const header = `⚠ STEER (escalation ${String(level)}/${String(STEER_LADDER_MAX)}) — you are NOT converging: ${reason}.`;
+  const improved =
+    progress !== undefined &&
+    progress.prior >= 0 &&
+    progress.current < progress.prior;
+  const header = improved
+    ? `⚠ STEER (escalation ${String(level)}/${String(STEER_LADDER_MAX)}) — errors improved (${String(progress.prior)}→${String(progress.current)}) but the block remains: ${reason}.`
+    : `⚠ STEER (escalation ${String(level)}/${String(STEER_LADDER_MAX)}) — you are NOT converging: ${reason}.`;
 
   // The rungs escalate INTELLIGENCE, not more static rules. The gate already told
   // the model WHAT is wrong (the compiler/lint error); repeating that won't unstick

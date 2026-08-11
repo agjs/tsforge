@@ -2048,6 +2048,7 @@ describe("react-component-architecture pack", () => {
       "no-nested-component",
       "no-react-fc",
       "no-state-in-component-body",
+      "one-component-per-file",
     ]);
   });
 
@@ -2057,7 +2058,7 @@ describe("react-component-architecture pack", () => {
       "react-component-architecture",
       "no-loading-text-use-skeleton",
       code,
-      "src/views/Deals/index.tsx"
+      "src/views/Items/index.tsx"
     );
 
     expect(messages).toHaveLength(1);
@@ -2070,7 +2071,7 @@ describe("react-component-architecture pack", () => {
         "react-component-architecture",
         "no-loading-text-use-skeleton",
         `export function View() { return <span>${text}</span>; }`,
-        "src/views/Deals/index.tsx"
+        "src/views/Items/index.tsx"
       );
 
       expect(messages).toHaveLength(1);
@@ -2083,7 +2084,7 @@ describe("react-component-architecture pack", () => {
       "react-component-architecture",
       "no-loading-text-use-skeleton",
       code,
-      "src/views/Deals/index.tsx"
+      "src/views/Items/index.tsx"
     );
 
     expect(messages).toHaveLength(0);
@@ -2095,7 +2096,7 @@ describe("react-component-architecture pack", () => {
       "react-component-architecture",
       "no-loading-text-use-skeleton",
       code,
-      "src/views/Deals/index.tsx"
+      "src/views/Items/index.tsx"
     );
 
     expect(messages).toHaveLength(0);
@@ -2114,12 +2115,12 @@ describe("react-component-architecture pack", () => {
   });
 
   test("component-folder-structure: allows a feature component under views/<F>/components/", () => {
-    const code = `export function DealsTable() { return <div />; }`;
+    const code = `export function ItemsTable() { return <div />; }`;
     const messages = lint(
       "react-component-architecture",
       "component-folder-structure",
       code,
-      "src/views/Dashboard/components/DealsTable.tsx"
+      "src/views/Dashboard/components/ItemsTable.tsx"
     );
 
     expect(messages).toHaveLength(0);
@@ -2138,27 +2139,96 @@ describe("react-component-architecture pack", () => {
   });
 
   test("component-folder-structure: rejects a component scattered outside views/", () => {
-    const code = `export function DealsTable() { return <div />; }`;
+    const code = `export function ItemsTable() { return <div />; }`;
     const messages = lint(
       "react-component-architecture",
       "component-folder-structure",
       code,
-      "src/dashboard/DealsTable.tsx"
+      "src/dashboard/ItemsTable.tsx"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
   });
 
   test("component-folder-structure: rejects a component at the view root (not in components/)", () => {
-    const code = `export function DealsTable() { return <div />; }`;
+    const code = `export function ItemsTable() { return <div />; }`;
     const messages = lint(
       "react-component-architecture",
       "component-folder-structure",
       code,
-      "src/views/Dashboard/DealsTable.tsx"
+      "src/views/Dashboard/ItemsTable.tsx"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
+  });
+
+  test("component-folder-structure: kebab basename under src/pages/ is wrong location", () => {
+    const code = `export function FeedPage() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/pages/feed-page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
+  });
+
+  test("component-folder-structure: allows kebab feature component under views/.../components/", () => {
+    const code = `export function GamerCard() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/views/Feed/components/gamer-card.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("component-folder-structure: allows feature component under features/<F>/components/", () => {
+    const code = `export function ClanCard() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/features/Clans/components/ClanCard.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-state-in-component-body: kebab page with useState still reports", () => {
+    const code = `
+      import { useState } from "react";
+      export function FeedPage() {
+        const [n, setN] = useState(0);
+        return <div>{n}</div>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-state-in-component-body",
+      code,
+      "src/pages/feed-page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noStateInComponent");
+  });
+
+  test("one-component-per-file: second top-level component reports", () => {
+    const code = `
+      export function Alpha() { return <div />; }
+      export function Beta() { return <span />; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "one-component-per-file",
+      code,
+      "src/views/Feed/components/Alpha.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("multi");
   });
 
   test("component-file-purity: rule exists and is callable", () => {
@@ -2175,14 +2245,14 @@ describe("react-component-architecture pack", () => {
 
   test("component-file-purity: rejects an inline constant beside a component", () => {
     const code = `
-      const STAGE_LABEL = { lead: "Lead" };
-      export function DealsTable() { return <div>{STAGE_LABEL.lead}</div>; }
+      const STATUS_LABEL = { draft: "Draft" };
+      export function ItemsTable() { return <div>{STATUS_LABEL.draft}</div>; }
     `;
     const messages = lint(
       "react-component-architecture",
       "component-file-purity",
       code,
-      "src/views/Dashboard/components/DealsTable.tsx"
+      "src/views/Dashboard/components/ItemsTable.tsx"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("inlineConstant");
@@ -2191,13 +2261,13 @@ describe("react-component-architecture pack", () => {
   test("component-file-purity: rejects an inline helper function beside a component", () => {
     const code = `
       function formatCurrency(n: number): string { return String(n); }
-      export function DealsTable() { return <div>{formatCurrency(1)}</div>; }
+      export function ItemsTable() { return <div>{formatCurrency(1)}</div>; }
     `;
     const messages = lint(
       "react-component-architecture",
       "component-file-purity",
       code,
-      "src/views/Dashboard/components/DealsTable.tsx"
+      "src/views/Dashboard/components/ItemsTable.tsx"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("inlineHelper");
@@ -2205,14 +2275,14 @@ describe("react-component-architecture pack", () => {
 
   test("component-file-purity: rejects an inline type beside a component", () => {
     const code = `
-      interface IProps { deals: readonly string[]; }
-      export function DealsTable({ deals }: IProps) { return <div>{deals.length}</div>; }
+      interface IProps { items: readonly string[]; }
+      export function ItemsTable({ items }: IProps) { return <div>{items.length}</div>; }
     `;
     const messages = lint(
       "react-component-architecture",
       "component-file-purity",
       code,
-      "src/views/Dashboard/components/DealsTable.tsx"
+      "src/views/Dashboard/components/ItemsTable.tsx"
     );
 
     expect(messages.map((m) => m.messageId)).toContain("inlineType");
@@ -2221,18 +2291,18 @@ describe("react-component-architecture pack", () => {
   test("component-file-purity: allows a pure component file (imports + component only)", () => {
     const code = `
       import { Table } from "@/components/ui/table";
-      import { dealColumns } from "../dashboard.constants";
-      import type { IDeal } from "../dashboard.types";
+      import { itemColumns } from "../dashboard.constants";
+      import type { IItem } from "../dashboard.types";
 
-      export function DealsTable({ deals }: { deals: readonly IDeal[] }) {
-        return <Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />;
+      export function ItemsTable({ items }: { items: readonly IItem[] }) {
+        return <Table columns={itemColumns} data={items} rowKey={(row) => row.id} />;
       }
     `;
     const messages = lint(
       "react-component-architecture",
       "component-file-purity",
       code,
-      "src/views/Dashboard/components/DealsTable.tsx"
+      "src/views/Dashboard/components/ItemsTable.tsx"
     );
 
     expect(messages).toHaveLength(0);
@@ -3609,6 +3679,55 @@ export function Counter() {
       "no-derived-state-in-effect",
       code,
       "src/Counter.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-derived-state-in-effect: allows promise-chain data-loading hooks", () => {
+    // setState from .then/.catch is I/O, not derived props→state. The old
+    // "setter only in effect" heuristic false-positived legitimate load hooks.
+    const code = `import { useEffect, useState } from "react";
+declare function fetchItem(id: string): Promise<{ name: string }>;
+export function useItem(id: string) {
+  const [item, setItem] = useState<{ name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  useEffect(function loadItem() {
+    fetchItem(id)
+      .then((data) => { setItem(data); setNotFound(false); setError(null); })
+      .catch(() => { setNotFound(true); });
+  }, [id]);
+  return { item, error, notFound };
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-derived-state-in-effect",
+      code,
+      "src/hooks/use-item.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-derived-state-in-effect: allows async/await data-loading effects", () => {
+    const code = `import { useEffect, useState } from "react";
+declare function listItems(): Promise<string[]>;
+export function useItems() {
+  const [items, setItems] = useState<string[]>([]);
+  useEffect(() => {
+    void (async () => {
+      const data = await listItems();
+      setItems(data);
+    })();
+  }, []);
+  return items;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-derived-state-in-effect",
+      code,
+      "src/hooks/use-items.ts"
     );
 
     expect(messages).toHaveLength(0);

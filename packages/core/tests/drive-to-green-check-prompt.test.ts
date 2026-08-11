@@ -70,6 +70,7 @@ test("a drive-to-green Session with offerCheck puts the check guidance in its sy
       provider: systemCapturingProvider(cap),
       cwd: dir,
       files: ["**/*"],
+      accept: "tsc --strict",
       executionMode: "drive-to-green",
       offerCheck: true,
     });
@@ -78,6 +79,34 @@ test("a drive-to-green Session with offerCheck puts the check guidance in its sy
 
     expect(cap.system).toContain("`check`");
     expect(cap.system).not.toContain("or the acceptance/gate command yourself");
+    // Task contract must advertise on-demand check (not only end-of-turn settle).
+    expect(cap.system).toContain("call the `check` tool any time");
+    expect(cap.system).not.toContain(
+      "runs automatically when you stop calling tools — fix any failures and continue until it passes."
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("chat Session without offerCheck keeps end-of-turn-only Check: contract", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-chat-"));
+  const cap = { system: "" };
+
+  try {
+    const session = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      accept: "tsc --strict",
+    });
+
+    await session.send("go");
+
+    expect(cap.system).toContain(
+      "runs automatically when you stop calling tools"
+    );
+    expect(cap.system).not.toContain("call the `check` tool any time");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -109,6 +138,7 @@ test("the Tools inventory lists check and pull_conventions when they are offered
 
   expect(both).toContain("`check` (run the gate now");
   expect(both).toContain("`pull_conventions`");
+  expect(both).toContain("not the whole catalog");
 
   // Neither leaks into the inventory when not offered.
   const neither = buildDriveToGreenSystem(DEFAULT_CONVENTIONS, false, false);
@@ -195,7 +225,7 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
 
     await session.send("continue");
 
-    expect(cap.system).toContain("HOW THIS STACK WRITES CODE");
+    expect(cap.system).toContain("pull-before-first-write");
     expect(cap.system).not.toContain("OLD PROMPT");
     expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
   } finally {

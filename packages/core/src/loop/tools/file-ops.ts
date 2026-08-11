@@ -37,6 +37,17 @@ import {
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
 import { trace } from "../../lib/trace";
+import { missingConventionPullReject } from "../conventions";
+
+/** Refuse first writes until mapped convention topics were pulled this session. */
+function conventionPullGate(file: string, ctx: IToolContext): string | null {
+  return missingConventionPullReject(file, {
+    conventionsActive: ctx.conventions !== undefined,
+    touched: ctx.touched,
+    pulledTopics: ctx.pulledTopics,
+    availableTopics: ctx.conventions?.topics() ?? [],
+  });
+}
 
 /** Refuse writes that paste harness history markers onto disk (seen live). */
 const HARNESS_MARKER_REJECT =
@@ -135,16 +146,43 @@ const READ_ONLY_COMMANDS = new Set([
   "file",
   "which",
   "du",
+  "pwd",
   "tsc",
   "git",
+  "echo",
 ]);
+
+/** Runtimes whose `--version` / `-v` is a pure info probe (greenfield plan mode). */
+const VERSION_PROBE_BINS = new Set(["node", "bun", "npm", "pnpm", "yarn"]);
 
 /** Git subcommands that only inspect the repo. */
 const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "branch"]);
 
-/** Shell metacharacters that could turn a read into a write (`> out`, `&& rm`,
- *  `| tee`, command substitution). Their PRESENCE disqualifies — conservative. */
-const SHELL_WRITE_RE = /[>;&|`]|\$\(/;
+/**
+ * Strip stderr discards that are safe in plan mode (`2>/dev/null`, `2>&1`) so
+ * greenfield probes like `ls … 2>/dev/null && cat …` are not rejected solely for
+ * the `>` glyph. Does NOT strip stdout file redirects (`> file`, `>> file`).
+ */
+function stripSafeStderrRedirects(command: string): string {
+  return command
+    .replace(/\s+2>\s*\/dev\/null\b/gu, "")
+    .replace(/\s+2>&1\b/gu, "");
+}
+
+/**
+ * Shell metacharacters that make a command non-inspectable for plan mode.
+ * Allows `&&` / `;` chains of read-only segments; still rejects pipes, stdout
+ * redirects, background `&`, and command substitution. Call after
+ * {@link stripSafeStderrRedirects}.
+ */
+function hasDisallowedShellMeta(command: string): boolean {
+  if (/[>|`]|\$\(/.test(command)) {
+    return true;
+  }
+
+  // Trailing or lone `&` (background) — not `&&`.
+  return /(?:^|[^&])&(?:[^&]|$)/u.test(command);
+}
 
 /** Path targets a shell command WRITES via `>`/`>>` redirect or `tee` — so the
  *  run tool can refuse a write that should go through `create`/`edit` (which the
@@ -265,20 +303,41 @@ function tscIsReadOnly(rest: string[]): boolean {
 }
 
 /**
- * Deterministically read-only: exactly one allowlisted command with no
- * redirects/pipes/chaining AND no MUTATING FLAGS for that command. Used by plan
- * mode so the model can explore (`ls`, `rg`, `git log`, `tsc --noEmit`) with no
- * path to mutating the workspace — an allowlisted command can still write via a
- * flag (`find . -delete`, `git branch -D`, `tsc --outDir`), so each is checked.
+ * Deterministically read-only: allowlisted inspection commands with no
+ * redirects/pipes/backgrounding. `&&` chains are OK when EVERY segment is
+ * independently read-only (`pwd && ls`, `node --version && bun --version`) —
+ * a trailing `rm` still fails. Used by plan mode so greenfield can probe the
+ * environment without a path to mutating the workspace.
  */
 export function isReadOnlyCommand(command: string): boolean {
-  if (SHELL_WRITE_RE.test(command)) {
+  const cleaned = stripSafeStderrRedirects(command);
+
+  if (hasDisallowedShellMeta(cleaned)) {
     return false;
   }
 
-  const [head, ...rest] = command.trim().split(/\s+/);
+  // `&&` and `;` both sequence read-only probes (dogfood: `node --version; bun --version`).
+  const segments = cleaned
+    .split(/\s*(?:&&|;)\s*/u)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 
-  if (head === undefined || !READ_ONLY_COMMANDS.has(head)) {
+  return segments.length > 0 && segments.every(isReadOnlySegment);
+}
+
+/** One `&&`-free segment: allowlisted head, or a runtime `--version`/`-v` probe. */
+function isReadOnlySegment(segment: string): boolean {
+  const [head, ...rest] = segment.trim().split(/\s+/);
+
+  if (head === undefined) {
+    return false;
+  }
+
+  if (VERSION_PROBE_BINS.has(head)) {
+    return rest.length === 1 && (rest[0] === "--version" || rest[0] === "-v");
+  }
+
+  if (!READ_ONLY_COMMANDS.has(head)) {
     return false;
   }
 
@@ -529,8 +588,10 @@ export async function runShell(
     return reject(
       ctx,
       "run",
-      "plan mode: only read-only commands are allowed (ls, cat, rg, grep, find, " +
-        `git status/log/diff/show/branch, tsc — no pipes/redirects). Blocked: ${r.command}`
+      "plan mode: only read-only commands are allowed (ls, cat, rg, pwd, echo, " +
+        "node/bun/npm --version, git status/log/diff, tsc --noEmit — no pipes/" +
+        "stdout redirects; `&&`/`;` OK if every segment is read-only; " +
+        `\`2>/dev/null\` OK). Blocked: ${r.command}`
     );
   }
 
@@ -638,11 +699,16 @@ export async function runShell(
  * resources' tables — unrecoverable), so the model rewrites it via the now-uncapped
  * `edit`; an unparseable file has nothing worth protecting and `create` may replace
  * it wholesale. Bun's transpiler throws on parse errors but NOT type errors, so a
- * merely type-wrong file stays protected. Empty = fine (not broken).
+ * merely type-wrong file stays protected.
+ *
+ * Empty / whitespace-only is treated as broken too: there is nothing to protect,
+ * and `edit` cannot recover (empty `oldString` is rejected). Dogfood: a wiped
+ * `index.css` hit `create:exists` + `edit:not-found` forever while the file was
+ * 0 bytes.
  */
 function isSyntacticallyBroken(content: string, file: string): boolean {
   if (content.trim().length === 0) {
-    return false;
+    return true;
   }
 
   // JSON must be parsed as JSON, NOT transpiled as JS: a valid JSON object
@@ -738,6 +804,12 @@ export async function doEdit(
       "edit",
       `edit ${edit.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`
     );
+  }
+
+  const pullBlock = conventionPullGate(edit.file, ctx);
+
+  if (pullBlock !== null) {
+    return reject(ctx, "edit:conventions", pullBlock);
   }
 
   // No edit-size policing. Forcing "small, targeted" edits is a documented
@@ -968,13 +1040,20 @@ export async function doCreate(
     );
   }
 
+  const pullBlock = conventionPullGate(create.file, ctx);
+
+  if (pullBlock !== null) {
+    return reject(ctx, "create:conventions", pullBlock);
+  }
+
   // `create` refuses to overwrite an existing file that still PARSES. This is NOT
   // an edit-size trap (that cap is gone — `edit` now takes any-size replacements,
   // so a full rewrite goes through `edit`): it protects SHARED working files. The
   // model is scoped to the shared app schema (all resources' tables); a wholesale
   // `create` there would silently wipe every OTHER resource's table — unrecoverable.
-  // The ONE exception: a file that no longer parses can't be surgically anchored, so
-  // overwrite is the only clean fix and loses nothing (it's already garbage).
+  // Exceptions: a file that no longer parses, or an empty/whitespace-only file —
+  // nothing worth protecting, and surgical `edit` can't recover an empty file
+  // (empty oldString is otherwise rejected). Overwrite is the clean fix.
   const createPath = join(ctx.cwd, create.file);
   const exists = await Bun.file(createPath).exists();
   const before = exists
@@ -984,10 +1063,16 @@ export async function doCreate(
     : "";
 
   if (exists && !isSyntacticallyBroken(before, create.file)) {
+    const view = await currentFileView(ctx.cwd, create.file);
+    const body =
+      view === null
+        ? " Use `edit` (or `edit_lines` with a hash from `read`) — do not retry `create`."
+        : ` Its CURRENT content is below — copy a region into \`edit\` oldString (or use \`edit_lines\` with a hash from \`read\`); do not retry \`create\`:\n\n${view}`;
+
     return reject(
       ctx,
       "create:exists",
-      `create ${create.file} REJECTED: file already exists. Use \`edit\` to change it (full-file rewrite is fine).`
+      `create ${create.file} REJECTED: file already exists.${body}`
     );
   }
 
@@ -1013,13 +1098,13 @@ export async function doCreate(
       task: ctx.task,
       file: create.file,
       message: exists
-        ? `create ${create.file} (rewrote a syntactically-broken file)`
+        ? `create ${create.file} (rewrote an empty or syntactically-broken file)`
         : `create ${create.file}`,
       content: create.content,
     });
 
     return exists
-      ? `created ${create.file} — rewrote a previously broken file.`
+      ? `created ${create.file} — rewrote a previously empty or broken file.`
       : `created ${create.file}`;
   }
 

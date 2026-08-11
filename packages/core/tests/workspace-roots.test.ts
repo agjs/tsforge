@@ -83,6 +83,19 @@ describe("workspace-roots helpers", () => {
     expect(tokens).toContain("../secret");
   });
 
+  test("outsideWorkspacePaths rejects bare filesystem root (find / spelunk)", () => {
+    const cwd = "/work/app";
+
+    expect(outsideWorkspacePaths(cwd, "find / -path '*tsforge*'")).toEqual([
+      "/",
+    ]);
+    expect(outsideWorkspacePaths(cwd, "ls /")).toEqual(["/"]);
+    expect(outsideWorkspacePaths(cwd, "cat /package.json")).toEqual([
+      "/package.json",
+    ]);
+    expect(outsideWorkspacePaths(cwd, "find . -name '*.ts'")).toEqual([]);
+  });
+
   test("outsideWorkspacePaths ignores in-project + system paths", () => {
     const cwd = "/work/app";
 
@@ -179,6 +192,17 @@ describe("read/run confinement", () => {
 
     expect(out).toContain("REJECTED");
     expect(out).toContain(foreign);
+  });
+
+  test("run rejects find / filesystem-root spelunk before executing", async () => {
+    const out = await runShell(
+      { command: "find / -path '*tsforge*no-derived*'" },
+      toolCtx(dir)
+    );
+
+    expect(out).toContain("REJECTED");
+    expect(out).toContain(OUTSIDE_PROJECT_REJECT.slice(0, 40));
+    expect(out).toContain("/");
   });
 
   test("run allows in-project rg and /usr/bin paths", async () => {

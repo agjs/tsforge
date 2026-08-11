@@ -9,7 +9,10 @@
  */
 import { TOOL_NAME } from "../agent/agent.constants";
 
-/** Tools that count as "tried to mutate" even when args/policy reject. */
+/** Tools that count as "tried to mutate" even when args/policy reject.
+ *  Also: mid-turn `check` and checklist mutations — after GREEN Phase B the
+ *  model must be able to verify / advance the plan without burning the
+ *  readonly-spin budget on honest exploration. */
 export const WRITE_ATTEMPT_TOOLS: ReadonlySet<string> = new Set([
   TOOL_NAME.create,
   TOOL_NAME.edit,
@@ -17,13 +20,21 @@ export const WRITE_ATTEMPT_TOOLS: ReadonlySet<string> = new Set([
   TOOL_NAME.renameSymbol,
   TOOL_NAME.moveFile,
   TOOL_NAME.addDependency,
+  TOOL_NAME.check,
+  TOOL_NAME.taskComplete,
+  TOOL_NAME.taskFocus,
+  TOOL_NAME.taskAdd,
+  TOOL_NAME.taskUpdate,
 ]);
 
-/** Offered after a readonly re-steer — model cannot pick `read` again. */
+/** Offered after a readonly re-steer — model cannot pick survey reads again.
+ *  Includes `check` so it can re-gate without shelling out to tsc (DeepSeek
+ *  dogfood: STOP READING left no way to verify mid-force-write). */
 export const WRITE_FORCE_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_NAME.create,
   TOOL_NAME.edit,
   TOOL_NAME.editLines,
+  TOOL_NAME.check,
 ]);
 
 /** Restrict an offered tool list to write-force names (post-readonly-resteer). */

@@ -38,6 +38,7 @@ import {
 } from "../validate";
 import { ruleHelp } from "./feedback";
 import type { IConventionProvider } from "./conventions-provider";
+import { houseConventionProvider } from "./conventions";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -117,6 +118,7 @@ import {
   runCheckGate,
   runToolCalls,
   settleGate,
+  announceTaskDone,
   toolsFor,
   tryExpertRescue,
 } from "./turn";
@@ -223,13 +225,13 @@ export interface ISessionConfig {
   profile?: ProfileId;
   /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
-   *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
+   *  patterns on demand. Drive-to-green sessions without a provider get the house
+   *  library injected automatically. Decoupled from any flag: chat leaves it off. */
   pullConventions?: boolean;
-  /** The build ADAPTER's convention library, injected as a generic provider (see
-   *  `IConventionProvider`), so the core no longer imports stack-specific CONTENT. ALL
-   *  three delivery paths draw from it: the FRONT-LOADED guides in the system prompt
-   *  (gated with `pullConventions`), the reactive PUSH, and the `pull_conventions` tool
-   *  (both via `ILoopCtx.tool.conventions`). Absent ⇒ no stack conventions. */
+  /** The build ADAPTER's (or house) convention library, injected as a generic provider
+   *  (see `IConventionProvider`). Delivery: short pull contract in the system prompt,
+   *  full bodies via `pull_conventions` + reactive PUSH after red. Absent ⇒ no
+   *  stack conventions (unless drive-to-green defaults to house). */
   conventions?: IConventionProvider;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
@@ -423,11 +425,14 @@ const PLAN_MODE_NOTE =
   "4. PLAN — once you know enough, call the `present_plan` tool with " +
   "{ goal, items: [{ title, detail?, files?, verify?, kind?, children? }] }. " +
   "Do NOT paste the JSON into chat — the harness renders it for the human. " +
-  "Decompose for execution: (a) order contracts/types → implementation → " +
-  "sibling tests (nest tests as children when useful); (b) one outcome per item " +
-  "with an actionable title (e.g. Create src/notes.ts — not vague prose); " +
-  "(c) when known, set `files` to 1–3 relative paths and split by module " +
-  "boundary if more; (d) prefer a parent feature + children over one mega-item; " +
+  "Decompose for execution: (a) GREENFIELD — prefer VERTICAL feature slices " +
+  "(scaffold + one visible proof → feature end-to-end → next feature → polish), " +
+  "NOT layer-first (types then mocks then api then pages); nest contracts/tests " +
+  "under the slice that needs them; (b) one shippable outcome per item with an " +
+  "actionable title (e.g. Feed page end-to-end — not vague prose); (c) `files` " +
+  "is a hint when known — a vertical slice may list more than 3 paths; do NOT " +
+  "split a working feature across items just to keep file counts small; " +
+  "(d) prefer a parent feature + children over one mega-item; " +
   "(e) NEVER a checklist item for 'run tests / lint / the gate' — the harness " +
   "gate validates each task_complete; `verify` is an optional hint only; " +
   "`kind` may be investigate|create|modify|test (advisory). " +
@@ -449,7 +454,7 @@ export const PLAN_APPROVED_NOTE =
   "task_complete RUNS THE GATE and only marks done when green — never invent " +
   "done, never mark an item complete while the gate is red. Finishing requires " +
   "BOTH gate green AND every checklist item done. Walk items in plan order " +
-  "(contracts before impl before tests). Implement now: task_focus the first " +
+  "(vertical slices in the order approved). Implement now: task_focus the first " +
   "open item, then emit the tool calls. Do not re-explore or restate the plan.";
 
 const CHECKLIST_CONTRACT_MARKER = "## Active plan checklist";
@@ -594,9 +599,10 @@ const REPETITION_RESTEER =
 
 /** Pushed on a read-only spin in a BUILD (gated) session — demand a concrete edit. */
 const READONLY_RESTEER_BUILD =
-  "STOP READING. You already have enough context — further reads will be rejected. " +
-  "Your ONLY allowed tools now are create / edit / edit_lines. Emit ONE write " +
-  "with real file contents NOW. Do not call read, run, or search.";
+  "STOP READING. You already have enough context — further survey reads will be rejected. " +
+  "Your ONLY allowed tools now are create / edit / edit_lines / check. Call `check` if you " +
+  "need the current gate errors, then emit ONE write with real file contents. Do not call " +
+  "read, run, or search.";
 
 /** Pushed on a read-only spin in a CONVERSATIONAL (no-gate) session — demand an
  *  answer (there is nothing to edit, so the failure is never wrapping up). */
@@ -693,15 +699,24 @@ const MALFORMED_CALL_NUDGE =
 const TASK_CONTRACT_MARKER = "## Current task contract";
 
 /** The dynamic contract: what's editable right now + how acceptance is checked. */
-function taskContract(files: string[], accept: string | undefined): string {
+function taskContract(
+  files: string[],
+  accept: string | undefined,
+  offerCheck = false
+): string {
   const wholeRepo = files.length === 0 || files.includes("**/*");
   const scope = wholeRepo
     ? "Scope: you may read, run, and edit any file in the workspace."
     : `Scope: edit ONLY these paths — ${files.join(", ")}. Every other file is READ-ONLY; never edit it.`;
-  const check =
-    accept !== undefined && accept.length > 0
-      ? `Check: \`${summarizeGateCommand(accept)}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`
-      : "";
+  let check = "";
+
+  if (accept !== undefined && accept.length > 0) {
+    const label = summarizeGateCommand(accept);
+
+    check = offerCheck
+      ? `Check: \`${label}\` — call the \`check\` tool any time for the full structured error set; the harness also runs it when you stop calling tools. Fix failures until it passes. Do NOT run the gate through the shell.`
+      : `Check: \`${label}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`;
+  }
 
   return [TASK_CONTRACT_MARKER, scope, check]
     .filter((s) => s.length > 0)
@@ -715,6 +730,39 @@ function taskContract(files: string[], accept: string | undefined): string {
  *  advertised tool list in lockstep is the flag↔prompt invariant. */
 function conventionsOffered(cfg: ISessionConfig): boolean {
   return cfg.pullConventions === true && cfg.conventions !== undefined;
+}
+
+/**
+ * Drive-to-green without an adapter provider gets the house convention library
+ * (pull-before-first-write). Explicit `pullConventions: false` opts out. Chat /
+ * ungated stays off. BoringStack (and other adapters) keep their injected compose.
+ */
+function withDefaultHouseConventions(cfg: ISessionConfig): ISessionConfig {
+  if (cfg.executionMode !== "drive-to-green") {
+    return cfg;
+  }
+
+  // Explicit opt-out wins (chat-like gated runs that still use drive-to-green framing).
+  if (cfg.pullConventions === false) {
+    return cfg;
+  }
+
+  if (cfg.conventions !== undefined) {
+    return cfg.pullConventions === true
+      ? cfg
+      : { ...cfg, pullConventions: true };
+  }
+
+  return {
+    ...cfg,
+    pullConventions: true,
+    conventions: houseConventionProvider,
+  };
+}
+
+/** `check` is live only when the backend opts in AND the prompt is drive-to-green. */
+function isOfferCheckActive(cfg: ISessionConfig): boolean {
+  return cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 }
 
 /** The STATIC system policy (identity, tools, conventions, workspace map, guidance) +
@@ -750,16 +798,17 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
-  // WS-A1: front-load the actual stack convention GUIDES (not just a topic index) when the
-  // backend ships a convention library (pullConventions). The compliant pattern for every core
-  // topic is in the prompt UP FRONT, so the model writes it right the FIRST time — the Bucket-1
-  // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
-  // for reinforcement and the long tail, not the primary teaching.
+  // Short pull-before-first-write contract + topic names only — never full guide bodies.
+  // Full text arrives via `pull_conventions` (and optional PUSH after a red).
   const conv = conventionsOffered(cfg)
     ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
     : "";
 
-  const contract = taskContract(cfg.files ?? [], cfg.accept);
+  const contract = taskContract(
+    cfg.files ?? [],
+    cfg.accept,
+    isOfferCheckActive(cfg)
+  );
 
   return `${base}\n\n${tdd}${conv}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
@@ -835,14 +884,17 @@ function buildSyntheticHandoff(
 }
 
 /** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`. */
-function rebuildTaskContract(ctx: Pick<ILoopCtx, "messages" | "task">): void {
+function rebuildTaskContract(
+  ctx: Pick<ILoopCtx, "messages" | "task">,
+  offerCheck = false
+): void {
   const system = ctx.messages[0];
 
   if (system?.role !== "system") {
     return;
   }
 
-  const fresh = taskContract(ctx.task.files, ctx.task.accept);
+  const fresh = taskContract(ctx.task.files, ctx.task.accept, offerCheck);
   const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
 
   system.content =
@@ -861,7 +913,8 @@ function rebuildTaskContract(ctx: Pick<ILoopCtx, "messages" | "task">): void {
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
-  parse: ErrorParser | undefined
+  parse: ErrorParser | undefined,
+  offerCheck = false
 ): { runner: IGate; state: { active: boolean } } {
   const state = { active: true };
   let prevPacks: string[] | null = null;
@@ -879,7 +932,7 @@ function makeAutoGateRunner(
 
         ctx.task.accept = r.command;
         ctx.gate.stackProfile = r.stackProfile;
-        rebuildTaskContract(ctx);
+        rebuildTaskContract(ctx, offerCheck);
 
         if (packsGrew(prevPacks, packs) && prevPacks !== null) {
           const activated = newlyActivatedPacks(prevPacks, packs);
@@ -917,6 +970,9 @@ export class Session {
     | NonNullable<ReturnType<typeof buildSpawnAgentTool>>
   )[];
   private hasGate: boolean;
+  /** Current 1-based turn inside the active drive — fed to mid-turn `check` /
+   *  `task_complete` gate progress lines so they match settle (not hardcoded 0). */
+  private driveTurn = 0;
   /** Shared with the auto-gate runner: while `active`, the runner re-detects the stack
    *  each cycle. `setGate` flips it off — a manual gate override stops re-detection.
    *  Absent when the session has no auto gate. */
@@ -953,6 +1009,11 @@ export class Session {
    *  advertised tool list per call — `this.tools` itself is never mutated, so
    *  toggling off restores everything with zero bookkeeping. */
   private planMode = false;
+  /**
+   * Set when Phase B continues after GREEN with an open checklist — the next
+   * driveInner iteration must reset readonly-spin counters (fresh item work).
+   */
+  private checklistContinuePending = false;
   /** The policy mode to fall back to when plan mode is OFF — from CLI/config
    *  (wired in `create`), default `"default"`. Plan mode overrides it with
    *  `"plan"`; toggling plan off restores THIS, not a hard `"default"`. */
@@ -973,6 +1034,9 @@ export class Session {
   private readonly sendEvents: ILoopEvent[] = [];
   /** After a readonly-spin re-steer: next askModel offers only create/edit/edit_lines. */
   private forceWriteTools = false;
+  /** Live `check` tool is offered (drive-to-green + cfg.offerCheck) — keeps the
+   *  task-contract Check: line aligned with toolsFor when the auto-gate refreshes. */
+  private readonly offerCheckActive: boolean;
 
   private constructor(
     cfg: ISessionConfig,
@@ -1006,9 +1070,9 @@ export class Session {
     // not advertise check in a chat session whose prompt would omit + contradict it.
     // (`resumeMessages` keeps the persisted prompt in lockstep with this on resume, so
     // the advertised tool set and the prompt can never disagree in either direction.)
-    const offerCheck =
-      cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
+    const offerCheck = isOfferCheckActive(cfg);
 
+    this.offerCheckActive = offerCheck;
     // pull_conventions is offered only when the capability is on AND a provider is
     // actually injected — advertising a knowledge tool with no knowledge base would
     // promise a topic listing the dispatch can't deliver ("no convention library"),
@@ -1038,13 +1102,13 @@ export class Session {
     // `check` tool seam — only when offerCheck (do not enable via hasGate alone).
     // Reads `this.ctx` LAZILY so a mid-build `setGate` swap is honored.
     if (offerCheck) {
-      this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
+      this.ctx.tool.runCheck = () => runCheckGate(this.ctx, this.driveTurn);
     }
 
     // Checklist complete seam — separate from `check` so a gate for task_complete
     // does not advertise/enable the model's on-demand check tool.
     if (this.hasGate) {
-      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx, this.driveTurn);
     }
 
     // Drop any legacy per-turn checklist copies from resumed history before the
@@ -1101,7 +1165,8 @@ export class Session {
   }
 
   /** Build a session (async because it spins up the TS LanguageService). */
-  static async create(cfg: ISessionConfig): Promise<Session> {
+  static async create(rawCfg: ISessionConfig): Promise<Session> {
+    const cfg = withDefaultHouseConventions(rawCfg);
     const task: ITask = {
       id: SESSION_ID,
       accept: cfg.accept ?? "",
@@ -1211,7 +1276,10 @@ export class Session {
         // hallucinated pull_conventions call when the feature is off finds no provider
         // (returns "not configured"), never a withheld-capability that still executes.
         ...(cfg.pullConventions === true && cfg.conventions !== undefined
-          ? { conventions: cfg.conventions }
+          ? {
+              conventions: cfg.conventions,
+              pulledTopics: new Set<string>(),
+            }
           : {}),
       },
       gate: {
@@ -1243,7 +1311,12 @@ export class Session {
     let autoGateState: { active: boolean } | undefined;
 
     if (cfg.gate === undefined && cfg.autoGate !== undefined) {
-      const auto = makeAutoGateRunner(ctx, cfg.autoGate, cfg.parse);
+      const auto = makeAutoGateRunner(
+        ctx,
+        cfg.autoGate,
+        cfg.parse,
+        isOfferCheckActive(cfg)
+      );
 
       ctx.gate.runner = auto.runner;
       autoGateState = auto.state;
@@ -1405,7 +1478,7 @@ export class Session {
 
     // task_complete needs runTaskGate; wire it when a gate appears mid-session.
     if (this.hasGate && this.ctx.tool.runTaskGate === undefined) {
-      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx);
+      this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx, this.driveTurn);
     }
 
     this.refreshTaskContract();
@@ -1599,7 +1672,8 @@ export class Session {
       (e) =>
         e.kind === "tool" &&
         typeof e.message === "string" &&
-        e.message.startsWith("task_complete:")
+        (e.message.startsWith("done ·") ||
+          e.message.startsWith("gate · checking"))
     );
   }
 
@@ -1632,6 +1706,10 @@ export class Session {
       task: SESSION_ID,
       message: `⊙ gate green — checklist still open (${String(block.openCount)} item(s)); continuing`,
     });
+    // Fresh exploration budget for the next checklist item — do not inherit a
+    // near-limit readonly streak (or force-write) from the turns that just went green.
+    this.checklistContinuePending = true;
+    this.forceWriteTools = false;
 
     return "continue";
   }
@@ -1684,7 +1762,7 @@ export class Session {
    *  `ctx.task`, replacing the old block in place. The static policy above the
    *  marker is untouched. No system message yet (shouldn't happen) ⇒ no-op. */
   private refreshTaskContract(): void {
-    rebuildTaskContract(this.ctx);
+    rebuildTaskContract(this.ctx, this.offerCheckActive);
   }
 
   /** Update the context window mid-session (e.g. after a `/model` hot-swap to a
@@ -2583,14 +2661,30 @@ export class Session {
 
       const forced = await this.gateAfterChurn(turn, turnStart, sendStart);
 
-      return forced !== null
-        ? { ...carried, editsSinceGate, action: forced, forceTool: false }
-        : {
-            ...carried,
-            editsSinceGate,
-            action: "continue",
-            forceTool: true,
-          };
+      if (forced !== null) {
+        return { ...carried, editsSinceGate, action: forced, forceTool: false };
+      }
+
+      // Phase B checklist continue (not a red re-gate) — do not force-write.
+      if (this.checklistContinuePending) {
+        this.checklistContinuePending = false;
+
+        return {
+          ...carried,
+          editsSinceGate,
+          readonlyStreak: 0,
+          readonlyRecoveries: 0,
+          action: "continue",
+          forceTool: false,
+        };
+      }
+
+      return {
+        ...carried,
+        editsSinceGate,
+        action: "continue",
+        forceTool: true,
+      };
     }
 
     return {
@@ -2648,6 +2742,10 @@ export class Session {
         return { action: "continue", buildNudges, forceTool: false };
       }
 
+      if (next.status === "done") {
+        announceTaskDone(this.report, SESSION_ID, next.turns);
+      }
+
       return { action: next, buildNudges, forceTool: false };
     }
 
@@ -2685,8 +2783,16 @@ export class Session {
 
     const next = this.continueIfChecklistOpen(forced);
 
-    // Checklist-open continue is NOT a red gate — keep repairing off.
-    return next === "continue" ? null : next;
+    if (next === "continue") {
+      // Checklist-open continue is NOT a red gate — keep repairing off.
+      return null;
+    }
+
+    if (next.status === "done") {
+      announceTaskDone(this.report, SESSION_ID, next.turns);
+    }
+
+    return next;
   }
 
   /** Run the gate once the model has stopped after editing: a terminal result
@@ -3091,6 +3197,7 @@ export class Session {
     this.state.nearGreenRotation = undefined;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
+      this.driveTurn = turn;
       const turnStart = performance.now();
 
       // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
@@ -3221,6 +3328,13 @@ export class Session {
       forceTool = y.forceTool;
       // A yield runs the gate (when edited), so the churn counter starts fresh.
       editsSinceGate = 0;
+
+      if (this.checklistContinuePending) {
+        this.checklistContinuePending = false;
+        readonlyStreak = 0;
+        readonlyRecoveries = 0;
+        this.forceWriteTools = false;
+      }
 
       if (y.action !== "continue") {
         return y.action;

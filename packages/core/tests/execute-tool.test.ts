@@ -258,6 +258,86 @@ test("create OVERWRITES a syntactically-BROKEN file (the deadlock escape)", asyn
   }
 });
 
+test("create OVERWRITES an empty file (wiped-file restore)", async () => {
+  // Dogfood: edit_lines wiped index.css to 0 bytes (hash #5D05). create then hit
+  // create:exists because empty was treated as "fine", and edit rejected empty
+  // oldString — permanent deadlock while disk stayed empty.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "index.css"), "");
+
+    const restored =
+      '@import "tailwindcss";\n@theme { --color-popover: #fff; }\n';
+    const r = await executeTool(
+      {
+        name: "create",
+        arguments: { file: "index.css", content: restored },
+      },
+      ctx(dir, ["index.css"])
+    );
+
+    expect(r).not.toContain("REJECTED");
+    expect(r).toContain("rewrote");
+    expect(await Bun.file(join(dir, "index.css")).text()).toBe(restored);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit with empty oldString rewrites an empty file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "index.css"), "");
+
+    const restored = "body { margin: 0; }\n";
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: {
+          file: "index.css",
+          oldString: "",
+          newString: restored,
+        },
+      },
+      ctx(dir, ["index.css"])
+    );
+
+    expect(r).not.toContain("REJECTED");
+    expect(await Bun.file(join(dir, "index.css")).text()).toBe(restored);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit with empty oldString still REJECTS a non-empty file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const original = "keep me\n";
+
+    await Bun.write(join(dir, "keep.ts"), original);
+
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: {
+          file: "keep.ts",
+          oldString: "",
+          newString: "wiped\n",
+        },
+      },
+      ctx(dir, ["keep.ts"])
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(await Bun.file(join(dir, "keep.ts")).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("create does NOT overwrite a file the model did NOT author this session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 

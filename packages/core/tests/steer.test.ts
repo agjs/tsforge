@@ -35,6 +35,14 @@ describe("playbookFor", () => {
     expect(play).toContain("v is Status");
   });
 
+  test("component-file-purity playbook qualifies as const for RHF defaults", () => {
+    const play = playbookFor("component-file-purity");
+
+    expect(play).toContain("as const");
+    expect(play).toContain("CreateXInput");
+    expect(play).toContain("z.infer");
+  });
+
   test("unknown / undefined rules have no playbook", () => {
     expect(playbookFor("some-unknown-rule")).toBeNull();
     expect(playbookFor(undefined)).toBeNull();
@@ -52,10 +60,39 @@ describe("buildSteerMessage escalation", () => {
 
     expect(msg).toContain("escalation 1");
     expect(msg).toContain("STEP BACK");
+    expect(msg).toContain("NOT converging");
     expect(msg).toContain("DIFFERENT approach"); // reflect, don't feed a rule
     // The fix is whatever works — surgical OR full rewrite; we no longer forbid
     // whole-file rewrites (forcing surgical edits traps the model).
     expect(msg.toLowerCase()).toContain("full rewrite");
+  });
+
+  test("when error count dropped, steer header reports improvement instead of NOT converging", () => {
+    const msg = buildSteerMessage(
+      2,
+      errors,
+      "same error persists",
+      false,
+      false,
+      { current: 1, prior: 3 }
+    );
+
+    expect(msg).toContain("errors improved (3→1)");
+    expect(msg).toContain("block remains");
+    expect(msg).not.toContain("NOT converging");
+  });
+
+  test("level 2 includes no-derived-state-in-effect playbook", () => {
+    const msg = buildSteerMessage(
+      2,
+      [err("tsforge/no-derived-state-in-effect")],
+      "stuck",
+      false
+    );
+
+    expect(msg).toContain("no-derived-state-in-effect");
+    expect(msg).toContain("I/O");
+    expect(msg).toContain("useMemo");
   });
 
   test("level 2 tells the model to INVESTIGATE with tools (+ pattern for known rules)", () => {
