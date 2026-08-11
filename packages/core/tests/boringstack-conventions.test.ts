@@ -208,8 +208,8 @@ describe("convention registry", () => {
     // API runner is bun:test (not vitest) + the service-test smoke idiom (build4 residual:
     // 14 edits grinding a DB-hitting supplier.service.test.ts against Drizzle types).
     expect(g).toContain('from "bun:test"');
-    expect(g).toContain("smoke");
-    expect(g).toContain('expect(typeof myServiceFn).toBe("function")');
+    expect(g).toContain("no-vacuous-expect");
+    expect(g).not.toContain('expect(typeof myServiceFn).toBe("function")');
     // The enforced test rules, each named so the model connects error → fix.
     expect(g).toContain("no-focused-tests");
     expect(g).toContain("no-conditional-expect");
@@ -230,6 +230,7 @@ describe("topicForRule (testing)", () => {
       "test-file-mirrors-source",
       "no-focused-tests",
       "no-conditional-expect",
+      "no-vacuous-expect",
       "no-real-network-in-unit-tests",
       "fake-timers-must-be-restored",
       // build16: the empty-placeholder-callback rule must re-push the testing guide too.

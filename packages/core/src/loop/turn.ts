@@ -44,6 +44,7 @@ import {
   type INearGreenSample,
 } from "./near-green-checkpoint";
 import { formPurityRollbackAppendix } from "./near-green-form-purity";
+import { antiPatchNearGreenLead } from "./near-green-antipatch";
 // The SHARED rollback substrate (aliased — turn.ts has its own polish-only `snapshotFiles`
 // returning a plain Map). `snapshotFilesForRollback` captures an IFileSnapshot and
 // `restoreFiles` rewrites edited files AND tombstones files a spray created (incl.
@@ -2358,7 +2359,14 @@ export async function injectFeedback(
   // frontier is rotating, and whether the lockdown/regression banner must be suppressed (both
   // contradict the steer). Extracted into rotationEmit so injectFeedback stays under the
   // cognitive-complexity ceiling — see that helper for the full reasoning.
-  const { rotation, banner } = rotationEmit(state, gateErrors.length);
+  const { rotation, banner: baseBanner } = rotationEmit(
+    state,
+    gateErrors.length
+  );
+  // Persistent near-green errors: "smallest change" lockdown rewards patch-until-green.
+  // Prefer rewrite/invert; suppress the lockdown banner when this fires (same idea as rotation).
+  const antiPatch = antiPatchNearGreenLead(state.errorAge, gateErrors);
+  const banner = antiPatch.length > 0 ? antiPatch : baseBanner;
 
   // One live gate-feedback user slot (replace prior settle walls — do not append forever).
   upsertGateFeedback(

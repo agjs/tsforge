@@ -118,6 +118,7 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **test-conventions/no-conditional-expect** [ERROR]: Disallow `expect()` inside conditionals — tests must fail when assertions are skipped.
 - **test-conventions/no-focused-tests** [ERROR]: Disallow focused tests (`test.only`, `it.only`, `fdescribe`, ...) — the canonical 'I forgot to remove this before committing' leak.
 - **test-conventions/no-real-network-in-unit-tests** [WARN]: Unit tests should not perform real network I/O — mock HTTP clients or move the test to an integration suite.
+- **test-conventions/no-vacuous-expect** [ERROR]: Disallow vacuous expects (typeof checks, tautologies, sole toBeDefined/toBeTruthy) — tests must assert behavior.
 - **test-conventions/test-file-mirrors-source** [ERROR]: Every test file under `tests/` must mirror a source file under `src/`. Catches orphaned tests left behind after refactors and renames.
 - **typescript-core/exported-functions-require-return-type** [WARN]: Exported functions should declare an explicit return type at module boundaries.
 

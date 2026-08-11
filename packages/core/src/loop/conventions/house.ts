@@ -51,6 +51,7 @@ export const HOUSE_TOPIC_RULES: Readonly<
     "test-file-mirrors-source",
     "no-focused-tests",
     "no-conditional-expect",
+    "no-vacuous-expect",
     "no-real-network-in-unit-tests",
     "fake-timers-must-be-restored",
     "no-empty-function",
@@ -124,11 +125,13 @@ const HOUSE_GUIDES: Readonly<Record<HouseConventionTopic, string>> = {
     "TESTING. Every logic file needs a co-located test sibling. Use `.test.tsx` only when " +
     "the test renders JSX; `.test.ts` for pure logic — never both. No `.only`/`.skip`; no " +
     "`expect` inside conditionals; restore fake timers in `afterEach`. Placeholder " +
-    "callbacks must be `vi.fn()`, not `() => {}`. Mock network — never hit real endpoints " +
-    "in unit tests. When Vitest uses jsdom, install `@types/jsdom` (or the scaffold's " +
-    "typed env) so `Could not find a declaration file for module 'jsdom'` never appears. " +
-    "Do not leave unused `screen` / `waitFor` imports. Adding `src/lib/time.ts` requires " +
-    "a co-located `time.test.ts`.",
+    "callbacks must be `vi.fn()`, not `() => {}`. Assert DOMAIN behavior (return values, " +
+    'throws, state transitions) — never theater: `expect(typeof x).toBe("function")`, ' +
+    "`expect(true).toBe(true)`, or a sole `toBeDefined`/`toBeTruthy` (no-vacuous-expect). " +
+    "Mock network — never hit real endpoints in unit tests. When Vitest uses jsdom, install " +
+    "`@types/jsdom` (or the scaffold's typed env) so `Could not find a declaration file for " +
+    "module 'jsdom'` never appears. Do not leave unused `screen` / `waitFor` imports. " +
+    "Adding `src/lib/time.ts` requires a co-located `time.test.ts`.",
   accessibility:
     "ACCESSIBILITY. Icon-only buttons need `aria-label`; decorative icons `aria-hidden`. " +
     "Never put `onClick` on a non-interactive `<div>`/`<span>` — use `<button type=" +

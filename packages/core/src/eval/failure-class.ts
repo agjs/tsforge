@@ -352,7 +352,8 @@ const ATTRIBUTION_GUIDANCE: Record<FailureClass, string> = {
   [FAILURE_CLASS.toolMalformed]:
     "emit well-formed tool calls; do not narrate file contents as chat",
   [FAILURE_CLASS.noProgress]:
-    "change strategy; if the block stays unclear, raise a hand rather than thrashing",
+    "stop micro-patching; rewrite or invert the failing approach — if the block " +
+    "stays unclear, raise a hand rather than thrashing",
   [FAILURE_CLASS.degeneration]:
     "stop repeating; take one concrete next step or raise a hand",
   [FAILURE_CLASS.timeout]:

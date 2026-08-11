@@ -161,6 +161,12 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: 'it("rejects invalid input", () => {\n  const result = parse("x");\n\n  expect(result.ok).toBe(false);\n  expect(result.error).toBe("invalid");\n});',
     exampleFile: "src/parse.test.ts",
   },
+  "tsforge/no-vacuous-expect": {
+    what: "Vacuous expects prove almost nothing — typeof checks, boolean tautologies, or a sole toBeDefined/toBeTruthy. Assert a domain result that fails when the product regresses.",
+    bad: 'it("exports createShift", () => {\n  expect(typeof createShift).toBe("function");\n});',
+    good: 'it("rejects an inverted time range", () => {\n  expect(() => createShift({ start: "18:00", end: "09:00" })).toThrow(/end/);\n});',
+    exampleFile: "src/shifts.test.ts",
+  },
   "tsforge/no-decorate-state-collision": {
     what: "Two `.decorate()`/`.state()`/`.derive()`/`.resolve()` calls sharing a key silently overwrite each other. Give each one a distinct key, or namespace them per plugin.",
     bad: '\n      const app = new Elysia()\n        .decorate("db", createDb())\n        .decorate("db", createCache());\n    ',

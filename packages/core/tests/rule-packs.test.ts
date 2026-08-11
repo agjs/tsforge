@@ -219,6 +219,7 @@ describe("test-conventions pack", () => {
       "no-conditional-expect",
       "no-focused-tests",
       "no-real-network-in-unit-tests",
+      "no-vacuous-expect",
       "test-file-mirrors-source",
     ]);
   });
@@ -348,15 +349,16 @@ describe("buildPackEslintConfig", () => {
     expect(rules["tsforge/no-narration-comments"]).toBe("error");
     expect(rules["tsforge/no-pr-reference-comments"]).toBe("error");
 
-    // test-conventions: 5 rules
+    // test-conventions: 6 rules
     expect(rules["tsforge/fake-timers-must-be-restored"]).toBe("error");
     expect(rules["tsforge/no-conditional-expect"]).toBe("error");
     expect(rules["tsforge/no-focused-tests"]).toBe("error");
     expect(rules["tsforge/no-real-network-in-unit-tests"]).toBe("warn");
+    expect(rules["tsforge/no-vacuous-expect"]).toBe("error");
     expect(rules["tsforge/test-file-mirrors-source"]).toBe("error");
 
-    // Total: 14 rules
-    expect(Object.keys(rules).length).toBe(14);
+    // Total: 15 rules
+    expect(Object.keys(rules).length).toBe(15);
   });
 });
 
@@ -947,6 +949,63 @@ describe("test-conventions: no-conditional-expect", () => {
       "test-conventions",
       "no-conditional-expect",
       "expect(value).toBe(1);",
+      "src/example.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("test-conventions: no-vacuous-expect", () => {
+  test("reports typeof function theater", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-vacuous-expect",
+      'it("exports create", () => { expect(typeof create).toBe("function"); });',
+      "src/example.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("typeofExpect");
+  });
+
+  test("reports boolean tautology", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-vacuous-expect",
+      'it("ok", () => { expect(true).toBe(true); });',
+      "src/example.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("tautologyExpect");
+  });
+
+  test("reports sole toBeDefined in a test", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-vacuous-expect",
+      'it("exists", () => { expect(value).toBeDefined(); });',
+      "src/example.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("soleWeakExpect");
+  });
+
+  test("allows toBeDefined when paired with a real assertion", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-vacuous-expect",
+      'it("shape", () => { expect(value).toBeDefined(); expect(value.id).toBe(1); });',
+      "src/example.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a domain toBe assertion", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-vacuous-expect",
+      'it("rejects inverted range", () => { expect(overlap("18:00", "09:00")).toBe(false); });',
       "src/example.test.ts"
     );
 

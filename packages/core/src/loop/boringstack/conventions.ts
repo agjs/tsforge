@@ -89,6 +89,7 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "test-file-mirrors-source",
       "no-focused-tests",
       "no-conditional-expect",
+      "no-vacuous-expect",
       "no-real-network-in-unit-tests",
       "fake-timers-must-be-restored",
       // build16's final blocker (9× in one row-hook test): empty placeholder callbacks. The
@@ -301,9 +302,10 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "• API tests (apps/api) run under `bun:test`, NOT vitest — `import { describe, expect, test } " +
     'from "bun:test"` (vitest + `vi.*` are UI-only; using them in an apps/api test fails to resolve). ' +
     "For a `*.service.ts` whose function hits the DB (Drizzle), do NOT unit-test it in isolation — you'll " +
-    "fight `string | SQLWrapper` types and need a live DB. Its behaviour is covered by the route test " +
-    "below; the `*.service.test.ts` only needs to satisfy the test-sibling floor with a minimal smoke " +
-    'test (e.g. `expect(typeof myServiceFn).toBe("function")`). Put the real assertions in the route test.\n' +
+    "fight `string | SQLWrapper` types and need a live DB. Put real assertions in the route test below. " +
+    "The co-located `*.service.test.ts` must still assert behavior (no-vacuous-expect): extract a pure " +
+    "helper (validation / mapping) and assert its domain result — never `expect(typeof fn).toBe(" +
+    '"function")` or a sole `toBeDefined`.\n' +
     "• API route tests (`apps/api/tests/**/*.routes.test.ts`, pure `.ts`) — handle the app in-process, " +
     "never a real network (no-real-network-in-unit-tests):\n" +
     '    const app = createApp(); // from "../../../src/config/app"\n' +
