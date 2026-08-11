@@ -19,7 +19,7 @@ import {
 import type { IConventions } from "../infer-rules/conventions.types";
 import { parsePlugins, type IExternalPlugin } from "./external-plugins";
 import { parseProviders } from "./providers-config";
-import type { IMemoryProviderConfig } from "../loop/memory/provider.types";
+import type { IMemoryProviderConfig } from "./memory-provider.types";
 import {
   DEFAULT_PROFILE,
   isProfileId,
@@ -560,6 +560,22 @@ function assignAgents(
   }
 }
 
+function assignProviders(
+  parsed: Record<string, unknown>,
+  configFields: { providers?: { memory?: IMemoryProviderConfig } }
+): void {
+  if (parsed.providers === undefined) {
+    return;
+  }
+
+  const providers = parseProviders(parsed.providers);
+  const memory = providers?.memory;
+
+  if (memory !== undefined) {
+    configFields.providers = { memory };
+  }
+}
+
 function buildConfigFields(
   parsed: Record<string, unknown>
 ): ITsforgeProjectConfig {
@@ -627,14 +643,7 @@ function buildConfigFields(
   assignPolicy(parsed, configFields);
   assignConventions(parsed, configFields);
   assignAgents(parsed, configFields);
-
-  if (parsed.providers !== undefined) {
-    const providers = parseProviders(parsed.providers);
-
-    if (providers !== undefined && providers.memory !== undefined) {
-      configFields.providers = { memory: providers.memory };
-    }
-  }
+  assignProviders(parsed, configFields);
 
   return configFields;
 }

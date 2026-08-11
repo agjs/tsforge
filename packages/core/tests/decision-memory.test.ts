@@ -14,7 +14,10 @@ import {
   createMcpMemoryProvider,
   type IHttpMemoryFetch,
 } from "../src/loop/memory";
-import { parseMemoryProviderConfig, parseProviders } from "../src/config/providers-config";
+import {
+  parseMemoryProviderConfig,
+  parseProviders,
+} from "../src/config/providers-config";
 
 async function tmp(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-decmem-"));
@@ -34,7 +37,8 @@ describe("resolveBankId", () => {
   test("normalizes https git remote", async () => {
     const id = await resolveBankId("/proj", {
       gitRemoteUrl: async () => "https://github.com/acme/crm.git",
-      exists: async (p) => p.endsWith(".git") || p.endsWith("tsforge.config.json"),
+      exists: async (p) =>
+        p.endsWith(".git") || p.endsWith("tsforge.config.json"),
     });
 
     expect(id).toBe("tsforge:github.com/acme/crm");
@@ -198,6 +202,7 @@ describe("parseMemoryProviderConfig", () => {
 describe("createHttpMemoryProvider", () => {
   test("retain posts redacted content; recall formats results", async () => {
     const calls: { url: string; method: string; body?: string }[] = [];
+
     const fetchFn: IHttpMemoryFetch = async (url, init) => {
       calls.push({ url, method: init.method, body: init.body });
 
@@ -225,9 +230,9 @@ describe("createHttpMemoryProvider", () => {
     const brief = await provider.recall("decisions");
 
     expect(brief).toBe("Company FK: native select");
-    expect(calls.some((c) => c.method === "POST" && c.url.includes("/memories"))).toBe(
-      true
-    );
+    expect(
+      calls.some((c) => c.method === "POST" && c.url.includes("/memories"))
+    ).toBe(true);
     const retainCall = calls.find(
       (c) => c.method === "POST" && c.url.endsWith("/memories")
     );

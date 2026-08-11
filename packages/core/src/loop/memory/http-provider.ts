@@ -7,16 +7,14 @@ import {
   type IMemoryProvider,
 } from "./provider.types";
 
-export interface IHttpMemoryFetch {
-  (
-    url: string,
-    init: {
-      method: string;
-      headers?: Record<string, string>;
-      body?: string;
-    }
-  ): Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
-}
+export type IHttpMemoryFetch = (
+  url: string,
+  init: {
+    method: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }
+) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 function bankPath(baseUrl: string, bankId: string, suffix: string): string {
   const base = baseUrl.replace(/\/$/u, "");
@@ -103,15 +101,18 @@ export function createHttpMemoryProvider(
 
     async recall(query: string): Promise<string | null> {
       try {
-        const res = await fetchFn(bankPath(baseUrl, bankId, "/memories/recall"), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            query: query.length > 0 ? query : DECISION_RECALL_QUERY,
-            max_tokens: 800,
-            budget: "low",
-          }),
-        });
+        const res = await fetchFn(
+          bankPath(baseUrl, bankId, "/memories/recall"),
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              query: query.length > 0 ? query : DECISION_RECALL_QUERY,
+              max_tokens: 800,
+              budget: "low",
+            }),
+          }
+        );
 
         if (!res.ok) {
           return null;

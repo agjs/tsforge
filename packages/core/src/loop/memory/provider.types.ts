@@ -1,33 +1,14 @@
 /**
- * Pluggable PROJECT DECISION memory — product/architecture choices retained in
- * a user-hosted backend (HTTP or MCP). Separate from Phase 1 failure→fix TTSR.
+ * Runtime PROJECT DECISION memory provider — product/architecture choices in a
+ * user-hosted backend. Separate from Phase 1 failure→fix TTSR.
  */
 
-/** Supported provider kinds in tsforge.config.json `providers.memory`. */
-export type MemoryProviderKind = "http" | "mcp";
-
-/** HTTP backend config (Hindsight-compatible retain/recall API shape). */
-export interface IHttpMemoryProviderConfig {
-  readonly kind: "http";
-  readonly baseUrl: string;
-  /** Override bank id; otherwise resolved from git remote or project path. */
-  readonly bankId?: string;
-}
-
-/** MCP backend: map retain/recall/forget onto tools on a named mcpServers entry. */
-export interface IMcpMemoryProviderConfig {
-  readonly kind: "mcp";
-  readonly server: string;
-  readonly retainTool?: string;
-  readonly recallTool?: string;
-  readonly forgetTool?: string;
-  readonly listTool?: string;
-  readonly bankId?: string;
-}
-
-export type IMemoryProviderConfig =
-  | IHttpMemoryProviderConfig
-  | IMcpMemoryProviderConfig;
+export type {
+  MemoryProviderKind,
+  IHttpMemoryProviderConfig,
+  IMcpMemoryProviderConfig,
+  IMemoryProviderConfig,
+} from "../../config/memory-provider.types";
 
 /** Runtime provider: fail-soft (never throws into the session loop). */
 export interface IMemoryProvider {

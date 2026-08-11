@@ -1,12 +1,9 @@
 import { isRecord } from "../../lib/guards";
 import { mcpToolName } from "../../mcp";
+import type { IMcpMemoryProviderConfig } from "../../config/memory-provider.types";
 import { redactForRetain } from "./redact";
 import { formatDecisionBrief } from "./format-brief";
-import {
-  DECISION_RECALL_QUERY,
-  type IMemoryProvider,
-  type IMcpMemoryProviderConfig,
-} from "./provider.types";
+import { DECISION_RECALL_QUERY, type IMemoryProvider } from "./provider.types";
 
 export interface IMcpToolCaller {
   callTool(name: string, args: Record<string, unknown>): Promise<string>;

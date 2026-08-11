@@ -1,11 +1,9 @@
 import { access } from "node:fs/promises";
+import type { IMemoryProviderConfig } from "../../config/memory-provider.types";
 import { resolveBankId, type IBankIdDeps } from "./bank-id";
 import { createHttpMemoryProvider } from "./http-provider";
 import { createMcpMemoryProvider, type IMcpToolCaller } from "./mcp-provider";
-import type {
-  IMemoryProvider,
-  IMemoryProviderConfig,
-} from "./provider.types";
+import type { IMemoryProvider } from "./provider.types";
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -65,10 +63,7 @@ export async function createMemoryProvider(
     return null;
   }
 
-  const bankId = await resolveBankId(
-    cwd,
-    defaultBankIdDeps(config.bankId)
-  );
+  const bankId = await resolveBankId(cwd, defaultBankIdDeps(config.bankId));
 
   if (config.kind === "http") {
     const baseUrl = config.baseUrl.trim();
@@ -80,17 +75,10 @@ export async function createMemoryProvider(
     return createHttpMemoryProvider(bankId, baseUrl);
   }
 
-  if (config.kind === "mcp") {
-    if (mcpCaller === null) {
-      return null;
-    }
-
-    if (config.server.trim().length === 0) {
-      return null;
-    }
-
-    return createMcpMemoryProvider(bankId, config, mcpCaller);
+  // kind === "mcp" (only remaining variant)
+  if (mcpCaller === null || config.server.trim().length === 0) {
+    return null;
   }
 
-  return null;
+  return createMcpMemoryProvider(bankId, config, mcpCaller);
 }

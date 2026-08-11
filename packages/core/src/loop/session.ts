@@ -95,10 +95,9 @@ import { activeOverlay } from "../self-harness/overlay";
 import {
   mineLessons,
   consolidate as consolidateMemory,
-  createMemoryProvider,
+  loadDecisionMemoryAtStart,
   decisionBriefBlock,
   buildDecisionRetainText,
-  DECISION_RECALL_QUERY,
   type ICandidateLesson,
   type IMemoryProvider,
 } from "./memory";
@@ -1241,32 +1240,14 @@ export class Session {
           });
 
     // Opt-in decision memory (HTTP/MCP). Fail-soft: missing/down backend → null brief.
-    let decisionMemory: IMemoryProvider | null = null;
-    let decisionBrief: string | null = null;
-
-    try {
-      decisionMemory = await createMemoryProvider(
+    const { provider: decisionMemory, brief: decisionBrief } =
+      await loadDecisionMemoryAtStart(
         cfg.cwd,
         projectConfig.providers?.memory,
-        mcpRegistry
+        mcpRegistry,
+        report,
+        SESSION_ID
       );
-
-      if (decisionMemory !== null) {
-        decisionBrief = await decisionMemory.recall(DECISION_RECALL_QUERY);
-
-        if (decisionBrief !== null) {
-          report({
-            kind: "tool",
-            task: SESSION_ID,
-            message: `decision memory: loaded brief for bank ${decisionMemory.bankId}`,
-          });
-        }
-      }
-    } catch (err) {
-      trace("session.decision-memory", err);
-      decisionMemory = null;
-      decisionBrief = null;
-    }
 
     // Persisted workspace map (from `/map`), if any — primes the agent with the
     // repo's structure. Cheap: loads + marks drift, never rebuilds here.

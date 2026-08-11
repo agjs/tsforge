@@ -3,7 +3,7 @@ import type {
   IHttpMemoryProviderConfig,
   IMcpMemoryProviderConfig,
   IMemoryProviderConfig,
-} from "../loop/memory/provider.types";
+} from "./memory-provider.types";
 
 function warnProviders(msg: string): void {
   process.stderr.write(`${msg}\n`);
@@ -101,12 +101,16 @@ export function parseMemoryProviderConfig(
   return undefined;
 }
 
+export interface IProvidersConfig {
+  readonly memory?: IMemoryProviderConfig;
+}
+
 /** Parse the optional `providers` block. Only `memory` is supported in v1. */
-export function parseProviders(raw: unknown):
-  | { readonly memory?: IMemoryProviderConfig }
-  | undefined {
+export function parseProviders(raw: unknown): IProvidersConfig | undefined {
   if (!isRecord(raw)) {
-    warnProviders('tsforge.config.json: "providers" must be an object — ignored');
+    warnProviders(
+      'tsforge.config.json: "providers" must be an object — ignored'
+    );
 
     return undefined;
   }

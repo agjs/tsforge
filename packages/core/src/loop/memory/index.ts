@@ -33,7 +33,10 @@ export {
   decisionBriefBlock,
   buildDecisionRetainText,
 } from "./format-brief";
-export { createHttpMemoryProvider, type IHttpMemoryFetch } from "./http-provider";
+export {
+  createHttpMemoryProvider,
+  type IHttpMemoryFetch,
+} from "./http-provider";
 export { createMcpMemoryProvider, type IMcpToolCaller } from "./mcp-provider";
 export {
   createMemoryProvider,
@@ -41,3 +44,7 @@ export {
   readGitOriginUrl,
 } from "./create-provider";
 export { retainFeatureDecision } from "./retain-feature";
+export {
+  loadDecisionMemoryAtStart,
+  type IDecisionMemoryLoad,
+} from "./load-at-start";
