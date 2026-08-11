@@ -1456,31 +1456,56 @@ export async function repl(args: ICliArgs): Promise<number> {
       case "memory": {
         if (arg.trim() === "forget") {
           await forgetMemory(args.dir);
+          await session.forgetDecisionMemory();
           streamOut("  memory cleared for this repo\n");
           break;
         }
 
         const ledger = await loadLedger(args.dir);
+        const bankId = session.decisionMemoryBankId();
+        const decisions = await session.listDecisionMemory();
+
+        streamOut("  coding lessons (Phase 1 → TTSR):\n");
 
         if (ledger.entries.length === 0) {
-          streamOut("  no learned lessons yet\n");
-          break;
-        }
-
-        const activeNames = new Set(
-          activeRules(ledger, Date.now()).map((r) => r.name)
-        );
-
-        streamOut(
-          `  ${String(ledger.entries.length)} lesson(s), ${String(activeNames.size)} active (● fires · ○ still accruing):\n`
-        );
-
-        for (const entry of ledger.entries.slice(0, 20)) {
-          const mark = activeNames.has(entry.name) ? "●" : "○";
+          streamOut("    (none yet)\n");
+        } else {
+          const activeNames = new Set(
+            activeRules(ledger, Date.now()).map((r) => r.name)
+          );
 
           streamOut(
-            `    ${mark} ${entry.rule} · ${String(entry.hits)} hit(s)\n`
+            `    ${String(ledger.entries.length)} lesson(s), ${String(activeNames.size)} active (● fires · ○ still accruing):\n`
           );
+
+          for (const entry of ledger.entries.slice(0, 20)) {
+            const mark = activeNames.has(entry.name) ? "●" : "○";
+
+            streamOut(
+              `      ${mark} ${entry.rule} · ${String(entry.hits)} hit(s)\n`
+            );
+          }
+        }
+
+        streamOut("  project decisions (external provider):\n");
+
+        if (bankId === null) {
+          streamOut(
+            "    (not configured — set providers.memory in tsforge.config.json)\n"
+          );
+        } else {
+          streamOut(`    bank: ${bankId}\n`);
+
+          if (decisions.length === 0) {
+            streamOut("    (no retained decisions yet)\n");
+          } else {
+            for (const line of decisions.slice(0, 20)) {
+              const preview =
+                line.length > 120 ? `${line.slice(0, 119)}…` : line;
+
+              streamOut(`    ● ${preview}\n`);
+            }
+          }
         }
 
         streamOut("  /memory forget to clear\n");

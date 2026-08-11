@@ -200,6 +200,7 @@ export default defineConfig({
             { label: "Environment variables", link: "/reference/flags/" },
             { label: "MCP servers", link: "/integrations/mcp/" },
             { label: "Web access", link: "/integrations/web-tools/" },
+            { label: "Decision memory", link: "/integrations/decision-memory/" },
           ],
         },
         {

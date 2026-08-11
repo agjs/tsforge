@@ -18,6 +18,8 @@ import {
 } from "../infer-rules/conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import { parsePlugins, type IExternalPlugin } from "./external-plugins";
+import { parseProviders } from "./providers-config";
+import type { IMemoryProviderConfig } from "../loop/memory/provider.types";
 import {
   DEFAULT_PROFILE,
   isProfileId,
@@ -95,6 +97,14 @@ export interface ITsforgeProjectConfig {
    * ⇒ tsforge's default house style.
    */
   readonly conventions?: Readonly<Partial<IConventions>>;
+
+  /**
+   * Optional external providers. `memory` is pluggable project decision memory
+   * (HTTP or MCP). Opt-in: absent ⇒ Phase 1 TTSR memory only.
+   */
+  readonly providers?: {
+    readonly memory?: IMemoryProviderConfig;
+  };
 }
 
 function warnConfig(msg: string): void {
@@ -563,6 +573,7 @@ function buildConfigFields(
     policy?: { mode?: PolicyMode; rules?: IPolicyRules };
     conventions?: Readonly<Partial<IConventions>>;
     agents?: { concurrency?: number };
+    providers?: { memory?: IMemoryProviderConfig };
   } = {};
 
   if (parsed.profile !== undefined) {
@@ -616,6 +627,14 @@ function buildConfigFields(
   assignPolicy(parsed, configFields);
   assignConventions(parsed, configFields);
   assignAgents(parsed, configFields);
+
+  if (parsed.providers !== undefined) {
+    const providers = parseProviders(parsed.providers);
+
+    if (providers !== undefined && providers.memory !== undefined) {
+      configFields.providers = { memory: providers.memory };
+    }
+  }
 
   return configFields;
 }
