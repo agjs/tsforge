@@ -346,6 +346,16 @@ describe("attributionLeadIn", () => {
     ).toContain("do not cast");
   });
 
+  test("no-progress steers rewrite over thrash", () => {
+    const line = attributionLeadIn({
+      failureClass: FAILURE_CLASS.noProgress,
+    });
+
+    expect(line).toContain("no-progress");
+    expect(line).toContain("micro-patching");
+    expect(line).toContain("rewrite");
+  });
+
   test("hallucinated-import steers install-first for npm packages", () => {
     const line = attributionLeadIn({
       failureClass: FAILURE_CLASS.hallucinatedImport,

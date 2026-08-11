@@ -240,11 +240,12 @@ export function buildSteerMessage(
     );
   }
 
-  // CHANGE STRATEGY — invert the failing approach and narrow to one thing.
+  // CHANGE STRATEGY — invert the failing approach; prefer rewrite over patch farming.
   return (
-    `${header}\nChange strategy completely. Pick the SINGLE most-blocking error and ` +
-    `fix ONLY it this turn; if your approach to it has already failed twice, do the ` +
-    `OPPOSITE of what you've been doing. Touch nothing that already passes. If it ` +
-    `still won't yield, a stronger expert model will be brought in to unblock you.`
+    `${header}\nChange strategy completely. Pick the SINGLE most-blocking error. If ` +
+    `you have already patched the same spot twice, REWRITE that unit (or do the ` +
+    `OPPOSITE of what you've been doing) — do not cast, rename, or nibble until green. ` +
+    `Touch nothing that already passes. If it still won't yield, a stronger expert ` +
+    `model will be brought in to unblock you.`
   );
 }

@@ -119,10 +119,11 @@ describe("buildSteerMessage escalation", () => {
     expect(msg).toContain("search the codebase");
   });
 
-  test("level 3 changes strategy: invert, one error one file, then expert", () => {
+  test("level 3 changes strategy: invert, rewrite, one error, then expert", () => {
     const msg = buildSteerMessage(3, errors, "not converging");
 
     expect(msg).toContain("SINGLE");
+    expect(msg).toContain("REWRITE");
     expect(msg).toContain("OPPOSITE");
     expect(msg).toContain("already pass");
     expect(msg).toContain("expert"); // the last resort is the stronger model

@@ -67,6 +67,8 @@ describe("house + boringstack compose", () => {
     expect(lint).toContain("no-bare-date-now");
     expect(testing).toContain("@types/jsdom");
     expect(testing).toContain("time.test.ts");
+    expect(testing).toContain("no-vacuous-expect");
+    expect(testing).toContain("typeof");
   });
 
   test("naming-convention and no-bare-date-now PUSH lint-gotchas (house + BS)", () => {
