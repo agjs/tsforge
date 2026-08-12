@@ -7,7 +7,10 @@ import {
   DECISION_RECALL_QUERY,
   MEMORY_START_TIMEOUT_MS,
 } from "./provider.types";
+import { withDeadlineResult } from "./deadline";
 import { trace } from "../../lib/trace";
+
+export { withDeadline, withDeadlineResult } from "./deadline";
 
 export interface IDecisionMemoryLoad {
   readonly provider: IMemoryProvider | null;
@@ -25,49 +28,11 @@ export interface IDecisionMemoryLoadDeps {
 }
 
 /**
- * Resolve `work`, or mark timed out when it has not settled within `ms`.
- */
-export async function withDeadlineResult<T>(
-  work: Promise<T>,
-  ms: number
-): Promise<{ timedOut: true } | { timedOut: false; value: T }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const deadline = new Promise<{ timedOut: true }>((resolve) => {
-    timer = setTimeout(() => {
-      trace("session.decision-memory", `timed out after ${ms}ms`);
-      resolve({ timedOut: true });
-    }, ms);
-  });
-
-  try {
-    return await Promise.race([
-      work.then((value) => ({ timedOut: false as const, value })),
-      deadline,
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Resolve `work`, or `fallback` when it has not settled within `ms`.
- */
-export async function withDeadline<T>(
-  work: Promise<T>,
-  fallback: T,
-  ms: number = MEMORY_START_TIMEOUT_MS
-): Promise<T> {
-  const result = await withDeadlineResult(work, ms);
-
-  return result.timedOut ? fallback : result.value;
-}
-
-/**
  * Opt-in decision memory at session start.
  *
- * Create + recall share ONE start-up budget (not 2×). A slow recall must not
- * discard the provider; timeouts are announced distinctly from empty banks.
+ * Create + recall share ONE start-up budget. Create may use most of it; recall
+ * gets whatever remains (never a rigid 50/50 split that rejects in-budget init).
+ * A slow/failed recall must not discard the provider; empty ≠ backend failure.
  */
 export async function loadDecisionMemoryAtStart(
   cwd: string,
@@ -85,13 +50,12 @@ export async function loadDecisionMemoryAtStart(
 
   const create = deps.createProvider ?? createMemoryProvider;
   const budget = deps.startTimeoutMs ?? MEMORY_START_TIMEOUT_MS;
-  const createBudget = Math.max(1, Math.floor(budget / 2));
-  const recallBudget = Math.max(1, budget - createBudget);
+  const started = Date.now();
 
   try {
     const created = await withDeadlineResult(
       create(cwd, config, mcpCaller),
-      createBudget
+      budget
     );
 
     if (created.timedOut || created.value === null) {
@@ -99,38 +63,52 @@ export async function loadDecisionMemoryAtStart(
     }
 
     const provider = created.value;
-    const recalled = await withDeadlineResult(
-      provider.recall(DECISION_RECALL_QUERY),
-      recallBudget
-    );
+    const remaining = Math.max(1, budget - (Date.now() - started));
 
-    if (recalled.timedOut) {
+    try {
+      const recalled = await withDeadlineResult(
+        provider.recall(DECISION_RECALL_QUERY),
+        remaining
+      );
+
+      if (recalled.timedOut) {
+        report({
+          kind: "tool",
+          task: taskId,
+          message: `decision memory: bank ${provider.bankId} ready (recall timed out)`,
+        });
+
+        return { provider, brief: null };
+      }
+
+      const brief = recalled.value;
+
+      if (brief !== null) {
+        report({
+          kind: "tool",
+          task: taskId,
+          message: `decision memory: loaded brief for bank ${provider.bankId}`,
+        });
+      } else {
+        report({
+          kind: "tool",
+          task: taskId,
+          message: `decision memory: bank ${provider.bankId} ready (empty)`,
+        });
+      }
+
+      return { provider, brief };
+    } catch (err) {
+      // Backend/transport failure — keep the write path; don't call it "empty".
+      trace("session.decision-memory", err);
       report({
         kind: "tool",
         task: taskId,
-        message: `decision memory: bank ${provider.bankId} ready (recall timed out)`,
+        message: `decision memory: bank ${provider.bankId} ready (recall failed)`,
       });
 
       return { provider, brief: null };
     }
-
-    const brief = recalled.value;
-
-    if (brief !== null) {
-      report({
-        kind: "tool",
-        task: taskId,
-        message: `decision memory: loaded brief for bank ${provider.bankId}`,
-      });
-    } else {
-      report({
-        kind: "tool",
-        task: taskId,
-        message: `decision memory: bank ${provider.bankId} ready (empty)`,
-      });
-    }
-
-    return { provider, brief };
   } catch (err) {
     trace("session.decision-memory", err);
 

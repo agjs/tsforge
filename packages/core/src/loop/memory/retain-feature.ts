@@ -1,16 +1,19 @@
 import { loadTsforgeConfig } from "../../config/tsforge-config";
 import { buildDecisionRetainText } from "./format-brief";
 import { createMemoryProvider } from "./create-provider";
+import { trace } from "../../lib/trace";
 
 /**
  * Best-effort retain when a greenfield feature goes green. Loads project config,
  * opens the configured provider, retains, and never throws.
+ *
+ * @returns whether a retain was attempted and reported success.
  */
 export async function retainFeatureDecision(
   cwd: string,
   featureId: string,
   featureDesc: string
-): Promise<void> {
+): Promise<boolean> {
   try {
     const config = await loadTsforgeConfig(cwd);
     const provider = await createMemoryProvider(
@@ -20,7 +23,7 @@ export async function retainFeatureDecision(
     );
 
     if (provider === null) {
-      return;
+      return false;
     }
 
     // MCP decision memory needs a live registry; greenfield HTTP path works here.
@@ -31,11 +34,22 @@ export async function retainFeatureDecision(
     });
 
     if (text === null) {
-      return;
+      return false;
     }
 
-    await provider.retain(text);
-  } catch {
-    // fail-soft
+    const ok = await provider.retain(text);
+
+    if (!ok) {
+      trace(
+        "memory.retain-feature",
+        `retain failed for ${featureId} in bank ${provider.bankId}`
+      );
+    }
+
+    return ok;
+  } catch (err) {
+    trace("memory.retain-feature", err);
+
+    return false;
   }
 }

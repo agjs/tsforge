@@ -290,7 +290,7 @@ describe("createHttpMemoryProvider", () => {
     expect(JSON.parse(body ?? "{}").async).toBe(true);
   });
 
-  test("recall returns null when backend fails", async () => {
+  test("recall throws when backend fails (not silent empty)", async () => {
     const provider = createHttpMemoryProvider(
       "bank",
       "http://localhost:1",
@@ -299,7 +299,19 @@ describe("createHttpMemoryProvider", () => {
       }
     );
 
-    expect(await provider.recall("q")).toBeNull();
+    await expect(provider.recall("q")).rejects.toThrow("ECONNREFUSED");
+  });
+
+  test("recall throws on non-OK HTTP so empty banks stay distinct", async () => {
+    const provider = createHttpMemoryProvider(
+      "bank",
+      "http://localhost:8888",
+      async () => ({ ok: false, status: 503, text: async () => "nope" })
+    );
+
+    await expect(provider.recall("q")).rejects.toThrow(
+      "memory recall HTTP 503"
+    );
   });
 
   test("forget and list are fail-soft", async () => {
@@ -431,6 +443,69 @@ describe("loadDecisionMemoryAtStart", () => {
 
     expect(loaded.brief).toBe("Use native selects");
     expect(messages.some((m) => m.includes("loaded brief"))).toBe(true);
+  });
+
+  test("keeps provider when create is slow but still within the shared budget", async () => {
+    // Rigid 50/50 used to kill create that took >half the budget even when
+    // recall would still fit in the remainder.
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => null,
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      () => undefined,
+      "session",
+      {
+        createProvider: async () => {
+          await Bun.sleep(70);
+
+          return provider;
+        },
+        startTimeoutMs: 100,
+      }
+    );
+
+    expect(loaded.provider).toBe(provider);
+  });
+
+  test("labels recall transport failures as failed, not empty", async () => {
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => {
+        throw new Error("memory recall HTTP 503");
+      },
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+    const messages: string[] = [];
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      (ev) => {
+        if (ev.kind === "tool") {
+          messages.push(ev.message);
+        }
+      },
+      "session",
+      {
+        createProvider: async () => provider,
+        startTimeoutMs: 1000,
+      }
+    );
+
+    expect(loaded.provider).toBe(provider);
+    expect(messages.some((m) => m.includes("recall failed"))).toBe(true);
+    expect(messages.some((m) => m.includes("(empty)"))).toBe(false);
   });
 });
 

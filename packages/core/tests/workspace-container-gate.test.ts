@@ -11,6 +11,9 @@ import {
   packageLabel,
   runWorkspaceContainerGate,
   unpackagedCodePaths,
+  relocatePackageError,
+  capturePackageGatePolicy,
+  resolvePackageGate,
 } from "../src/gate";
 import { runShellCommand } from "../src/lib/fs";
 import type { ITask } from "../src/spec";
@@ -265,6 +268,108 @@ test("makeWorkspaceFileLinter: files under no package report clean", async () =>
     const lint = makeWorkspaceFileLinter(dir);
 
     expect(await lint(join(dir, "notes", "x.ts"))).toEqual([]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("relocatePackageError: identical relative paths stay distinct across packages", () => {
+  const a = relocatePackageError("app", {
+    key: "src/bad.ts:no-as",
+    file: "src/bad.ts",
+    message: "no as",
+  });
+  const b = relocatePackageError("api", {
+    key: "src/bad.ts:no-as",
+    file: "src/bad.ts",
+    message: "no as",
+  });
+
+  expect(a.file).toBe("app/src/bad.ts");
+  expect(b.file).toBe("api/src/bad.ts");
+  expect(a.key).not.toBe(b.key);
+  expect(new Set([a.key, b.key]).size).toBe(2);
+});
+
+test("capturePackageGatePolicy: freezes config so mid-session exclude cannot drop newly detected packs", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "pkg", dependencies: {} })
+    );
+
+    const policy = await capturePackageGatePolicy(dir);
+
+    expect(policy.activePacks.has("react")).toBe(false);
+
+    // Mid-session: model adds react AND someone excludes it in config.
+    // Frozen policy must still pick up the stack pack (gate-setup contract).
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "pkg",
+        dependencies: { react: "19.0.0", "react-dom": "19.0.0" },
+      })
+    );
+    await writeFile(
+      join(dir, "tsforge.config.json"),
+      JSON.stringify({
+        packs: { exclude: ["react", "react-component-architecture"] },
+      })
+    );
+
+    const resolved = await resolvePackageGate(policy);
+
+    expect(resolved.packs).toContain("react");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("capturePackageGatePolicy: --profile strict and --strict-floor-only apply", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "pkg",
+        scripts: { test: "echo ok" },
+      })
+    );
+
+    const strict = await capturePackageGatePolicy(dir, { profile: "strict" });
+
+    expect(strict.profile).toBe("strict");
+    expect(strict.testCommand).not.toBeNull();
+
+    const floorOnly = await capturePackageGatePolicy(dir, {
+      strictFloorOnly: true,
+    });
+
+    expect(floorOnly.testCommand).toBeNull();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("capturePackageGatePolicy: child ruleOverrides stay package-local", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "app" }));
+    await writeFile(
+      join(dir, "tsforge.config.json"),
+      JSON.stringify({
+        rules: { "no-undeclared-dependencies": "off" },
+      })
+    );
+
+    const policy = await capturePackageGatePolicy(dir);
+
+    expect(policy.ruleOverrides["no-undeclared-dependencies"]).toBe("off");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

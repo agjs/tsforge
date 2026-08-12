@@ -223,7 +223,15 @@ async function attemptFeature(
       delete feature.parked;
       delete feature.handoff;
       say(`feature '${feature.id}': verified ✓`);
-      await retainFeatureDecision(cwd, feature.id, feature.desc);
+      const retained = await retainFeatureDecision(
+        cwd,
+        feature.id,
+        feature.desc
+      );
+
+      if (retained) {
+        say(`feature '${feature.id}': decision retained`);
+      }
 
       return undefined;
     }

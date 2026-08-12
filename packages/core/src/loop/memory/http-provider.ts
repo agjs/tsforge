@@ -114,38 +114,32 @@ export function createHttpMemoryProvider(
     bankId,
 
     async recall(query: string): Promise<string | null> {
-      try {
-        const res = await fetchFn(
-          bankPath(baseUrl, bankId, "/memories/recall"),
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              query: query.length > 0 ? query : DECISION_RECALL_QUERY,
-              max_tokens: 800,
-              budget: "low",
-            }),
-            signal: withTimeout(),
-          }
-        );
+      const res = await fetchFn(bankPath(baseUrl, bankId, "/memories/recall"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          query: query.length > 0 ? query : DECISION_RECALL_QUERY,
+          max_tokens: 800,
+          budget: "low",
+        }),
+        signal: withTimeout(),
+      });
 
-        if (!res.ok) {
-          return null;
-        }
-
-        const text = await res.text();
-        let parsed: unknown;
-
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          return formatDecisionBrief(text);
-        }
-
-        return formatDecisionBrief(resultsToText(parsed));
-      } catch {
-        return null;
+      if (!res.ok) {
+        // Throw so loaders can distinguish backend failure from an empty bank.
+        throw new Error(`memory recall HTTP ${res.status}`);
       }
+
+      const text = await res.text();
+      let parsed: unknown;
+
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return formatDecisionBrief(text);
+      }
+
+      return formatDecisionBrief(resultsToText(parsed));
     },
 
     async retain(content: string): Promise<boolean> {

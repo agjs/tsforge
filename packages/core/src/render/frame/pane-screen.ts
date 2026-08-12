@@ -168,6 +168,12 @@ export class PaneScreen {
     this.prevLines = null;
     this.cursor.reset();
     this.panelOffset = 0;
+
+    // Shrink/leave stops the busy timer; restart it when re-entering mid-turn.
+    if (this.busy) {
+      this.startBusyTimer();
+    }
+
     this.paint();
 
     return true;

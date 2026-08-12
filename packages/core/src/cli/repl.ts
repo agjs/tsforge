@@ -603,6 +603,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     // `--policy-mode` (validated) overrides the config file's policy.mode.
     ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
     ...(profile === undefined ? {} : { profile }),
+    ...(args.strictFloorOnly ? { strictFloorOnly: true as const } : {}),
     // Thinking OFF for interactive replies so they STREAM immediately instead of
     // stalling on a long hidden chain-of-thought (the local default has thinking on).
     // The session still flips thinking ON automatically while repairing gate errors.
@@ -1298,6 +1299,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       pausedWithEdit: carryDeferredGate,
       ...(carryTouched.length > 0 ? { touched: carryTouched } : {}),
       ...(profile === undefined ? {} : { profile }),
+      ...(args.strictFloorOnly ? { strictFloorOnly: true as const } : {}),
       ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
     });
     wireDelegation(); // re-offer spawn_agent on the rebuilt session
@@ -2192,6 +2194,9 @@ export async function repl(args: ICliArgs): Promise<number> {
         paint: false,
       });
       syncPaneChrome();
+      // Rewrap Tasks rail after geometry changes — plan updates while the rail
+      // was auto-collapsed (cols=0) never refreshed the panel body.
+      syncWorklistPanel(railPlan);
       // The editor wraps/windows at the dimensions it was created with; without
       // this it keeps using the pre-resize size and can clip the current line.
       resizeEditor?.(process.stdout.columns, process.stdout.rows);
@@ -2821,10 +2826,10 @@ export async function repl(args: ICliArgs): Promise<number> {
             continue;
           }
 
-          // Passthrough: remaining bytes (including this key) go to the editor.
-          cb(rest);
-
-          return;
+          // Passthrough this one key only — keep scanning so a later Ctrl+G
+          // in `x\x07` still reaches the pane chrome.
+          cb(peeled.seq);
+          rest = peeled.rest;
         }
       };
 

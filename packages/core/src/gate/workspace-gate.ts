@@ -1,12 +1,18 @@
-import { resolve, relative, isAbsolute } from "node:path";
+import { resolve, relative, isAbsolute, join } from "node:path";
 import type { ITask } from "../spec/spec.types";
-import type { ErrorParser, ErrorSet, IValidateResult } from "../validate";
+import type {
+  ErrorParser,
+  ErrorSet,
+  IErrorItem,
+  IValidateResult,
+} from "../validate";
 import { validate } from "../validate";
 import type { IAcceptOptions } from "../validate/accept";
 import { shellQuote } from "../lib/fs";
 import {
   capturePackageGatePolicy,
   resolvePackageGate,
+  type IPackageGateCaptureOpts,
   type IPackageGatePolicy,
 } from "./package-gate-policy";
 import {
@@ -37,6 +43,8 @@ export interface IWorkspaceGateRun {
 export interface IWorkspaceGateOpts extends IAcceptOptions {
   /** Session-scoped policy cache — frozen test command + monotonic packs. */
   readonly policies?: Map<string, IPackageGatePolicy>;
+  /** CLI overlays applied when a package policy is first captured. */
+  readonly capture?: IPackageGateCaptureOpts;
 }
 
 /**
@@ -78,7 +86,14 @@ export async function runWorkspaceContainerGate(
     };
   }
 
-  const fan = await gateEachPackage(packages, task, parse, opts, policies);
+  const fan = await gateEachPackage(
+    packages,
+    task,
+    parse,
+    opts,
+    policies,
+    opts.capture ?? {}
+  );
   const sections =
     ungated === null ? fan.outputs : [...fan.outputs, ungated.output];
 
@@ -109,7 +124,8 @@ async function gateEachPackage(
   task: ITask,
   parse: ErrorParser | undefined,
   opts: IWorkspaceGateOpts,
-  policies: Map<string, IPackageGatePolicy>
+  policies: Map<string, IPackageGatePolicy>,
+  capture: IPackageGateCaptureOpts
 ): Promise<IFanOut> {
   const outputs: string[] = [];
   const errors: ErrorSet = [];
@@ -122,7 +138,7 @@ async function gateEachPackage(
     let policy = policies.get(pkg);
 
     if (policy === undefined) {
-      policy = await capturePackageGatePolicy(pkg);
+      policy = await capturePackageGatePolicy(pkg, capture);
       policies.set(pkg, policy);
     }
 
@@ -143,11 +159,33 @@ async function gateEachPackage(
 
     if (!r.passed) {
       passed = false;
-      errors.push(...r.errors);
+      // Prefix so app/src/bad.ts and api/src/bad.ts don't collapse to one key.
+      errors.push(...r.errors.map((e) => relocatePackageError(label, e)));
     }
   }
 
   return { passed, errors, outputs, commands, packs };
+}
+
+/** Make package-local diagnostics unique across the workspace fan-out. */
+export function relocatePackageError(
+  packageLabelName: string,
+  error: IErrorItem
+): IErrorItem {
+  if (error.file === undefined || error.file.length === 0) {
+    return { ...error, key: `${packageLabelName}:${error.key}` };
+  }
+
+  const local = error.file.replace(/^\.\//u, "");
+  const prefixed = join(packageLabelName, local).replaceAll("\\", "/");
+
+  return {
+    ...error,
+    file: prefixed,
+    key: error.key.includes(local)
+      ? error.key.replace(local, prefixed)
+      : `${prefixed}:${error.key}`,
+  };
 }
 
 /** Gate failure for touched code that belongs to no package, or null when none. */
@@ -175,15 +213,20 @@ function ungatedCodeFailure(
 
 /**
  * Per-write lint moat for a workspace container: routes each written file to a
- * linter built for the OWNING package (full policy packs/overrides/conventions),
- * built once per package and reused.
+ * linter built for the OWNING package. Rebuilds when packs grow so newly
+ * activated frameworks aren't linted under the old ruleset.
  */
 export function makeWorkspaceFileLinter(
   sessionCwd: string,
-  policies?: Map<string, IPackageGatePolicy>
+  policies?: Map<string, IPackageGatePolicy>,
+  capture?: IPackageGateCaptureOpts
 ): FileLinter {
   const cache = policies ?? new Map<string, IPackageGatePolicy>();
-  const perPackage = new Map<string, FileLinter>();
+  const perPackage = new Map<
+    string,
+    { readonly packsKey: string; readonly lint: FileLinter }
+  >();
+  const captureOpts = capture ?? {};
 
   return async (absPath) => {
     const pkg = owningPackageRoot(sessionCwd, absPath);
@@ -192,23 +235,22 @@ export function makeWorkspaceFileLinter(
       return [];
     }
 
-    let linter = perPackage.get(pkg);
+    let policy = cache.get(pkg);
 
-    if (linter === undefined) {
-      let policy = cache.get(pkg);
-
-      if (policy === undefined) {
-        policy = await capturePackageGatePolicy(pkg);
-        cache.set(pkg, policy);
-      }
-
-      const resolved = await resolvePackageGate(policy);
-
-      linter = resolved.lintFile;
-      perPackage.set(pkg, linter);
+    if (policy === undefined) {
+      policy = await capturePackageGatePolicy(pkg, captureOpts);
+      cache.set(pkg, policy);
     }
 
-    return linter(absPath);
+    const resolved = await resolvePackageGate(policy);
+    const packsKey = resolved.packs.join("\0");
+    const cached = perPackage.get(pkg);
+
+    if (cached?.packsKey !== packsKey) {
+      perPackage.set(pkg, { packsKey, lint: resolved.lintFile });
+    }
+
+    return (await perPackage.get(pkg)?.lint(absPath)) ?? [];
   };
 }
 

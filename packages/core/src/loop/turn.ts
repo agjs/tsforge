@@ -107,12 +107,16 @@ import {
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
-import type { FileLinter } from "../gate";
 import {
   formatFiles,
   isWorkspaceContainer,
   activePackageRoots,
   packageRelativeTouched,
+  packageLabel,
+  capturePackageGatePolicy,
+  type FileLinter,
+  type IPackageGatePolicy,
+  type IPackageGateCaptureOpts,
 } from "../gate";
 import type { IGate } from "../gate/gate-runner";
 import {
@@ -430,6 +434,10 @@ export interface ILoopCtxGate {
    *  start. Subtracted from each cycle's violations so pre-existing scaffold debt the
    *  model is frozen out of never blocks a feature or clutters feedback. */
   metaBaseline?: MetaBaseline;
+  /** Per-package frozen policies for workspace-container fan-out (meta + gate). */
+  workspacePolicies?: Map<string, IPackageGatePolicy>;
+  /** CLI overlays (--profile / --strict-floor-only) applied on first package capture. */
+  workspaceCapture?: IPackageGateCaptureOpts;
 }
 
 /** The coordinator's per-task working context: the flat identity/reporting core,
@@ -1449,12 +1457,12 @@ async function runGateStep(
  *  express (e.g. test-sibling-required), change-scoped to the files the AGENT
  *  wrote this session. Best-effort: a throwing rule degrades to no violations.
  *  Workspace containers run meta per touched child package (not the bag root). */
-function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
+async function runMetaRulesStep(ctx: ILoopCtx): Promise<IMetaRuleViolation[]> {
   try {
     const changed = [...(ctx.tool.touched ?? [])];
 
     if (isWorkspaceContainer(ctx.cwd)) {
-      return runWorkspaceMetaRules(ctx, changed);
+      return await runWorkspaceMetaRules(ctx, changed);
     }
 
     const metaContext = buildMetaRuleContext(
@@ -1480,28 +1488,46 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
 }
 
 /** Fan meta-rules out to each touched package under a workspace container. */
-function runWorkspaceMetaRules(
+async function runWorkspaceMetaRules(
   ctx: ILoopCtx,
   changed: readonly string[]
-): IMetaRuleViolation[] {
+): Promise<IMetaRuleViolation[]> {
   const packages = activePackageRoots(ctx.cwd, changed);
 
   if (packages.length === 0) {
     return [];
   }
 
+  const policies =
+    ctx.gate.workspacePolicies ?? new Map<string, IPackageGatePolicy>();
+  const capture = ctx.gate.workspaceCapture ?? {};
+
+  ctx.gate.workspacePolicies ??= policies;
+
   const all: IMetaRuleViolation[] = [];
 
   for (const pkg of packages) {
+    let policy = policies.get(pkg);
+
+    if (policy === undefined) {
+      policy = await capturePackageGatePolicy(pkg, capture);
+      policies.set(pkg, policy);
+    }
+
     const pkgTouched = packageRelativeTouched(ctx.cwd, pkg, changed);
-    const packs = ctx.gate.stackProfile?.packs ?? [];
+    const packs = [...policy.activePacks];
     const violations = runMetaRules(
       META_RULES,
       buildMetaRuleContext(pkg, packs, pkgTouched),
-      ctx.gate.ruleOverrides
+      policy.ruleOverrides
     );
+    const label = packageLabel(pkg);
+    const relocated = violations.map((v) => ({
+      ...v,
+      file: join(label, v.file.replace(/^\.\//u, "")).replaceAll("\\", "/"),
+    }));
 
-    all.push(...subtractMetaBaseline(violations, ctx.gate.metaBaseline));
+    all.push(...subtractMetaBaseline(relocated, ctx.gate.metaBaseline));
   }
 
   return all;
@@ -1526,7 +1552,7 @@ export async function evaluateGate(
 }> {
   const autoFixed = await autoFixStep(ctx);
   const gate = await runGateStep(ctx, turn);
-  const metaViolations = runMetaRulesStep(ctx);
+  const metaViolations = await runMetaRulesStep(ctx);
 
   const metaErrors = metaViolations.filter((v) => v.severity === "error");
   const errors = gate.errors.concat(

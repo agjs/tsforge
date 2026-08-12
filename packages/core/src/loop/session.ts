@@ -12,6 +12,7 @@ import {
   runWorkspaceContainerGate,
   type FileLinter,
   type IPackageGatePolicy,
+  type IPackageGateCaptureOpts,
 } from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
 import type { IStackProfile } from "../stack-detection";
@@ -235,6 +236,9 @@ export interface ISessionConfig {
   editGuard?: EditGuard;
   /** Rule profile override for this session (from a recipe); defaults to config file. */
   profile?: ProfileId;
+  /** When true, per-package workspace gates omit the project's test command
+   *  (CLI `--strict-floor-only`). */
+  strictFloorOnly?: boolean;
   /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Drive-to-green sessions without a provider get the house
@@ -958,17 +962,30 @@ function notePackActivation(
  *  shared `active` flag; `setGate` flips that off so a manual override wins. Returned
  *  alongside its `state` so `Session.create` can hand the flag to the constructor, and kept
  *  module-level so the large factory stays within the complexity budget. */
+/** CLI overlays for per-package workspace gate capture. */
+function packageGateCaptureFrom(cfg: ISessionConfig): IPackageGateCaptureOpts {
+  return {
+    ...(cfg.profile !== undefined ? { profile: cfg.profile } : {}),
+    ...(cfg.strictFloorOnly === true ? { strictFloorOnly: true } : {}),
+  };
+}
+
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
   parse: ErrorParser | undefined,
-  offerCheck = false
+  offerCheck = false,
+  capture: IPackageGateCaptureOpts = {}
 ): { runner: IGate; state: { active: boolean } } {
   const state = { active: true };
   let prevPacks: string[] | null = null;
   let workspaceLint: FileLinter | null = null;
   /** Frozen per-package policies for workspace fan-out (test cmd + packs). */
   const workspacePolicies = new Map<string, IPackageGatePolicy>();
+
+  ctx.gate.workspacePolicies = workspacePolicies;
+  ctx.gate.workspaceCapture = capture;
+
   const runner: IGate = {
     async run(cwd, opts) {
       // F19: external plugins are frozen at session start; a mid-session edit of
@@ -982,8 +999,12 @@ function makeAutoGateRunner(
       // honor the manual command via validate (same as non-workspace).
       if (isWorkspaceContainer(cwd) && state.active) {
         // One router for the whole session — each package's eslint engine is
-        // built once inside it, so per-write linting isn't lost in this mode.
-        workspaceLint ??= makeWorkspaceFileLinter(cwd, workspacePolicies);
+        // rebuilt when packs grow so newly activated frameworks aren't missed.
+        workspaceLint ??= makeWorkspaceFileLinter(
+          cwd,
+          workspacePolicies,
+          capture
+        );
         ctx.gate.lintFile = workspaceLint;
 
         const run = await runWorkspaceContainerGate(
@@ -991,7 +1012,7 @@ function makeAutoGateRunner(
           ctx.task,
           ctx.tool.touched ?? [],
           parse,
-          { ...(opts ?? {}), policies: workspacePolicies }
+          { ...(opts ?? {}), policies: workspacePolicies, capture }
         );
 
         // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
@@ -1403,7 +1424,8 @@ export class Session {
         ctx,
         cfg.autoGate,
         cfg.parse,
-        isOfferCheckActive(cfg)
+        isOfferCheckActive(cfg),
+        packageGateCaptureFrom(cfg)
       );
 
       ctx.gate.runner = auto.runner;
