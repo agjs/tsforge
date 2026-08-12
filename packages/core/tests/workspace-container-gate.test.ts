@@ -274,12 +274,12 @@ test("makeWorkspaceFileLinter: files under no package report clean", async () =>
 });
 
 test("relocatePackageError: identical relative paths stay distinct across packages", () => {
-  const a = relocatePackageError("app", {
+  const a = relocatePackageError("app", "/ws/app", {
     key: "src/bad.ts:no-as",
     file: "src/bad.ts",
     message: "no as",
   });
-  const b = relocatePackageError("api", {
+  const b = relocatePackageError("api", "/ws/api", {
     key: "src/bad.ts:no-as",
     file: "src/bad.ts",
     message: "no as",
@@ -289,6 +289,45 @@ test("relocatePackageError: identical relative paths stay distinct across packag
   expect(b.file).toBe("api/src/bad.ts");
   expect(a.key).not.toBe(b.key);
   expect(new Set([a.key, b.key]).size).toBe(2);
+});
+
+test("relocatePackageError: absolute ESLint paths become package-relative under the label", () => {
+  const pkgDir = "/tmp/ws/app";
+  const relocated = relocatePackageError("app", pkgDir, {
+    key: `${pkgDir}/src/bad.ts:no-as`,
+    file: `${pkgDir}/src/bad.ts`,
+    message: "no as",
+  });
+
+  expect(relocated.file).toBe("app/src/bad.ts");
+  expect(relocated.key).toContain("app/src/bad.ts");
+  expect(relocated.key).not.toContain("/tmp/ws");
+});
+
+test("resolvePackageGate: external pack ids stay out of the subprocess pack list", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "pkg" }));
+    // A fake absolute plugin path that won't load — capture should still
+    // keep builtins-only activePacks even when plugins are declared.
+    await writeFile(
+      join(dir, "tsforge.config.json"),
+      JSON.stringify({
+        packs: { include: ["generic-ts"] },
+      })
+    );
+
+    const policy = await capturePackageGatePolicy(dir);
+    const resolved = await resolvePackageGate(policy);
+
+    // Gate command packs = builtins; lint packs may equal that when no plugins.
+    expect(policy.activePacks.has("generic-ts")).toBe(true);
+    expect(policy.externalPackIds).toEqual([]);
+    expect(resolved.packs).toContain("generic-ts");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("capturePackageGatePolicy: freezes config so mid-session exclude cannot drop newly detected packs", async () => {

@@ -50,6 +50,7 @@ import { Scrollback } from "./scrollback";
 import { stripSgr } from "./ansi-plain";
 import { handleFocusKey, handleMouseKey, handleScrollKey } from "./pane-keys";
 import type { PaneKeyResult } from "./pane-keys";
+import { normalizePaneControlSeq } from "./input-seq";
 import { paint } from "../style";
 import { displayWidth } from "../width";
 import { formatScrollbarColumn, overlayScrollbarCol } from "./scrollbar";
@@ -756,7 +757,9 @@ export class PaneScreen {
   }
 
   handleKey(seq: string): PaneKeyResult {
-    if (seq === "\x0f") {
+    const key = normalizePaneControlSeq(seq);
+
+    if (key === "\x0f") {
       return "dump";
     }
 
@@ -786,8 +789,8 @@ export class PaneScreen {
     };
 
     return (
-      handleFocusKey(seq, deps) ??
-      handleScrollKey(seq, deps) ??
+      handleFocusKey(key, deps) ??
+      handleScrollKey(key, deps) ??
       handleMouseKey(seq, deps) ??
       "passthrough"
     );

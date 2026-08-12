@@ -36,6 +36,9 @@ export interface ISessionRecord {
    *  the flag — a project resumed months later stays at the level it was built at. Absent
    *  ⇒ no CLI profile (the project's tsforge.config.json / default drives it, as always). */
   profile?: string;
+  /** `--strict-floor-only` was set when the session started. Re-applied on
+   *  `--continue` so resume keeps omitting project tests from the auto gate. */
+  strictFloorOnly?: boolean;
   /** Editable scope globs. */
   files: string[];
   /** Last-write time (ms) — newest wins for `--continue`. */
@@ -184,36 +187,12 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
         id: data.id,
         cwd: data.cwd,
         accept: typeof data.accept === "string" ? data.accept : "",
-        // Restored so `--continue` of an auto session re-attaches stack re-detection
-        // instead of freezing on the stored generic-ts command (greenfield resume).
-        ...(typeof data.auto === "boolean" ? { auto: data.auto } : {}),
-        // Restored so `--continue` keeps the strictness the build was started with.
-        ...(typeof data.profile === "string" ? { profile: data.profile } : {}),
         files: Array.isArray(data.files)
           ? data.files.filter((f): f is string => typeof f === "string")
           : [],
         updatedAt: data.updatedAt,
-        // Restored so a resumed session keeps its read-only guarantee; saveSession
-        // persists it but readRecord dropped it, so `--continue` always lost it.
-        ...(typeof data.planMode === "boolean"
-          ? { planMode: data.planMode }
-          : {}),
-        // Restored so a resumed session re-gates a still-pending pre-pause edit instead
-        // of dropping the deferred gate across the process boundary (WS-C).
-        ...(typeof data.pausedWithEdit === "boolean"
-          ? { pausedWithEdit: data.pausedWithEdit }
-          : {}),
-        ...(Array.isArray(data.touched)
-          ? {
-              touched: data.touched.filter(
-                (f): f is string => typeof f === "string" && f.length > 0
-              ),
-            }
-          : {}),
-        ...(data.activePlanId === null || typeof data.activePlanId === "string"
-          ? { activePlanId: data.activePlanId }
-          : {}),
         messages: toMessages(data.messages),
+        ...optionalSessionFields(data),
       };
     }
   } catch {
@@ -221,6 +200,33 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
   }
 
   return null;
+}
+
+/** Optional resume fields — kept off `readRecord` for the complexity budget. */
+function optionalSessionFields(
+  data: Record<string, unknown>
+): Partial<ISessionRecord> {
+  return {
+    ...(typeof data.auto === "boolean" ? { auto: data.auto } : {}),
+    ...(typeof data.profile === "string" ? { profile: data.profile } : {}),
+    ...(data.strictFloorOnly === true
+      ? { strictFloorOnly: true as const }
+      : {}),
+    ...(typeof data.planMode === "boolean" ? { planMode: data.planMode } : {}),
+    ...(typeof data.pausedWithEdit === "boolean"
+      ? { pausedWithEdit: data.pausedWithEdit }
+      : {}),
+    ...(Array.isArray(data.touched)
+      ? {
+          touched: data.touched.filter(
+            (f): f is string => typeof f === "string" && f.length > 0
+          ),
+        }
+      : {}),
+    ...(data.activePlanId === null || typeof data.activePlanId === "string"
+      ? { activePlanId: data.activePlanId }
+      : {}),
+  };
 }
 
 /** Validate a persisted message array back into IChatMessage[] (no `as` casts). */

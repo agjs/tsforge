@@ -17,7 +17,11 @@ export interface IMcpToolCaller {
 function parseListPayload(raw: string): readonly string[] {
   const trimmed = raw.trim();
 
-  if (trimmed.length === 0 || trimmed.startsWith("unknown MCP")) {
+  if (
+    trimmed.length === 0 ||
+    trimmed.startsWith("unknown MCP") ||
+    trimmed.startsWith("MCP tool")
+  ) {
     return [];
   }
 

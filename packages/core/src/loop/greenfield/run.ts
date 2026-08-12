@@ -231,6 +231,10 @@ async function attemptFeature(
 
       if (retained) {
         say(`feature '${feature.id}': decision retained`);
+      } else {
+        say(
+          `feature '${feature.id}': decision retain failed (or not configured)`
+        );
       }
 
       return undefined;

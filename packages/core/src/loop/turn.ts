@@ -114,6 +114,7 @@ import {
   packageRelativeTouched,
   packageLabel,
   capturePackageGatePolicy,
+  packageLintPacks,
   type FileLinter,
   type IPackageGatePolicy,
   type IPackageGateCaptureOpts,
@@ -438,6 +439,8 @@ export interface ILoopCtxGate {
   workspacePolicies?: Map<string, IPackageGatePolicy>;
   /** CLI overlays (--profile / --strict-floor-only) applied on first package capture. */
   workspaceCapture?: IPackageGateCaptureOpts;
+  /** Per-package meta baselines for workspace containers (keyed by package abs path). */
+  workspaceMetaBaselines?: Map<string, MetaBaseline>;
 }
 
 /** The coordinator's per-task working context: the flat identity/reporting core,
@@ -1515,7 +1518,7 @@ async function runWorkspaceMetaRules(
     }
 
     const pkgTouched = packageRelativeTouched(ctx.cwd, pkg, changed);
-    const packs = [...policy.activePacks];
+    const packs = packageLintPacks(policy);
     const violations = runMetaRules(
       META_RULES,
       buildMetaRuleContext(pkg, packs, pkgTouched),
@@ -1526,8 +1529,10 @@ async function runWorkspaceMetaRules(
       ...v,
       file: join(label, v.file.replace(/^\.\//u, "")).replaceAll("\\", "/"),
     }));
+    const baseline =
+      ctx.gate.workspaceMetaBaselines?.get(pkg) ?? ctx.gate.metaBaseline;
 
-    all.push(...subtractMetaBaseline(relocated, ctx.gate.metaBaseline));
+    all.push(...subtractMetaBaseline(relocated, baseline));
   }
 
   return all;

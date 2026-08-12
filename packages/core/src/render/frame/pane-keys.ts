@@ -1,6 +1,7 @@
 import type { PaneFocus } from "./focus";
 import type { Scrollback } from "./scrollback";
 import { parseMouseReport } from "./ansi-plain";
+import { normalizePaneControlSeq } from "./input-seq";
 
 export type PaneKeyResult = "handled" | "passthrough" | "dump";
 
@@ -21,7 +22,9 @@ export function handleFocusKey(
   seq: string,
   deps: IPaneKeyDeps
 ): PaneKeyResult | null {
-  if (seq === "\x07") {
+  const key = normalizePaneControlSeq(seq);
+
+  if (key === "\x07") {
     if (deps.focus.togglePanel(deps.panelLen > 0) === "changed") {
       // Layout width changes — invalidate the differential frame, not a body patch.
       deps.invalidate();

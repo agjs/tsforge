@@ -29,4 +29,5 @@ export type {
 export {
   capturePackageGatePolicy,
   resolvePackageGate,
+  packageLintPacks,
 } from "./package-gate-policy";

@@ -1,4 +1,4 @@
-import { join, dirname } from "node:path";
+import { join, dirname, resolve, isAbsolute } from "node:path";
 import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
 import { parseMcpServers, type IMcpServerConfig } from "../mcp";
@@ -648,6 +648,27 @@ function buildConfigFields(
   return configFields;
 }
 
+/** Resolve relative `plugins[].path` against the config file's directory. */
+function withResolvedPluginPaths(
+  config: ITsforgeProjectConfig,
+  configDir: string
+): ITsforgeProjectConfig {
+  if (config.plugins === undefined || config.plugins.length === 0) {
+    return config;
+  }
+
+  return {
+    ...config,
+    plugins: config.plugins.map((plugin) => {
+      if (plugin.path.startsWith(".") || isAbsolute(plugin.path)) {
+        return { ...plugin, path: resolve(configDir, plugin.path) };
+      }
+
+      return plugin;
+    }),
+  };
+}
+
 /** Effective multiagent fan-out cap for this project: `agents.concurrency`
  *  when set, else 1 (sequential). The flip to a parallel default waits on the
  *  Phase-A eval sweep, per the eval-first house rule. */
@@ -702,7 +723,13 @@ export async function loadTsforgeConfig(
       return {};
     }
 
-    return buildConfigFields(parsed);
+    // Relative plugin paths resolve against the config file's directory — not
+    // the caller's cwd — so a root `./plugins/foo.ts` still loads when a
+    // workspace child captures policy with cwd=`…/app`.
+    return withResolvedPluginPaths(
+      buildConfigFields(parsed),
+      dirname(configPath)
+    );
   } catch (err) {
     if (err instanceof SyntaxError) {
       const firstLine = err.message.split("\n")[0];

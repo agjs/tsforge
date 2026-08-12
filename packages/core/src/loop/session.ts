@@ -10,6 +10,10 @@ import {
   isWorkspaceContainer,
   makeWorkspaceFileLinter,
   runWorkspaceContainerGate,
+  listChildPackageRoots,
+  packageLabel,
+  capturePackageGatePolicy,
+  packageLintPacks,
   type FileLinter,
   type IPackageGatePolicy,
   type IPackageGateCaptureOpts,
@@ -28,6 +32,7 @@ import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { mergePolicyRules } from "../policy";
 import type { ProfileId } from "../config/profiles";
+import { join } from "node:path";
 import {
   buildMetaRuleContext,
   runMetaRules,
@@ -1610,14 +1615,27 @@ export class Session {
     this.ctx.gate.expertRescueTarget = file.length > 0 ? file : undefined;
   }
 
-  /** Capture the meta-rule baseline of the CURRENT (pristine) workspace using this
-   *  session's own resolved stack profile + rule overrides, and store it so every
-   *  later cycle subtracts it (pre-existing scaffold debt never blocks a feature).
-   *  Call ONCE before any model work. Empty `changed` ⇒ only global rules seed it;
-   *  change-scoped rules (e.g. test-sibling) correctly don't enter the baseline.
-   *  Degrades silently — a throwing rule leaves the baseline unset (no suppression). */
-  captureMetaBaseline(): void {
+  /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
+   *  session into a from-scratch web build, whose heavy gate needs the bigger
+   *  webMaxTurns budget (0/undefined restores the config default). */
+  setMaxTurns(n?: number): void {
+    this.maxTurnsOverride = n !== undefined && n > 0 ? n : undefined;
+  }
+
+  /**
+   * Capture pristine meta-rule violations to subtract later. Workspace containers
+   * fan out per child package (with that package's packs/overrides) so pre-existing
+   * child debt is suppressed the same way a single-repo scaffold is.
+   * Call ONCE before any model work. Empty `changed` ⇒ only global rules seed it.
+   */
+  async captureMetaBaseline(): Promise<void> {
     try {
+      if (isWorkspaceContainer(this.ctx.cwd)) {
+        await this.captureWorkspaceMetaBaselines();
+
+        return;
+      }
+
       const metaContext = buildMetaRuleContext(
         this.ctx.cwd,
         this.ctx.gate.stackProfile?.packs ?? [],
@@ -1635,11 +1653,39 @@ export class Session {
     }
   }
 
-  /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
-   *  session into a from-scratch web build, whose heavy gate needs the bigger
-   *  webMaxTurns budget (0/undefined restores the config default). */
-  setMaxTurns(n?: number): void {
-    this.maxTurnsOverride = n !== undefined && n > 0 ? n : undefined;
+  /** Per-child meta baselines for a workspace container. */
+  private async captureWorkspaceMetaBaselines(): Promise<void> {
+    const capture = this.ctx.gate.workspaceCapture ?? {};
+    const policies =
+      this.ctx.gate.workspacePolicies ?? new Map<string, IPackageGatePolicy>();
+
+    this.ctx.gate.workspacePolicies = policies;
+
+    const baselines = new Map<string, ReturnType<typeof buildMetaBaseline>>();
+
+    for (const pkg of listChildPackageRoots(this.ctx.cwd)) {
+      let policy = policies.get(pkg);
+
+      if (policy === undefined) {
+        policy = await capturePackageGatePolicy(pkg, capture);
+        policies.set(pkg, policy);
+      }
+
+      const violations = runMetaRules(
+        META_RULES,
+        buildMetaRuleContext(pkg, packageLintPacks(policy), []),
+        policy.ruleOverrides
+      );
+      const label = packageLabel(pkg);
+      const relocated = violations.map((v) => ({
+        ...v,
+        file: join(label, v.file.replace(/^\.\//u, "")).replaceAll("\\", "/"),
+      }));
+
+      baselines.set(pkg, buildMetaBaseline(relocated));
+    }
+
+    this.ctx.gate.workspaceMetaBaselines = baselines;
   }
 
   /** Toggle GENERAL plan mode: read-only tools + the plan-then-approve workflow.

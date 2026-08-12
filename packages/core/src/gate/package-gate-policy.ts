@@ -19,6 +19,10 @@ import type { FileLinter, IGateSpec } from "./types";
 /**
  * Frozen per-package gate policy for workspace-container fan-out — mirrors
  * `captureGatePolicy` + monotonic packs in `cli/gate-setup.ts`.
+ *
+ * External plugin packs are registered in-process for write-time lint / meta,
+ * but NEVER placed in `activePacks` / TSFORGE_PACKS — the eslint subprocess
+ * starts with an empty external registry and would fail with Unknown rule pack.
  */
 export interface IPackageGatePolicy {
   readonly dir: string;
@@ -28,9 +32,11 @@ export interface IPackageGatePolicy {
   readonly profile: ProfileId;
   readonly conventions: IConventions;
   readonly baselinePacks: readonly string[];
+  /** External pack ids (in-process only — not sent to the eslint subprocess). */
+  readonly externalPackIds: readonly string[];
   /** Discovered once; never re-read mid-session. */
   readonly testCommand: string | null;
-  /** Monotonic pack accumulator for this package across cycles. */
+  /** Monotonic BUILTIN pack accumulator for this package across cycles. */
   readonly activePacks: Set<string>;
 }
 
@@ -46,6 +52,11 @@ function overridesOrUndef(
   return Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined;
 }
 
+/** Packs for write-time lint + meta (builtins + external). */
+export function packageLintPacks(policy: IPackageGatePolicy): string[] {
+  return [...policy.activePacks, ...policy.externalPackIds].sort();
+}
+
 /** Capture frozen policy for one package root (once per session map entry). */
 export async function capturePackageGatePolicy(
   pkgDir: string,
@@ -56,14 +67,13 @@ export async function capturePackageGatePolicy(
     opts.profile
   );
   const stack = await detectStack(pkgDir);
-  const resolved = resolveActivePacks(stack.packs, config);
-  // Child-declared external plugins — register once at capture (frozen thereafter).
+  const baselinePacks = resolveActivePacks(stack.packs, config);
+  // Child/root plugins — paths already absolute (resolved against the config
+  // file's directory in loadTsforgeConfig). Register in-process only.
   const externalPackIds =
     config.plugins === undefined
       ? []
       : await loadAndRegisterPlugins(config.plugins, pkgDir, () => undefined);
-  const baselinePacks =
-    externalPackIds.length > 0 ? [...resolved, ...externalPackIds] : resolved;
 
   return {
     dir: pkgDir,
@@ -72,13 +82,14 @@ export async function capturePackageGatePolicy(
     profile: resolveProjectProfile(config),
     conventions: resolveConventions(config.conventions),
     baselinePacks,
+    externalPackIds,
     testCommand:
       opts.strictFloorOnly === true ? null : await discoverTestCommand(pkgDir),
     activePacks: new Set(baselinePacks),
   };
 }
 
-/** Re-detect stack deps only; grow packs via the FROZEN config (monotonic). */
+/** Re-detect stack deps only; grow builtin packs via the FROZEN config. */
 export async function resolvePackageGate(policy: IPackageGatePolicy): Promise<{
   readonly gate: IGateSpec;
   readonly packs: readonly string[];
@@ -91,7 +102,9 @@ export async function resolvePackageGate(policy: IPackageGatePolicy): Promise<{
     policy.activePacks.add(pack);
   }
 
+  // Subprocess gate: builtins only. External packs stay in-process (lintFile).
   const packs = [...policy.activePacks].sort();
+  const lintPacks = packageLintPacks(policy);
   const overrides = overridesOrUndef(policy.ruleOverrides);
   const gate = await buildGate(policy.dir, packs, overrides, {
     enableTypeAware: policy.profile === "strict",
@@ -102,11 +115,11 @@ export async function resolvePackageGate(policy: IPackageGatePolicy): Promise<{
 
   return {
     gate,
-    packs,
+    packs: lintPacks,
     lintFile: makeFileLinter(
       "core",
       policy.dir,
-      packs,
+      lintPacks,
       overrides,
       policy.conventions
     ),

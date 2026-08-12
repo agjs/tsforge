@@ -530,6 +530,9 @@ async function initReplSession(args: ICliArgs): Promise<{
   // and the Session's rule severities (Session.create reads args.profile). An explicit
   // `--profile` THIS run still wins.
   args.profile = resumedProfileArg(args.profile, resumed);
+  // Same for --strict-floor-only: an explicit flag THIS run still wins.
+  args.strictFloorOnly =
+    args.strictFloorOnly || resumed?.strictFloorOnly === true;
 
   const id = resumed?.id ?? newSessionId();
   const { accept, gateLabel, lintFile, autoGate } = await resolveGate(
@@ -736,6 +739,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       auto: session.autoGateActive,
       // Persist the strictness (--profile) so --continue keeps it without re-passing flags.
       ...(args.profile.length > 0 ? { profile: args.profile } : {}),
+      ...(args.strictFloorOnly ? { strictFloorOnly: true as const } : {}),
       files: session.scope,
       updatedAt: Date.now(),
       planMode,

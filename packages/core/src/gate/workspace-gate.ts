@@ -160,31 +160,45 @@ async function gateEachPackage(
     if (!r.passed) {
       passed = false;
       // Prefix so app/src/bad.ts and api/src/bad.ts don't collapse to one key.
-      errors.push(...r.errors.map((e) => relocatePackageError(label, e)));
+      errors.push(...r.errors.map((e) => relocatePackageError(label, pkg, e)));
     }
   }
 
   return { passed, errors, outputs, commands, packs };
 }
 
-/** Make package-local diagnostics unique across the workspace fan-out. */
+/** Make package-local diagnostics unique across the workspace fan-out.
+ *  ESLint often emits absolute paths — relativize to the package first, then
+ *  prefix with the package label (never `app` + `/private/.../app/src/...`). */
 export function relocatePackageError(
   packageLabelName: string,
+  packageDir: string,
   error: IErrorItem
 ): IErrorItem {
   if (error.file === undefined || error.file.length === 0) {
     return { ...error, key: `${packageLabelName}:${error.key}` };
   }
 
-  const local = error.file.replace(/^\.\//u, "");
-  const prefixed = join(packageLabelName, local).replaceAll("\\", "/");
+  const raw = error.file.replace(/^\.\//u, "");
+  const local = isAbsolute(raw)
+    ? relative(packageDir, raw).replaceAll("\\", "/")
+    : raw;
+
+  // Still outside the package after relativizing — keep the basename under label.
+  const safeLocal =
+    local.startsWith("..") || isAbsolute(local)
+      ? raw.replace(/^.*[/\\]/u, "")
+      : local;
+  const prefixed = join(packageLabelName, safeLocal).replaceAll("\\", "/");
 
   return {
     ...error,
     file: prefixed,
-    key: error.key.includes(local)
-      ? error.key.replace(local, prefixed)
-      : `${prefixed}:${error.key}`,
+    key: error.key.includes(raw)
+      ? error.key.replace(raw, prefixed)
+      : error.key.includes(safeLocal)
+        ? error.key.replace(safeLocal, prefixed)
+        : `${prefixed}:${error.key}`,
   };
 }
 

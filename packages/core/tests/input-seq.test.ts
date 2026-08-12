@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { takeOneInputSequence } from "../src/render/frame/input-seq";
+import {
+  takeOneInputSequence,
+  normalizePaneControlSeq,
+} from "../src/render/frame/input-seq";
 
 test("takeOneInputSequence: peels Ctrl+G before a following character", () => {
   const first = takeOneInputSequence("\x07x");
@@ -32,4 +35,25 @@ test("takeOneInputSequence: bare Esc stays alone", () => {
 
   expect(bare.seq).toBe("\x1b");
   expect(bare.rest).toBe("");
+});
+
+test("takeOneInputSequence: peels emoji as one grapheme", () => {
+  const wave = takeOneInputSequence("👋x");
+
+  expect(wave.seq).toBe("👋");
+  expect(wave.rest).toBe("x");
+});
+
+test("takeOneInputSequence: peels combining accent as one grapheme", () => {
+  // e + combining acute
+  const accented = takeOneInputSequence("e\u0301x");
+
+  expect(accented.seq).toBe("e\u0301");
+  expect(accented.rest).toBe("x");
+});
+
+test("normalizePaneControlSeq: Kitty CSI-u Ctrl+G / Ctrl+O", () => {
+  expect(normalizePaneControlSeq("\x1b[103;5u")).toBe("\x07");
+  expect(normalizePaneControlSeq("\x1b[111;5u")).toBe("\x0f");
+  expect(normalizePaneControlSeq("\x07")).toBe("\x07");
 });
