@@ -14,6 +14,16 @@ export interface IDecisionMemoryLoad {
   readonly brief: string | null;
 }
 
+export interface IDecisionMemoryLoadDeps {
+  readonly createProvider?: (
+    cwd: string,
+    config: IMemoryProviderConfig | undefined,
+    mcpCaller: IMcpToolCaller | null
+  ) => Promise<IMemoryProvider | null>;
+  /** Override start-up ceiling (tests). */
+  readonly startTimeoutMs?: number;
+}
+
 /**
  * Resolve `work`, or `fallback` when it has not settled within `ms`.
  *
@@ -45,43 +55,66 @@ export async function withDeadline<T>(
 }
 
 /**
- * Opt-in decision memory at session start. Fail-soft: errors, and now also a
- * backend that simply never answers, → null provider/brief.
+ * Opt-in decision memory at session start.
+ *
+ * Provider construction and recall are timed separately. A slow/empty recall
+ * must NOT discard a successfully opened provider — that left sessions looking
+ * configured while never retaining (empty bank forever, no error).
  */
 export async function loadDecisionMemoryAtStart(
   cwd: string,
   config: IMemoryProviderConfig | undefined,
   mcpCaller: IMcpToolCaller | null,
   report: Reporter,
-  taskId: string
+  taskId: string,
+  deps: IDecisionMemoryLoadDeps = {}
 ): Promise<IDecisionMemoryLoad> {
   const empty: IDecisionMemoryLoad = { provider: null, brief: null };
 
-  const load = async (): Promise<IDecisionMemoryLoad> => {
-    try {
-      const provider = await createMemoryProvider(cwd, config, mcpCaller);
+  if (config === undefined) {
+    return empty;
+  }
 
-      if (provider === null) {
-        return empty;
-      }
+  const create = deps.createProvider ?? createMemoryProvider;
+  const budget = deps.startTimeoutMs ?? MEMORY_START_TIMEOUT_MS;
 
-      const brief = await provider.recall(DECISION_RECALL_QUERY);
+  try {
+    const provider = await withDeadline(
+      create(cwd, config, mcpCaller),
+      null,
+      budget
+    );
 
-      if (brief !== null) {
-        report({
-          kind: "tool",
-          task: taskId,
-          message: `decision memory: loaded brief for bank ${provider.bankId}`,
-        });
-      }
-
-      return { provider, brief };
-    } catch (err) {
-      trace("session.decision-memory", err);
-
+    if (provider === null) {
       return empty;
     }
-  };
 
-  return withDeadline(load(), empty);
+    // Recall is best-effort context. Time it out independently so a hung
+    // embedding/rerank cannot throw away the write path for the whole session.
+    const brief = await withDeadline(
+      provider.recall(DECISION_RECALL_QUERY),
+      null,
+      budget
+    );
+
+    if (brief !== null) {
+      report({
+        kind: "tool",
+        task: taskId,
+        message: `decision memory: loaded brief for bank ${provider.bankId}`,
+      });
+    } else {
+      report({
+        kind: "tool",
+        task: taskId,
+        message: `decision memory: bank ${provider.bankId} ready (empty)`,
+      });
+    }
+
+    return { provider, brief };
+  } catch (err) {
+    trace("session.decision-memory", err);
+
+    return empty;
+  }
 }

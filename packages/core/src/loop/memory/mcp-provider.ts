@@ -79,20 +79,26 @@ export function createMcpMemoryProvider(
       }
     },
 
-    async retain(content: string): Promise<void> {
+    async retain(content: string): Promise<boolean> {
       const redacted = redactForRetain(content);
 
       if (redacted.length === 0) {
-        return;
+        return true;
       }
 
       try {
-        await caller.callTool(retainTool, {
+        const raw = await caller.callTool(retainTool, {
           bank_id: bankId,
           content: redacted,
         });
+
+        if (raw.startsWith("unknown MCP") || raw.startsWith("MCP tool")) {
+          return false;
+        }
+
+        return true;
       } catch {
-        // fail-soft
+        return false;
       }
     },
 

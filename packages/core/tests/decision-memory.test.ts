@@ -13,6 +13,7 @@ import {
   createHttpMemoryProvider,
   createMcpMemoryProvider,
   withDeadline,
+  loadDecisionMemoryAtStart,
   type IHttpMemoryFetch,
 } from "../src/loop/memory";
 import {
@@ -255,6 +256,16 @@ describe("createHttpMemoryProvider", () => {
     expect(retainCall?.body).not.toContain("API_KEY=secret");
   });
 
+  test("retain returns false when the backend rejects the write", async () => {
+    const provider = createHttpMemoryProvider(
+      "bank",
+      "http://localhost:8888",
+      async () => ({ ok: false, status: 503, text: async () => "nope" })
+    );
+
+    expect(await provider.retain("a decision")).toBe(false);
+  });
+
   test("retain queues the write rather than waiting for extraction", async () => {
     // Backend-side extraction is an LLM round-trip: ~3.4-4.3s against Hindsight
     // for a realistic decision, versus ~0.03s queued. Synchronous writes both
@@ -272,7 +283,9 @@ describe("createHttpMemoryProvider", () => {
       }
     );
 
-    await provider.retain("Gate settles before verification runs");
+    expect(await provider.retain("Gate settles before verification runs")).toBe(
+      true
+    );
 
     expect(JSON.parse(body ?? "{}").async).toBe(true);
   });
@@ -323,7 +336,7 @@ describe("createMcpMemoryProvider", () => {
     );
 
     expect(await provider.recall("q")).toBe("prior decision");
-    await provider.retain("new decision");
+    expect(await provider.retain("new decision")).toBe(true);
     expect(seen[0]?.name).toContain("hindsight");
     expect(seen[0]?.args.bank_id).toBe("tsforge:path:abc");
   });
@@ -349,6 +362,75 @@ describe("start-up deadline", () => {
     const quick = Promise.resolve("brief");
 
     expect(await withDeadline(quick, "fallback", 1000)).toBe("brief");
+  });
+});
+
+describe("loadDecisionMemoryAtStart", () => {
+  test("keeps the provider when recall times out (write path stays live)", async () => {
+    // Old bug: one deadline wrapped create+recall, so a slow recall discarded
+    // the provider and every later green send silently skipped retain.
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => {
+        await Bun.sleep(200);
+
+        return "late brief";
+      },
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+    const messages: string[] = [];
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      (ev) => {
+        if (ev.kind === "tool") {
+          messages.push(ev.message);
+        }
+      },
+      "session",
+      {
+        createProvider: async () => provider,
+        startTimeoutMs: 50,
+      }
+    );
+
+    expect(loaded.provider).toBe(provider);
+    expect(loaded.brief).toBeNull();
+    expect(messages.some((m) => m.includes("ready (empty)"))).toBe(true);
+  });
+
+  test("announces a loaded brief when recall returns in time", async () => {
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => "Use native selects",
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+    const messages: string[] = [];
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      (ev) => {
+        if (ev.kind === "tool") {
+          messages.push(ev.message);
+        }
+      },
+      "session",
+      {
+        createProvider: async () => provider,
+        startTimeoutMs: 1000,
+      }
+    );
+
+    expect(loaded.brief).toBe("Use native selects");
+    expect(messages.some((m) => m.includes("loaded brief"))).toBe(true);
   });
 });
 

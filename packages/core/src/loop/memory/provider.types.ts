@@ -14,7 +14,12 @@ export type {
 export interface IMemoryProvider {
   readonly bankId: string;
   recall(query: string): Promise<string | null>;
-  retain(content: string): Promise<void>;
+  /**
+   * Queue/write a decision. Returns `true` when the backend accepted the write
+   * (or there was nothing to send after redaction). `false` on transport /
+   * HTTP failure — callers should surface that; silent drops hide a dead bank.
+   */
+  retain(content: string): Promise<boolean>;
   list(): Promise<readonly string[]>;
   forget(): Promise<void>;
 }

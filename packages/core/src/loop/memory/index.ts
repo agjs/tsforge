@@ -48,4 +48,5 @@ export {
   loadDecisionMemoryAtStart,
   withDeadline,
   type IDecisionMemoryLoad,
+  type IDecisionMemoryLoadDeps,
 } from "./load-at-start";

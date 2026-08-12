@@ -3056,16 +3056,31 @@ export class Session {
     }
   }
 
-  /** Retain a curated decision into the external bank (fail-soft). */
+  /** Retain a curated decision into the external bank (fail-soft, visible). */
   async retainDecision(content: string): Promise<void> {
     if (this.decisionMemory === null) {
       return;
     }
 
+    const bankId = this.decisionMemory.bankId;
+
     try {
-      await this.decisionMemory.retain(content);
+      const ok = await this.decisionMemory.retain(content);
+
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message: ok
+          ? `decision memory: retained to bank ${bankId}`
+          : `decision memory: retain failed for bank ${bankId}`,
+      });
     } catch (err) {
       trace("session.decision-memory.retain", err);
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message: `decision memory: retain failed for bank ${bankId}`,
+      });
     }
   }
 

@@ -148,11 +148,11 @@ export function createHttpMemoryProvider(
       }
     },
 
-    async retain(content: string): Promise<void> {
+    async retain(content: string): Promise<boolean> {
       const redacted = redactForRetain(content);
 
       if (redacted.length === 0) {
-        return;
+        return true;
       }
 
       try {
@@ -183,9 +183,15 @@ export function createHttpMemoryProvider(
         // otherwise undetectable — nothing throws and nothing is stored.
         if (!res.ok) {
           trace("memory.http.retain", `status ${res.status}`);
+
+          return false;
         }
+
+        return true;
       } catch (err) {
         trace("memory.http.retain", err);
+
+        return false;
       }
     },
 

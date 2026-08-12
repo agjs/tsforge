@@ -33,11 +33,11 @@ docker run -it --pull always --name hindsight -p 8888:8888 -p 9999:9999 \
 
 Optional: set `"bankId": "tsforge:github.com/acme/crm"` to pin the bank. Otherwise tsforge derives it (see below).
 
-3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When the gate goes green — or a greenfield feature verifies — tsforge **retains** it.
+3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When the gate goes green — or a greenfield feature verifies — tsforge **retains** it. You should see a tool line `decision memory: retained to bank …` (or `retain failed …` if the backend rejected the write).
 
-4. Session B (new terminal, same repo): `tsforge` again. On start you should see a tool line like `decision memory: loaded brief for bank …`, and the agent should follow Monday’s choices without you restating them.
+4. Session B (new terminal, same repo): `tsforge` again. On start you should see either `decision memory: loaded brief for bank …` or `decision memory: bank … ready (empty)`. An empty bank is still wired for retains — the write path is not dropped just because recall had nothing.
 
-5. Stop the backend and run again — the session still starts; there is simply no brief. The same holds for a backend that *hangs* rather than refusing: every memory call carries a 3s deadline and the whole start-up load is capped at 5s, so a sick backend cannot block the CLI.
+5. Stop the backend and run again — the session still starts; there is simply no brief. The same holds for a backend that *hangs* rather than refusing: every memory call carries a 3s deadline and start-up is capped, so a sick backend cannot block the CLI. A slow recall times out the brief only; the provider stays attached so later green sends can still retain.
 
 ### What gets sent
 
