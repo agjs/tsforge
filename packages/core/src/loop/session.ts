@@ -1045,8 +1045,8 @@ export class Session {
   private readonly offerCheckActive: boolean;
   /** Optional pluggable decision-memory provider (HTTP/MCP). Null when unset. */
   private decisionMemory: IMemoryProvider | null = null;
-  /** `providers.memory.retainPrompts` — opt-in, see retainDecisionAfterGreen. */
-  private retainPrompts = false;
+  /** `providers.memory.retainPrompts` — on unless opted out; see retainDecisionAfterGreen. */
+  private retainPrompts = true;
   /** Last user send text — used to curate a retain summary when the gate goes green. */
   private lastUserPrompt = "";
 
@@ -1348,7 +1348,7 @@ export class Session {
 
     session.decisionMemory = decisionMemory;
     session.retainPrompts =
-      projectConfig.providers?.memory?.retainPrompts === true;
+      projectConfig.providers?.memory?.retainPrompts !== false;
 
     // Build the TTSR manager (built-in + project + memory-learned rules) so the
     // interactive loop gets the SAME mid-stream guidance the headless loop does —
@@ -3014,13 +3014,14 @@ export class Session {
   }
 
   /**
-   * After a green send, retain the user's request (best-effort) — but ONLY when
-   * `providers.memory.retainPrompts` is explicitly enabled.
+   * After a green send, retain the user's request (best-effort). On unless
+   * `providers.memory.retainPrompts` is set to `false`.
    *
-   * This is the raw prompt, not a curated decision: it commonly carries pasted
-   * logs, snippets and customer data, and redaction only catches secret-SHAPED
-   * text. Verified-feature retains (greenfield) are curated by tsforge and stay
-   * on regardless — this opt-in covers only the raw-prompt channel.
+   * This is the raw prompt rather than a curated decision, so it can carry
+   * pasted logs, snippets and customer data — redaction only strips
+   * secret-SHAPED text. That is the deliberate trade: without this channel the
+   * bank only ever fills from greenfield runs, and ordinary sessions teach it
+   * nothing.
    */
   private async retainDecisionAfterGreen(): Promise<void> {
     if (!this.retainPrompts) {

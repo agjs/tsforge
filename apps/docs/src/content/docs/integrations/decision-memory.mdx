@@ -33,17 +33,22 @@ docker run -it --pull always --name hindsight -p 8888:8888 -p 9999:9999 \
 
 Optional: set `"bankId": "tsforge:github.com/acme/crm"` to pin the bank. Otherwise tsforge derives it (see below).
 
-3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When a greenfield feature verifies, tsforge **retains** a short curated summary.
+3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When the gate goes green — or a greenfield feature verifies — tsforge **retains** it.
 
 4. Session B (new terminal, same repo): `tsforge` again. On start you should see a tool line like `decision memory: loaded brief for bank …`, and the agent should follow Monday’s choices without you restating them.
 
 5. Stop the backend and run again — the session still starts; there is simply no brief. The same holds for a backend that *hangs* rather than refusing: every memory call carries a 3s deadline and the whole start-up load is capped at 5s, so a sick backend cannot block the CLI.
 
-### What gets sent, and what does not
+### What gets sent
 
-Sent by default: **curated summaries** that tsforge builds, such as `Feature verified: <id> — <description>`.
+Two channels, both on by default:
 
-**Not** sent by default: your own prompt text. Turn it on explicitly if you want it:
+- **Curated summaries** that tsforge builds when a greenfield feature verifies — `Feature verified: <id> — <description>`.
+- **Your request text**, first 500 characters, each time a send reaches green. This is what makes the bank fill from ordinary interactive work; without it only greenfield runs teach it anything and the brief stays empty.
+
+Before anything is sent, a redaction pass drops lines that look like secrets (`API_KEY=…`, `password: …`, `authorization: …`) and rewrites every `sk-…` token. That catches secret-*shaped* text only — a pasted log, a customer name or a snippet in your prompt goes as typed.
+
+To keep prompts local and rely on the curated channel alone:
 
 ```json
 {
@@ -51,13 +56,13 @@ Sent by default: **curated summaries** that tsforge builds, such as `Feature ver
     "memory": {
       "kind": "http",
       "baseUrl": "http://localhost:8888",
-      "retainPrompts": true
+      "retainPrompts": false
     }
   }
 }
 ```
 
-With `retainPrompts` on, the first 500 characters of each request that reaches green are stored. Prompts routinely contain pasted logs, snippets and customer data, and the redaction pass only removes secret-*shaped* text (`API_KEY=…`, `password: …`, `sk-…`) — everything else goes as typed. It also fills the bank with prompts rather than decisions, which makes recall less precise as it grows. Reasonable on a private bank; think twice on a shared one.
+Worth doing when the bank is shared with other people or hosted by someone else. On a bank you run yourself, leaving it on is the point of the feature.
 
 ### Treat the bank as untrusted input
 

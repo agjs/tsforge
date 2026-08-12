@@ -19,7 +19,13 @@ function optionalString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** `retainPrompts` — only an explicit `true` opts in; anything else stays off. */
+/**
+ * `retainPrompts` — ON unless explicitly `false`.
+ *
+ * Only the opt-out is carried on the parsed config; `undefined` means default
+ * (on), so a malformed value falls back to the default rather than silently
+ * disabling retention.
+ */
 function retainPromptsFlag(raw: Record<string, unknown>): boolean | undefined {
   const value = raw.retainPrompts;
 
@@ -29,13 +35,13 @@ function retainPromptsFlag(raw: Record<string, unknown>): boolean | undefined {
 
   if (typeof value !== "boolean") {
     warnProviders(
-      `tsforge.config.json: providers.memory.retainPrompts must be a boolean — got ${JSON.stringify(value)} (treated as false)`
+      `tsforge.config.json: providers.memory.retainPrompts must be a boolean — got ${JSON.stringify(value)} (using the default: enabled)`
     );
 
     return undefined;
   }
 
-  return value ? true : undefined;
+  return value ? undefined : false;
 }
 
 function parseHttpMemory(

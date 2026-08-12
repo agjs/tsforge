@@ -9,13 +9,14 @@ export type MemoryProviderKind = "http" | "mcp";
 /**
  * Send the user's own prompt text to the bank when a send goes green.
  *
- * OFF by default, deliberately. Verified-feature retains are curated strings
- * that tsforge builds; this one is the raw request the user typed, which
- * routinely carries pasted logs, snippets and customer data. Redaction only
- * catches secret-SHAPED text, so everything else in a prompt would leave the
- * machine. It also fills the bank with prompts rather than decisions, which
- * makes recall worse as it grows. Opt in when the bank is private and that
- * trade is wanted.
+ * ON by default: without it a bank only ever fills from greenfield
+ * feature-verified runs, so ordinary interactive sessions teach it nothing and
+ * the recalled brief stays empty — which reads as "memory is broken".
+ *
+ * Set `false` to opt out. Worth doing when the bank is shared or hosted by
+ * someone else: this stores the raw request as typed (first 500 chars), and
+ * redaction only strips secret-SHAPED text (`API_KEY=`, `password:`, `sk-…`),
+ * so pasted logs, snippets and customer data go as-is.
  */
 interface IMemoryRetentionOptions {
   readonly retainPrompts?: boolean;

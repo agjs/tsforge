@@ -353,16 +353,19 @@ describe("decisionBriefBlock", () => {
 });
 
 describe("retainPrompts config", () => {
-  test("defaults to absent — raw prompts are not sent", () => {
+  // The parsed config carries ONLY the opt-out; `undefined` means the default
+  // (enabled), which is what the session reads as `!== false`.
+  test("absent flag leaves retention at the default (enabled)", () => {
     const cfg = parseMemoryProviderConfig({
       kind: "http",
       baseUrl: "http://localhost:8888",
     });
 
     expect(cfg?.retainPrompts).toBeUndefined();
+    expect(cfg?.retainPrompts !== false).toBe(true);
   });
 
-  test("only an explicit boolean true opts in", () => {
+  test("only an explicit boolean false opts out", () => {
     const on = parseMemoryProviderConfig({
       kind: "http",
       baseUrl: "http://localhost:8888",
@@ -379,18 +382,19 @@ describe("retainPrompts config", () => {
       retainPrompts: "yes",
     });
 
-    expect(on?.retainPrompts).toBe(true);
-    expect(off?.retainPrompts).toBeUndefined();
+    expect(on?.retainPrompts).toBeUndefined();
+    expect(off?.retainPrompts).toBe(false);
+    // Malformed falls back to the default rather than silently disabling.
     expect(junk?.retainPrompts).toBeUndefined();
   });
 
-  test("mcp config carries the flag too", () => {
+  test("mcp config carries the opt-out too", () => {
     const cfg = parseMemoryProviderConfig({
       kind: "mcp",
       server: "hindsight",
-      retainPrompts: true,
+      retainPrompts: false,
     });
 
-    expect(cfg?.retainPrompts).toBe(true);
+    expect(cfg?.retainPrompts).toBe(false);
   });
 });
