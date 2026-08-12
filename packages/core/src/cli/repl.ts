@@ -2103,6 +2103,16 @@ export async function repl(args: ICliArgs): Promise<number> {
   let resizing = false;
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // While a turn is busy, keep status chrome ticking even if streams are silent
+  // (gate eslint JSON filtered, quiet model waits, etc.).
+  paneScreen.onBusyTick = (): void => {
+    if (resizing) {
+      return;
+    }
+
+    syncPaneChrome();
+  };
+
   // Pane footer + agent tree on every spinner tick — not during a resize storm.
   spinner.onTick(() => {
     if (resizing) {
@@ -2756,13 +2766,10 @@ export async function repl(args: ICliArgs): Promise<number> {
           return;
         }
 
-        // Pane chrome keys (Ctrl+G / Esc / panel nav) never reach the editor.
-        const paneKeys =
-          cleaned === "\x07" ||
-          cleaned === "\x1b" ||
-          paneScreen.focusState.panelFocused;
-
-        if (paneKeys && paneScreen.handleKey(cleaned) === "handled") {
+        // Pane chrome keys always win — scroll / Ctrl+G / Esc / Tab must work
+        // even while a turn is busy. Only "handled" is swallowed; passthrough
+        // (e.g. prompt-focused ↑↓) still reaches the editor.
+        if (paneScreen.handleKey(cleaned) === "handled") {
           return;
         }
 

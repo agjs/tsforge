@@ -21,6 +21,8 @@ export function handleFocusKey(
 ): PaneKeyResult | null {
   if (seq === "\x07") {
     if (deps.focus.togglePanel(deps.panelLen > 0) === "changed") {
+      // Layout width changes — invalidate the differential frame, not a body patch.
+      deps.invalidate();
       deps.paint();
     }
 
@@ -38,6 +40,12 @@ export function handleFocusKey(
   }
 
   if (seq === "\t") {
+    // Don't steal Tab from the prompt editor (indent / completion). Only handle
+    // Tab when the panel already owns focus (return to prompt).
+    if (!deps.focus.panelFocused) {
+      return "passthrough";
+    }
+
     if (deps.focus.tab(deps.panelLen > 0) === "changed") {
       deps.paint();
 

@@ -262,5 +262,7 @@ describe("formatHints", () => {
     expect(formatHints("panel", false)).toContain("Esc prompt");
     expect(formatHints("scrollback", false)).toContain("scroll");
     expect(formatHints("prompt", true)).toContain("abort");
+    expect(formatHints("prompt", true)).toContain("Ctrl+G");
+    expect(formatHints("prompt", true)).toContain("scroll");
   });
 });

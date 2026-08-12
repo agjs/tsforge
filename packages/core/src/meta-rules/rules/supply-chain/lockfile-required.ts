@@ -19,6 +19,11 @@ export const lockfileRequiredRule: IMetaRule = {
     "Projects must commit exactly one lockfile matching the detected package manager.",
   severity: "warn",
   run({ root, packageJson }) {
+    // Not a JS package (e.g. multi-repo workspace root) — lockfile N/A.
+    if (packageJson === null) {
+      return [];
+    }
+
     const violations: IMetaRuleViolation[] = [];
     const manager = resolvePackageManager(root, packageJson);
     const present = detectPresentLockfiles(root);

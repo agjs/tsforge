@@ -7,6 +7,7 @@ import {
   buildGate,
   makeFileLinter,
   discoverTestCommand,
+  isWatchTestScript,
   buildCoreFix,
   formatFile,
 } from "../src/gate";
@@ -139,6 +140,85 @@ test("discoverTestCommand: real test script → bun run test", async () => {
     );
 
     expect(await discoverTestCommand(dir)).toBe("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("isWatchTestScript: bare vitest / --watch hang; vitest run does not", () => {
+  expect(isWatchTestScript("vitest")).toBe(true);
+  expect(isWatchTestScript("vitest --coverage")).toBe(true);
+  expect(isWatchTestScript("vitest --watch")).toBe(true);
+  expect(isWatchTestScript("jest --watch")).toBe(true);
+  expect(isWatchTestScript("vitest run")).toBe(false);
+  expect(isWatchTestScript("vitest run --coverage")).toBe(false);
+  expect(isWatchTestScript("jest")).toBe(false);
+});
+
+test("discoverTestCommand: prefers test:ci over watch vitest", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest", "test:ci": "vitest run" },
+      })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test:ci");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: watch vitest → bun run test -- run", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest" } })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test -- run");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: workspace container → null (no whole-tree tests)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "app"));
+    await writeFile(
+      join(dir, "app", "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } })
+    );
+    await writeFile(join(dir, "app", "a.test.ts"), "export const x = 1;\n");
+
+    expect(await discoverTestCommand(dir)).toBe(null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildGate: workspace container → no-op true (package-follow owns gates)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "pkg-a"));
+    await writeFile(
+      join(dir, "pkg-a", "package.json"),
+      JSON.stringify({ name: "pkg-a" })
+    );
+
+    const gate = await buildGate(dir);
+
+    expect(gate.command).toBe("true");
+    expect(gate.label).toContain("workspace container");
+    expect(gate.command).not.toContain("eslint");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -114,6 +114,11 @@ export class PaneScreen {
   private everEntered = false;
   private rows: number;
   private cols: number;
+  /** Turn in flight — chrome stays interactive; timer keeps status paint alive. */
+  private busy = false;
+  private busyTimer: ReturnType<typeof setInterval> | null = null;
+  /** Optional tick while busy (REPL wires syncPaneChrome). */
+  onBusyTick: (() => void) | null = null;
 
   constructor(
     private readonly out: IPaneScreenTerminal,
@@ -130,6 +135,10 @@ export class PaneScreen {
 
   get focusState(): PaneFocus {
     return this.focus;
+  }
+
+  get isBusy(): boolean {
+    return this.busy;
   }
 
   enter(): boolean {
@@ -167,6 +176,7 @@ export class PaneScreen {
       return;
     }
 
+    this.stopBusyTimer();
     this.out.write(
       DISABLE_MOUSE +
         CURSOR_COLOR_DEFAULT +
@@ -346,7 +356,9 @@ export class PaneScreen {
     return {
       rows: insets.contentRows,
       cols: insets.contentCols,
-      showPanel: true,
+      // Visible unless the user hid it (Ctrl+G). Empty landing still shows the
+      // Tasks chrome; focus.panel may be "hidden" when there are no items.
+      showPanel: !this.focus.userCollapsed,
       inputInnerRows: this.draftInnerRows(),
     };
   }
@@ -375,11 +387,39 @@ export class PaneScreen {
     }
   }
 
-  setBusy(_busy: boolean): void {
-    // Reserved for turn-busy chrome; still repaint so callers can rely on a flush.
+  setBusy(busy: boolean): void {
+    this.busy = busy;
+
+    if (busy) {
+      this.startBusyTimer();
+    } else {
+      this.stopBusyTimer();
+    }
+
     if (this.entered) {
       this.paint();
     }
+  }
+
+  private startBusyTimer(): void {
+    if (this.busyTimer !== null) {
+      return;
+    }
+
+    // Keep chrome alive while a turn awaits (gate, model, tools) — even when
+    // child streams are silent. REPL's onBusyTick refreshes status activity.
+    this.busyTimer = setInterval(() => {
+      this.onBusyTick?.();
+    }, 250);
+  }
+
+  private stopBusyTimer(): void {
+    if (this.busyTimer === null) {
+      return;
+    }
+
+    clearInterval(this.busyTimer);
+    this.busyTimer = null;
   }
 
   /** Identity chips for the pinned topbar (cwd + short session id). */
@@ -720,10 +760,17 @@ export class PaneScreen {
         this.queueWheel(delta, col);
       },
       paint: () => {
-        this.paintAfterScroll();
+        // Ctrl+G changes main width — always full compose after invalidate.
+        if (this.prevLines === null || this.geometryDirty) {
+          this.paint();
+        } else {
+          this.paintAfterScroll();
+        }
       },
       invalidate: () => {
         this.prevLines = null;
+        this.geometryDirty = true;
+        this.lastWrapCols = 0;
       },
     };
 

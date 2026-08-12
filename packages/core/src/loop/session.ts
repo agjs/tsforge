@@ -6,7 +6,11 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
-import { makeFileLinter } from "../gate";
+import {
+  makeFileLinter,
+  isWorkspaceContainer,
+  runWorkspaceContainerGate,
+} from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
 import type { IStackProfile } from "../stack-detection";
 import {
@@ -931,6 +935,22 @@ function makeAutoGateRunner(
       const { assertExternalPacksFrozen } = await import("../rule-packs");
 
       await assertExternalPacksFrozen();
+
+      // Multi-repo workspace root: gate only packages the model touched.
+      if (isWorkspaceContainer(cwd)) {
+        const { result, acceptSummary } = await runWorkspaceContainerGate(
+          cwd,
+          ctx.task,
+          ctx.tool.touched ?? [],
+          parse,
+          opts ?? {}
+        );
+
+        ctx.task.accept = acceptSummary;
+        rebuildTaskContract(ctx, offerCheck);
+
+        return result;
+      }
 
       if (state.active) {
         const r = await resolve();

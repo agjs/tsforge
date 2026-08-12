@@ -13,6 +13,7 @@ import {
 import { packEnvPrefix } from "./shell";
 import { tscPart, PROJECT_TSCONFIG } from "./tsconfig";
 import { discoverTestCommand } from "./test-discovery";
+import { isWorkspaceContainer } from "./workspace-root";
 import type { IConventions } from "../infer-rules/conventions.types";
 
 /** tsforge's per-project cache namespace (git-ignored, next to the tsc
@@ -47,6 +48,16 @@ export async function buildGate(
     conventions?: IConventions;
   }
 ): Promise<IGateSpec> {
+  // Multi-repo workspace root: never eslint/test the whole bag from here.
+  // Package-follow runs per touched child via the auto-gate runner.
+  if (isWorkspaceContainer(cwd)) {
+    return {
+      command: "true",
+      parts: ["true"],
+      label: "workspace container (no root package.json)",
+    };
+  }
+
   const parts: string[] = [];
   const labels: string[] = [];
 

@@ -27,18 +27,35 @@ function deps(overrides: { panelLen?: number; paints?: number[] } = {}) {
 }
 
 describe("handleFocusKey", () => {
-  test("Ctrl+G toggles panel focus", () => {
+  test("Ctrl+G hides panel then shows it again", () => {
     const d = deps();
 
+    expect(d.focus.panel).toBe("visibleUnfocused");
     expect(handleFocusKey("\x07", d)).toBe("handled");
-    expect(d.focus.panelFocused).toBe(true);
+    expect(d.focus.panel).toBe("hidden");
+    expect(d.focus.userCollapsed).toBe(true);
     expect(d.paints.length).toBe(1);
+
+    expect(handleFocusKey("\x07", d)).toBe("handled");
+    expect(d.focus.panel).toBe("visibleFocused");
+    expect(d.focus.panelFocused).toBe(true);
+    expect(d.focus.userCollapsed).toBe(false);
+  });
+
+  test("Tab from prompt stays with the editor; Tab from panel returns to prompt", () => {
+    const d = deps();
+
+    expect(handleFocusKey("\t", d)).toBe("passthrough");
+    d.focus.tab(true);
+    expect(d.focus.panelFocused).toBe(true);
+    expect(handleFocusKey("\t", d)).toBe("handled");
+    expect(d.focus.promptFocused).toBe(true);
   });
 
   test("Esc from panel returns handled", () => {
     const d = deps();
 
-    handleFocusKey("\x07", d);
+    d.focus.tab(true);
     expect(handleFocusKey("\x1b", d)).toBe("handled");
     expect(d.focus.promptFocused).toBe(true);
   });
@@ -60,6 +77,14 @@ describe("handleScrollKey", () => {
     d.scrollback.append("a\nb\nc\nd\ne\n");
     d.focus.focusScrollback();
     expect(handleScrollKey("\x1b[A", d)).toBe("handled");
+    expect(d.paints.length).toBe(1);
+  });
+  test("PageUp scrolls while prompt-focused (chrome never blocked)", () => {
+    const d = deps();
+
+    d.scrollback.append("a\nb\nc\nd\ne\nf\ng\n");
+    expect(d.focus.promptFocused).toBe(true);
+    expect(handleScrollKey("\x1b[5~", d)).toBe("handled");
     expect(d.paints.length).toBe(1);
   });
 });

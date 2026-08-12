@@ -6,4 +6,11 @@ export {
   formatFiles,
   prettierWriteCommand,
 } from "./linter";
-export { discoverTestCommand } from "./test-discovery";
+export { discoverTestCommand, isWatchTestScript } from "./test-discovery";
+export {
+  isWorkspaceContainer,
+  listChildPackageRoots,
+  activePackageRoots,
+  packageLabel,
+} from "./workspace-root";
+export { runWorkspaceContainerGate } from "./workspace-gate";

@@ -1,9 +1,8 @@
 /**
- * Panel visibility/focus state machine (Grok OverlayState, no fullscreen).
+ * Panel visibility/focus state machine.
  *
- *   hidden ──toggle──► visibleFocused ──toggle──► visibleUnfocused
- *                         ▲ Esc/Tab                    │ toggle
- *                         └──────── prompt ◄───────────┘
+ * Ctrl+G toggles hide ↔ show. Tab/Esc move focus when the rail is visible.
+ * userCollapsed keeps a user hide sticky across soft panel refreshes.
  */
 
 export type PanelVis = "hidden" | "visibleUnfocused" | "visibleFocused";
@@ -16,6 +15,8 @@ export class PaneFocus {
   active: ActiveSurface = "prompt";
   /** Selected row index within the worklist body (0 = first item; title is sticky). */
   selection = 0;
+  /** User hid the rail via Ctrl+G — syncHasItems must not force it back open. */
+  userCollapsed = false;
 
   get promptFocused(): boolean {
     return this.active === "prompt";
@@ -27,16 +28,21 @@ export class PaneFocus {
 
   /** Sync visibility when worklist content appears/disappears. */
   syncHasItems(hasItems: boolean): void {
-    if (hasItems && this.panel === "hidden") {
+    if (hasItems && this.panel === "hidden" && !this.userCollapsed) {
       this.panel = "visibleUnfocused";
     }
 
-    if (!hasItems && this.panel !== "hidden") {
-      this.panel = "hidden";
+    if (!hasItems) {
+      if (this.panel !== "hidden") {
+        this.panel = "hidden";
 
-      if (this.active === "panel") {
-        this.active = "prompt";
+        if (this.active === "panel") {
+          this.active = "prompt";
+        }
       }
+
+      // Empty worklist: clear collapse so the landing rail can show again.
+      this.userCollapsed = false;
     }
   }
 
@@ -65,41 +71,28 @@ export class PaneFocus {
   }
 
   /**
-   * Ctrl+G: with items, cycle unfocused ↔ focused; without items, toggle hidden.
-   * Focusing the panel also sets active = panel.
+   * Ctrl+G: hide ↔ show the Tasks rail. Showing with items focuses the panel
+   * (Esc returns to the prompt). Hiding sets userCollapsed so soft checklist
+   * refreshes cannot force the rail back open.
    */
   togglePanel(hasItems: boolean): FocusAction {
-    if (!hasItems) {
-      if (this.panel === "hidden") {
-        this.panel = "visibleUnfocused";
-        this.active = "prompt";
-
-        return "changed";
-      }
-
+    if (!this.userCollapsed) {
+      this.userCollapsed = true;
       this.panel = "hidden";
       this.active = "prompt";
 
       return "changed";
     }
 
-    if (this.panel === "hidden") {
+    this.userCollapsed = false;
+
+    if (hasItems) {
       this.panel = "visibleFocused";
       this.active = "panel";
-
-      return "changed";
+    } else {
+      this.panel = "visibleUnfocused";
+      this.active = "prompt";
     }
-
-    if (this.panel === "visibleUnfocused") {
-      this.panel = "visibleFocused";
-      this.active = "panel";
-
-      return "changed";
-    }
-
-    // visibleFocused → unfocused, return to prompt
-    this.panel = "visibleUnfocused";
-    this.active = "prompt";
 
     return "changed";
   }
@@ -124,11 +117,15 @@ export class PaneFocus {
 
   /** Tab: panel → prompt; prompt + visible panel → panel. */
   tab(hasItems: boolean): FocusAction {
+    if (this.userCollapsed || this.panel === "hidden") {
+      return "ignored";
+    }
+
     if (this.active === "panel") {
       return this.focusPrompt();
     }
 
-    if (this.active === "prompt" && hasItems && this.panel !== "hidden") {
+    if (this.active === "prompt" && hasItems) {
       this.panel = "visibleFocused";
       this.active = "panel";
 
