@@ -6,7 +6,9 @@
 const SECRET_LINE =
   /(?:api[_-]?key|secret|password|token|authorization|bearer)\s*[:=]\s*\S+/iu;
 const ENV_ASSIGNMENT = /^[A-Z][A-Z0-9_]*\s*=\s*\S+/u;
-const SK_PREFIX = /\bsk-[a-zA-Z0-9]{16,}\b/u;
+// `g` is load-bearing: without it String.replace rewrites only the FIRST match,
+// so a line carrying two keys leaked the second one verbatim.
+const SK_PREFIX = /\bsk-[a-zA-Z0-9]{16,}\b/gu;
 
 /** Return content with secret-shaped lines/tokens removed. */
 export function redactForRetain(content: string): string {

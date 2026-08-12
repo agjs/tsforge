@@ -6,8 +6,23 @@
 /** Supported provider kinds in tsforge.config.json `providers.memory`. */
 export type MemoryProviderKind = "http" | "mcp";
 
+/**
+ * Send the user's own prompt text to the bank when a send goes green.
+ *
+ * OFF by default, deliberately. Verified-feature retains are curated strings
+ * that tsforge builds; this one is the raw request the user typed, which
+ * routinely carries pasted logs, snippets and customer data. Redaction only
+ * catches secret-SHAPED text, so everything else in a prompt would leave the
+ * machine. It also fills the bank with prompts rather than decisions, which
+ * makes recall worse as it grows. Opt in when the bank is private and that
+ * trade is wanted.
+ */
+interface IMemoryRetentionOptions {
+  readonly retainPrompts?: boolean;
+}
+
 /** HTTP backend config (Hindsight-compatible retain/recall API shape). */
-export interface IHttpMemoryProviderConfig {
+export interface IHttpMemoryProviderConfig extends IMemoryRetentionOptions {
   readonly kind: "http";
   readonly baseUrl: string;
   /** Override bank id; otherwise resolved from git remote or project path. */
@@ -15,7 +30,7 @@ export interface IHttpMemoryProviderConfig {
 }
 
 /** MCP backend: map retain/recall/forget onto tools on a named mcpServers entry. */
-export interface IMcpMemoryProviderConfig {
+export interface IMcpMemoryProviderConfig extends IMemoryRetentionOptions {
   readonly kind: "mcp";
   readonly server: string;
   readonly retainTool?: string;

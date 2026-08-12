@@ -19,6 +19,25 @@ function optionalString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** `retainPrompts` — only an explicit `true` opts in; anything else stays off. */
+function retainPromptsFlag(raw: Record<string, unknown>): boolean | undefined {
+  const value = raw.retainPrompts;
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    warnProviders(
+      `tsforge.config.json: providers.memory.retainPrompts must be a boolean — got ${JSON.stringify(value)} (treated as false)`
+    );
+
+    return undefined;
+  }
+
+  return value ? true : undefined;
+}
+
 function parseHttpMemory(
   raw: Record<string, unknown>
 ): IHttpMemoryProviderConfig | null {
@@ -33,10 +52,14 @@ function parseHttpMemory(
   }
 
   const bankId = optionalString(raw.bankId);
+  const retainPrompts = retainPromptsFlag(raw);
 
-  return bankId === undefined
-    ? { kind: "http", baseUrl }
-    : { kind: "http", baseUrl, bankId };
+  return {
+    kind: "http",
+    baseUrl,
+    ...(bankId === undefined ? {} : { bankId }),
+    ...(retainPrompts === undefined ? {} : { retainPrompts }),
+  };
 }
 
 function parseMcpMemory(
@@ -57,10 +80,12 @@ function parseMcpMemory(
   const recallTool = optionalString(raw.recallTool);
   const forgetTool = optionalString(raw.forgetTool);
   const listTool = optionalString(raw.listTool);
+  const retainPrompts = retainPromptsFlag(raw);
 
   return {
     kind: "mcp",
     server,
+    ...(retainPrompts === undefined ? {} : { retainPrompts }),
     ...(bankId === undefined ? {} : { bankId }),
     ...(retainTool === undefined ? {} : { retainTool }),
     ...(recallTool === undefined ? {} : { recallTool }),

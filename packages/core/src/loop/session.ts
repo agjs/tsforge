@@ -1045,6 +1045,8 @@ export class Session {
   private readonly offerCheckActive: boolean;
   /** Optional pluggable decision-memory provider (HTTP/MCP). Null when unset. */
   private decisionMemory: IMemoryProvider | null = null;
+  /** `providers.memory.retainPrompts` — opt-in, see retainDecisionAfterGreen. */
+  private retainPrompts = false;
   /** Last user send text — used to curate a retain summary when the gate goes green. */
   private lastUserPrompt = "";
 
@@ -1345,6 +1347,8 @@ export class Session {
     const session = new Session(cfg, ctx, autoGateState);
 
     session.decisionMemory = decisionMemory;
+    session.retainPrompts =
+      projectConfig.providers?.memory?.retainPrompts === true;
 
     // Build the TTSR manager (built-in + project + memory-learned rules) so the
     // interactive loop gets the SAME mid-stream guidance the headless loop does —
@@ -3009,8 +3013,20 @@ export class Session {
     }
   }
 
-  /** After a green send, retain a short summary of the user request (best-effort). */
+  /**
+   * After a green send, retain the user's request (best-effort) — but ONLY when
+   * `providers.memory.retainPrompts` is explicitly enabled.
+   *
+   * This is the raw prompt, not a curated decision: it commonly carries pasted
+   * logs, snippets and customer data, and redaction only catches secret-SHAPED
+   * text. Verified-feature retains (greenfield) are curated by tsforge and stay
+   * on regardless — this opt-in covers only the raw-prompt channel.
+   */
   private async retainDecisionAfterGreen(): Promise<void> {
+    if (!this.retainPrompts) {
+      return;
+    }
+
     const summary = this.lastUserPrompt.trim().slice(0, 500);
 
     if (summary.length === 0) {

@@ -33,11 +33,35 @@ docker run -it --pull always --name hindsight -p 8888:8888 -p 9999:9999 \
 
 Optional: set `"bankId": "tsforge:github.com/acme/crm"` to pin the bank. Otherwise tsforge derives it (see below).
 
-3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When the gate goes green (or a greenfield feature verifies), tsforge **retains** a short curated summary.
+3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When a greenfield feature verifies, tsforge **retains** a short curated summary.
 
 4. Session B (new terminal, same repo): `tsforge` again. On start you should see a tool line like `decision memory: loaded brief for bank …`, and the agent should follow Monday’s choices without you restating them.
 
-5. Stop the backend and run again — the session still starts; there is simply no brief.
+5. Stop the backend and run again — the session still starts; there is simply no brief. The same holds for a backend that *hangs* rather than refusing: every memory call carries a 3s deadline and the whole start-up load is capped at 5s, so a sick backend cannot block the CLI.
+
+### What gets sent, and what does not
+
+Sent by default: **curated summaries** that tsforge builds, such as `Feature verified: <id> — <description>`.
+
+**Not** sent by default: your own prompt text. Turn it on explicitly if you want it:
+
+```json
+{
+  "providers": {
+    "memory": {
+      "kind": "http",
+      "baseUrl": "http://localhost:8888",
+      "retainPrompts": true
+    }
+  }
+}
+```
+
+With `retainPrompts` on, the first 500 characters of each request that reaches green are stored. Prompts routinely contain pasted logs, snippets and customer data, and the redaction pass only removes secret-*shaped* text (`API_KEY=…`, `password: …`, `sk-…`) — everything else goes as typed. It also fills the bank with prompts rather than decisions, which makes recall less precise as it grows. Reasonable on a private bank; think twice on a shared one.
+
+### Treat the bank as untrusted input
+
+Whatever recall returns is injected into the agent's context inside a `<project-decisions>` block that marks it as reference data, never instructions. Bank contents are model-extracted and unreviewed, so anyone able to write to the bank — a teammate, another project sharing a bank id, a poisoned memory — would otherwise be writing straight into the highest-trust part of the prompt.
 
 ## MCP variant
 

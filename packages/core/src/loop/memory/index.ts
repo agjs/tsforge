@@ -46,5 +46,6 @@ export {
 export { retainFeatureDecision } from "./retain-feature";
 export {
   loadDecisionMemoryAtStart,
+  withDeadline,
   type IDecisionMemoryLoad,
 } from "./load-at-start";

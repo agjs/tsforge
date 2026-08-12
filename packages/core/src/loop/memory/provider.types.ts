@@ -28,3 +28,20 @@ export const DECISION_CONTEXT = "tsforge-decision";
 
 /** Soft cap for injected decision brief (characters ≈ tokens×4). ~600 tokens. */
 export const DECISION_BRIEF_MAX_CHARS = 2400;
+
+/**
+ * Per-request deadline for any memory backend call.
+ *
+ * `recall` runs BEFORE the session is constructed, so an unbounded request
+ * hangs the CLI at start-up with no output. A backend that refuses the
+ * connection fails instantly; one that accepts it and never answers (loaded
+ * host, proxy holding the socket, paused VM) is what this covers.
+ */
+export const MEMORY_REQUEST_TIMEOUT_MS = 3000;
+
+/**
+ * Ceiling for the whole start-up load (provider construction + recall). Belt
+ * and braces over the per-request deadline: it also bounds the MCP path and any
+ * transport that ignores an abort signal.
+ */
+export const MEMORY_START_TIMEOUT_MS = 5000;
