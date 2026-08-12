@@ -255,6 +255,28 @@ describe("createHttpMemoryProvider", () => {
     expect(retainCall?.body).not.toContain("API_KEY=secret");
   });
 
+  test("retain queues the write rather than waiting for extraction", async () => {
+    // Backend-side extraction is an LLM round-trip: ~3.4-4.3s against Hindsight
+    // for a realistic decision, versus ~0.03s queued. Synchronous writes both
+    // blocked every green send and blew the request deadline, which silently
+    // dropped the memory.
+    let body: string | undefined;
+
+    const provider = createHttpMemoryProvider(
+      "tsforge:github.com/acme/crm",
+      "http://localhost:8888",
+      async (_url, init) => {
+        body = init.body;
+
+        return { ok: true, status: 202, text: async () => "{}" };
+      }
+    );
+
+    await provider.retain("Gate settles before verification runs");
+
+    expect(JSON.parse(body ?? "{}").async).toBe(true);
+  });
+
   test("recall returns null when backend fails", async () => {
     const provider = createHttpMemoryProvider(
       "bank",
