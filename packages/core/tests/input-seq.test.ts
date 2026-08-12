@@ -19,3 +19,17 @@ test("takeOneInputSequence: peels CSI arrow sequences", () => {
   expect(up.seq).toBe("\x1b[A");
   expect(up.rest).toBe("rest");
 });
+
+test("takeOneInputSequence: keeps Alt+Enter as one sequence", () => {
+  const altEnter = takeOneInputSequence("\x1b\rsecond");
+
+  expect(altEnter.seq).toBe("\x1b\r");
+  expect(altEnter.rest).toBe("second");
+});
+
+test("takeOneInputSequence: bare Esc stays alone", () => {
+  const bare = takeOneInputSequence("\x1b");
+
+  expect(bare.seq).toBe("\x1b");
+  expect(bare.rest).toBe("");
+});
