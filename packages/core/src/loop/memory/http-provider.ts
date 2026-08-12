@@ -160,7 +160,20 @@ export function createHttpMemoryProvider(
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            async: false,
+            // `async: true` — queue the write and return, do NOT wait for the
+            // backend to extract facts from it.
+            //
+            // Extraction is an LLM round-trip on the backend's side. Measured
+            // against Hindsight with a realistic ~550-char decision:
+            //   async: false -> 3.4-4.3s      async: true -> 0.03-0.05s
+            //
+            // Two things broke with the synchronous form. It is awaited inside
+            // drive(), so every green send paid the full extraction latency
+            // before returning to the user. And it exceeds this provider's
+            // request deadline, so real retains were aborted mid-flight and
+            // silently lost — the failure looked exactly like a working setup
+            // that simply never remembered anything.
+            async: true,
             items: [{ content: redacted, context: DECISION_CONTEXT }],
           }),
           signal: withTimeout(),
