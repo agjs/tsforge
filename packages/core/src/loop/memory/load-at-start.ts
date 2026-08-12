@@ -25,41 +25,49 @@ export interface IDecisionMemoryLoadDeps {
 }
 
 /**
+ * Resolve `work`, or mark timed out when it has not settled within `ms`.
+ */
+export async function withDeadlineResult<T>(
+  work: Promise<T>,
+  ms: number
+): Promise<{ timedOut: true } | { timedOut: false; value: T }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deadline = new Promise<{ timedOut: true }>((resolve) => {
+    timer = setTimeout(() => {
+      trace("session.decision-memory", `timed out after ${ms}ms`);
+      resolve({ timedOut: true });
+    }, ms);
+  });
+
+  try {
+    return await Promise.race([
+      work.then((value) => ({ timedOut: false as const, value })),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Resolve `work`, or `fallback` when it has not settled within `ms`.
- *
- * The session cannot start until this returns, so a memory backend must never
- * be able to block it. The HTTP provider carries its own per-request deadline;
- * this additionally bounds provider construction and the MCP transport, which
- * has no abort plumbing of its own.
  */
 export async function withDeadline<T>(
   work: Promise<T>,
   fallback: T,
   ms: number = MEMORY_START_TIMEOUT_MS
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const result = await withDeadlineResult(work, ms);
 
-  const deadline = new Promise<T>((resolve) => {
-    timer = setTimeout(() => {
-      trace("session.decision-memory", `timed out after ${ms}ms`);
-      resolve(fallback);
-    }, ms);
-  });
-
-  try {
-    return await Promise.race([work, deadline]);
-  } finally {
-    // Without this the pending timer keeps the event loop alive and delays exit.
-    clearTimeout(timer);
-  }
+  return result.timedOut ? fallback : result.value;
 }
 
 /**
  * Opt-in decision memory at session start.
  *
- * Provider construction and recall are timed separately. A slow/empty recall
- * must NOT discard a successfully opened provider — that left sessions looking
- * configured while never retaining (empty bank forever, no error).
+ * Create + recall share ONE start-up budget (not 2×). A slow recall must not
+ * discard the provider; timeouts are announced distinctly from empty banks.
  */
 export async function loadDecisionMemoryAtStart(
   cwd: string,
@@ -77,25 +85,36 @@ export async function loadDecisionMemoryAtStart(
 
   const create = deps.createProvider ?? createMemoryProvider;
   const budget = deps.startTimeoutMs ?? MEMORY_START_TIMEOUT_MS;
+  const createBudget = Math.max(1, Math.floor(budget / 2));
+  const recallBudget = Math.max(1, budget - createBudget);
 
   try {
-    const provider = await withDeadline(
+    const created = await withDeadlineResult(
       create(cwd, config, mcpCaller),
-      null,
-      budget
+      createBudget
     );
 
-    if (provider === null) {
+    if (created.timedOut || created.value === null) {
       return empty;
     }
 
-    // Recall is best-effort context. Time it out independently so a hung
-    // embedding/rerank cannot throw away the write path for the whole session.
-    const brief = await withDeadline(
+    const provider = created.value;
+    const recalled = await withDeadlineResult(
       provider.recall(DECISION_RECALL_QUERY),
-      null,
-      budget
+      recallBudget
     );
+
+    if (recalled.timedOut) {
+      report({
+        kind: "tool",
+        task: taskId,
+        message: `decision memory: bank ${provider.bankId} ready (recall timed out)`,
+      });
+
+      return { provider, brief: null };
+    }
+
+    const brief = recalled.value;
 
     if (brief !== null) {
       report({

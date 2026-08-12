@@ -15,7 +15,7 @@ const TEST_EXTS = ["ts", "tsx", "js", "jsx"] as const;
  *  `npx vitest` is as watch-mode as bare `vitest`, so the binary check must see
  *  through them. */
 const RUNNER_PREFIX =
-  /^(?:(?:npx|bunx|pnpm|yarn|pnpm\s+exec|npm\s+exec|bun\s+x|bun\s+run)\s+(?:--\s+)?)+/;
+  /^(?:(?:npx|bunx|pnpm\s+exec|npm\s+exec|bun\s+x|bun\s+run|pnpm|yarn)\s+(?:--\s+)?)+/;
 
 /** Any shell composition. A `--`-appended arg lands on the LAST command of a
  *  chain, never on the runner, so such a script can never be rewritten. */

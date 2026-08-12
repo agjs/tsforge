@@ -159,6 +159,8 @@ test("isWatchTestScript: sees through package runners and --watch=false", () => 
   // A runner prefix does not make watch mode one-shot.
   expect(isWatchTestScript("npx vitest")).toBe(true);
   expect(isWatchTestScript("pnpm vitest --coverage")).toBe(true);
+  expect(isWatchTestScript("pnpm exec vitest")).toBe(true);
+  expect(isWatchTestScript("pnpm exec vitest run")).toBe(false);
   expect(isWatchTestScript("bunx vitest")).toBe(true);
   expect(isWatchTestScript("npx vitest run")).toBe(false);
   // Explicit opt-out is one-shot.

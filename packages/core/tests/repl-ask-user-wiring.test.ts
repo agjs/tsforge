@@ -73,8 +73,10 @@ test("--continue persists + re-seeds the deferred gate", async () => {
 
   // Written into the persisted record…
   expect(src).toContain("pausedWithEdit: session.hasDeferredGate");
-  // …and re-seeded on the resumed Session.create.
-  expect(src).toContain("resumed?.pausedWithEdit === true");
+  // …and re-seeded on the resumed Session.create (via resumeCarry).
+  expect(src).toContain("function resumeCarry");
+  expect(src).toContain("pausedWithEdit: true");
+  expect(src).toContain("...resumeCarry(resumed)");
 });
 
 // WS-C: humanAtKeyboard() is the safety gate that stops a piped/non-TTY REPL from

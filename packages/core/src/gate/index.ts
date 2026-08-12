@@ -18,5 +18,11 @@ export {
 export {
   runWorkspaceContainerGate,
   makeWorkspaceFileLinter,
+  packageRelativeTouched,
 } from "./workspace-gate";
-export type { IWorkspaceGateRun } from "./workspace-gate";
+export type { IWorkspaceGateRun, IWorkspaceGateOpts } from "./workspace-gate";
+export type { IPackageGatePolicy } from "./package-gate-policy";
+export {
+  capturePackageGatePolicy,
+  resolvePackageGate,
+} from "./package-gate-policy";

@@ -1,12 +1,14 @@
+import { resolve, relative, isAbsolute } from "node:path";
 import type { ITask } from "../spec/spec.types";
 import type { ErrorParser, ErrorSet, IValidateResult } from "../validate";
 import { validate } from "../validate";
 import type { IAcceptOptions } from "../validate/accept";
 import { shellQuote } from "../lib/fs";
-import { buildGate } from "./core-gate";
-import { makeFileLinter } from "./linter";
-import { discoverTestCommand } from "./test-discovery";
-import type { FileLinter } from "./types";
+import {
+  capturePackageGatePolicy,
+  resolvePackageGate,
+  type IPackageGatePolicy,
+} from "./package-gate-policy";
 import {
   activePackageRoots,
   isWorkspaceContainer,
@@ -14,7 +16,7 @@ import {
   packageLabel,
   unpackagedCodePaths,
 } from "./workspace-root";
-import { detectStack } from "../stack-detection";
+import type { FileLinter } from "./types";
 
 /** Error key for touched code that no package can gate. */
 const UNGATED_KEY = "workspace-ungated-code";
@@ -32,19 +34,24 @@ export interface IWorkspaceGateRun {
   readonly label: string;
 }
 
+export interface IWorkspaceGateOpts extends IAcceptOptions {
+  /** Session-scoped policy cache — frozen test command + monotonic packs. */
+  readonly policies?: Map<string, IPackageGatePolicy>;
+}
+
 /**
  * Run the auto gate for a workspace container: only packages touched this
  * session. No touches → green no-op. Each package gets its own buildGate +
- * validate in that package's cwd. Touched code outside every package FAILS —
- * there is no config to gate it with, and a silent pass there would be a
- * false green.
+ * validate in that package's cwd (full config policy). Touched code outside
+ * every package FAILS — there is no config to gate it with, and a silent pass
+ * there would be a false green.
  */
 export async function runWorkspaceContainerGate(
   sessionCwd: string,
   task: ITask,
   touched: Iterable<string>,
   parse: ErrorParser | undefined,
-  opts: IAcceptOptions
+  opts: IWorkspaceGateOpts
 ): Promise<IWorkspaceGateRun> {
   if (!isWorkspaceContainer(sessionCwd)) {
     throw new Error(
@@ -54,6 +61,7 @@ export async function runWorkspaceContainerGate(
 
   const ungated = ungatedCodeFailure(sessionCwd, touched);
   const packages = activePackageRoots(sessionCwd, touched);
+  const policies = opts.policies ?? new Map<string, IPackageGatePolicy>();
 
   if (packages.length === 0) {
     return {
@@ -70,7 +78,7 @@ export async function runWorkspaceContainerGate(
     };
   }
 
-  const fan = await gateEachPackage(packages, task, parse, opts);
+  const fan = await gateEachPackage(packages, task, parse, opts, policies);
   const sections =
     ungated === null ? fan.outputs : [...fan.outputs, ungated.output];
 
@@ -100,7 +108,8 @@ async function gateEachPackage(
   packages: readonly string[],
   task: ITask,
   parse: ErrorParser | undefined,
-  opts: IAcceptOptions
+  opts: IWorkspaceGateOpts,
+  policies: Map<string, IPackageGatePolicy>
 ): Promise<IFanOut> {
   const outputs: string[] = [];
   const errors: ErrorSet = [];
@@ -110,19 +119,19 @@ async function gateEachPackage(
 
   for (const pkg of packages) {
     const label = packageLabel(pkg);
-    const stack = await detectStack(pkg);
-    const testCommand = await discoverTestCommand(pkg);
-    const gate = await buildGate(pkg, stack.packs, undefined, {
-      includeTests: true,
-      testCommand,
-    });
-    const pkgTask: ITask = { ...task, accept: gate.command };
+    let policy = policies.get(pkg);
 
-    // A subshell per package: the command is built for that package's cwd, and
-    // `accept` must stay runnable from the container root.
-    commands.push(`(cd ${shellQuote(pkg)} && ${gate.command})`);
+    if (policy === undefined) {
+      policy = await capturePackageGatePolicy(pkg);
+      policies.set(pkg, policy);
+    }
 
-    for (const pack of stack.packs) {
+    const resolved = await resolvePackageGate(policy);
+    const pkgTask: ITask = { ...task, accept: resolved.gate.command };
+
+    commands.push(`(cd ${shellQuote(pkg)} && ${resolved.gate.command})`);
+
+    for (const pack of resolved.packs) {
       packs.add(pack);
     }
 
@@ -166,11 +175,14 @@ function ungatedCodeFailure(
 
 /**
  * Per-write lint moat for a workspace container: routes each written file to a
- * linter built for the OWNING package (its own stack packs and eslint config),
- * built once per package and reused. Files under no package report clean —
- * `runWorkspaceContainerGate` fails them instead.
+ * linter built for the OWNING package (full policy packs/overrides/conventions),
+ * built once per package and reused.
  */
-export function makeWorkspaceFileLinter(sessionCwd: string): FileLinter {
+export function makeWorkspaceFileLinter(
+  sessionCwd: string,
+  policies?: Map<string, IPackageGatePolicy>
+): FileLinter {
+  const cache = policies ?? new Map<string, IPackageGatePolicy>();
   const perPackage = new Map<string, FileLinter>();
 
   return async (absPath) => {
@@ -183,12 +195,43 @@ export function makeWorkspaceFileLinter(sessionCwd: string): FileLinter {
     let linter = perPackage.get(pkg);
 
     if (linter === undefined) {
-      const stack = await detectStack(pkg);
+      let policy = cache.get(pkg);
 
-      linter = makeFileLinter("core", pkg, stack.packs);
+      if (policy === undefined) {
+        policy = await capturePackageGatePolicy(pkg);
+        cache.set(pkg, policy);
+      }
+
+      const resolved = await resolvePackageGate(policy);
+
+      linter = resolved.lintFile;
       perPackage.set(pkg, linter);
     }
 
     return linter(absPath);
   };
+}
+
+/**
+ * Map session-relative touched paths to package-relative paths for meta-rules
+ * under one child package.
+ */
+export function packageRelativeTouched(
+  sessionCwd: string,
+  pkgAbs: string,
+  touched: Iterable<string>
+): string[] {
+  const out: string[] = [];
+
+  for (const path of touched) {
+    const abs = isAbsolute(path) ? path : resolve(sessionCwd, path);
+
+    if (owningPackageRoot(sessionCwd, abs) !== pkgAbs) {
+      continue;
+    }
+
+    out.push(relative(pkgAbs, abs).replaceAll("\\", "/"));
+  }
+
+  return out;
 }

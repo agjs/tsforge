@@ -119,6 +119,8 @@ export class PaneScreen {
   private busyTimer: ReturnType<typeof setInterval> | null = null;
   /** Optional tick while busy (REPL wires syncPaneChrome). */
   onBusyTick: (() => void) | null = null;
+  /** Fired when Ctrl+G changes main/panel width — resize the prompt editor. */
+  onLayoutChange: (() => void) | null = null;
 
   constructor(
     private readonly out: IPaneScreenTerminal,
@@ -758,6 +760,9 @@ export class PaneScreen {
       panelLen: this.panelSourceLen(),
       onWheel: (delta: number, col: number, _row: number): void => {
         this.queueWheel(delta, col);
+      },
+      onLayoutChange: (): void => {
+        this.onLayoutChange?.();
       },
       paint: () => {
         // Ctrl+G changes main width — always full compose after invalidate.

@@ -119,9 +119,15 @@ export class StdioMcpTransport implements IMcpTransport {
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    return extractText(
-      await this.request("tools/call", { name, arguments: args })
-    );
+    const result = await this.request("tools/call", { name, arguments: args });
+
+    // MCP application errors use isError:true on a successful JSON-RPC result.
+    // Treating them as ok text made retain() report success on permission denials.
+    if (isRecord(result) && result.isError === true) {
+      throw new Error(extractText(result));
+    }
+
+    return extractText(result);
   }
 
   close(): Promise<void> {

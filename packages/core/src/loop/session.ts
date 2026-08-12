@@ -5,12 +5,13 @@ import type {
   ITokenUsage,
 } from "../inference";
 import type { ITask } from "../spec";
-import type { FileLinter } from "../gate";
 import {
   makeFileLinter,
   isWorkspaceContainer,
   makeWorkspaceFileLinter,
   runWorkspaceContainerGate,
+  type FileLinter,
+  type IPackageGatePolicy,
 } from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
 import type { IStackProfile } from "../stack-detection";
@@ -103,6 +104,8 @@ import {
   loadDecisionMemoryAtStart,
   decisionBriefBlock,
   buildDecisionRetainText,
+  withDeadline,
+  MEMORY_REQUEST_TIMEOUT_MS,
   type ICandidateLesson,
   type IMemoryProvider,
 } from "./memory";
@@ -263,6 +266,9 @@ export interface ISessionConfig {
    *  yields (or churns) then validates the on-disk edit. Without this the rebuilt session
    *  starts `edited=false` and a conversational send silently skips the gate (WS-C). */
   pausedWithEdit?: boolean;
+  /** Seed `ctx.tool.touched` from a resumed session so workspace gates still
+   *  know which packages were edited before the pause. */
+  touched?: readonly string[];
   /** Session-bound plan id restored from the session store on `--continue`. */
   activePlanId?: string | null;
   /** Fired when a task_* tool persists a plan change (REPL refreshes the Tasks rail). */
@@ -961,6 +967,8 @@ function makeAutoGateRunner(
   const state = { active: true };
   let prevPacks: string[] | null = null;
   let workspaceLint: FileLinter | null = null;
+  /** Frozen per-package policies for workspace fan-out (test cmd + packs). */
+  const workspacePolicies = new Map<string, IPackageGatePolicy>();
   const runner: IGate = {
     async run(cwd, opts) {
       // F19: external plugins are frozen at session start; a mid-session edit of
@@ -969,11 +977,13 @@ function makeAutoGateRunner(
 
       await assertExternalPacksFrozen();
 
-      // Multi-repo workspace root: gate only packages the model touched.
-      if (isWorkspaceContainer(cwd)) {
+      // Multi-repo workspace root: gate only packages the model touched — but
+      // only while auto-gate is active. `setGate` flips active off; then we
+      // honor the manual command via validate (same as non-workspace).
+      if (isWorkspaceContainer(cwd) && state.active) {
         // One router for the whole session — each package's eslint engine is
         // built once inside it, so per-write linting isn't lost in this mode.
-        workspaceLint ??= makeWorkspaceFileLinter(cwd);
+        workspaceLint ??= makeWorkspaceFileLinter(cwd, workspacePolicies);
         ctx.gate.lintFile = workspaceLint;
 
         const run = await runWorkspaceContainerGate(
@@ -981,7 +991,7 @@ function makeAutoGateRunner(
           ctx.task,
           ctx.tool.touched ?? [],
           parse,
-          opts ?? {}
+          { ...(opts ?? {}), policies: workspacePolicies }
         );
 
         // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
@@ -1335,7 +1345,7 @@ export class Session {
       tsService: await buildTsService(cfg.cwd),
       report,
       tool: {
-        touched: new Set<string>(),
+        touched: new Set<string>(cfg.touched ?? []),
         policyMode: baseMode,
         ...(cfg.extraRoots !== undefined && cfg.extraRoots.length > 0
           ? { extraRoots: cfg.extraRoots }
@@ -1452,6 +1462,11 @@ export class Session {
    *  gate survives the rebuild instead of being silently dropped (WS-C). */
   get hasDeferredGate(): boolean {
     return this.state.pausedWithEdit === true;
+  }
+
+  /** Relative paths the model wrote this session — persisted for workspace gates. */
+  get touchedFiles(): string[] {
+    return [...(this.ctx.tool.touched ?? [])].sort();
   }
 
   /** The session's TS LanguageService (null when the workspace has no tsconfig),
@@ -3065,7 +3080,12 @@ export class Session {
     const bankId = this.decisionMemory.bankId;
 
     try {
-      const ok = await this.decisionMemory.retain(content);
+      // Bound MCP/HTTP retains so a hung backend cannot stall a green send.
+      const ok = await withDeadline(
+        this.decisionMemory.retain(content),
+        false,
+        MEMORY_REQUEST_TIMEOUT_MS
+      );
 
       this.report({
         kind: "tool",

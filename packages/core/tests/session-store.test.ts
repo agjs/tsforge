@@ -114,6 +114,22 @@ test("resume preserves pausedWithEdit (deferred gate survives --continue)", asyn
   expect(resumed?.pausedWithEdit).toBe(true);
 });
 
+test("resume preserves touched (workspace gate fan-out survives --continue)", async () => {
+  await saveSession({
+    id: "touch",
+    cwd: "/proj/ws",
+    accept: "",
+    files: [],
+    updatedAt: 1000,
+    touched: ["app/src/x.ts", "api/src/y.ts"],
+    messages: [{ role: "system", content: "sys" }],
+  });
+
+  const resumed = await latestSession("/proj/ws");
+
+  expect(resumed?.touched).toEqual(["app/src/x.ts", "api/src/y.ts"]);
+});
+
 test("resume preserves assistant reasoningContent (DeepSeek replay)", async () => {
   await saveSession({
     id: "rc",

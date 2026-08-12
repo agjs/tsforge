@@ -108,7 +108,12 @@ import {
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
 import type { FileLinter } from "../gate";
-import { formatFiles } from "../gate";
+import {
+  formatFiles,
+  isWorkspaceContainer,
+  activePackageRoots,
+  packageRelativeTouched,
+} from "../gate";
 import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
@@ -1442,14 +1447,16 @@ async function runGateStep(
 
 /** STEP 3 — meta-rules: project structure invariants the gate command can't
  *  express (e.g. test-sibling-required), change-scoped to the files the AGENT
- *  wrote this session. Best-effort: a throwing rule degrades to no violations. */
+ *  wrote this session. Best-effort: a throwing rule degrades to no violations.
+ *  Workspace containers run meta per touched child package (not the bag root). */
 function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   try {
-    // The files the AGENT created/edited this session — what change-scoped rules
-    // (test-sibling-required) enforce on. This is the real signal, not git: it
-    // works in any directory (including a freshly generated, non-git project) and
-    // never blocks on the repo's pre-existing untested code.
     const changed = [...(ctx.tool.touched ?? [])];
+
+    if (isWorkspaceContainer(ctx.cwd)) {
+      return runWorkspaceMetaRules(ctx, changed);
+    }
+
     const metaContext = buildMetaRuleContext(
       ctx.cwd,
       ctx.gate.stackProfile?.packs ?? [],
@@ -1470,6 +1477,34 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
 
     return [];
   }
+}
+
+/** Fan meta-rules out to each touched package under a workspace container. */
+function runWorkspaceMetaRules(
+  ctx: ILoopCtx,
+  changed: readonly string[]
+): IMetaRuleViolation[] {
+  const packages = activePackageRoots(ctx.cwd, changed);
+
+  if (packages.length === 0) {
+    return [];
+  }
+
+  const all: IMetaRuleViolation[] = [];
+
+  for (const pkg of packages) {
+    const pkgTouched = packageRelativeTouched(ctx.cwd, pkg, changed);
+    const packs = ctx.gate.stackProfile?.packs ?? [];
+    const violations = runMetaRules(
+      META_RULES,
+      buildMetaRuleContext(pkg, packs, pkgTouched),
+      ctx.gate.ruleOverrides
+    );
+
+    all.push(...subtractMetaBaseline(violations, ctx.gate.metaBaseline));
+  }
+
+  return all;
 }
 
 /** The FULL gate evaluation — autofix, then the gate command, then the harness

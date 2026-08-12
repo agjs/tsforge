@@ -20,6 +20,8 @@ export {
   DECISION_CONTEXT,
   DECISION_RECALL_QUERY,
   DECISION_BRIEF_MAX_CHARS,
+  MEMORY_REQUEST_TIMEOUT_MS,
+  MEMORY_START_TIMEOUT_MS,
   type IMemoryProvider,
   type IMemoryProviderConfig,
   type IHttpMemoryProviderConfig,
@@ -47,6 +49,7 @@ export { retainFeatureDecision } from "./retain-feature";
 export {
   loadDecisionMemoryAtStart,
   withDeadline,
+  withDeadlineResult,
   type IDecisionMemoryLoad,
   type IDecisionMemoryLoadDeps,
 } from "./load-at-start";

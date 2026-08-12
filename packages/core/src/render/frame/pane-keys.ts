@@ -10,6 +10,8 @@ export interface IPaneKeyDeps {
   readonly panelLen: number;
   /** Wheel: positive = older / up; negative = newer / down. `col` is 1-based. */
   onWheel?(delta: number, col: number, row: number): void;
+  /** After Ctrl+G changes layout width — resize the prompt editor + rewrap rail. */
+  onLayoutChange?(): void;
   paint(): void;
   invalidate(): void;
 }
@@ -23,6 +25,7 @@ export function handleFocusKey(
     if (deps.focus.togglePanel(deps.panelLen > 0) === "changed") {
       // Layout width changes — invalidate the differential frame, not a body patch.
       deps.invalidate();
+      deps.onLayoutChange?.();
       deps.paint();
     }
 

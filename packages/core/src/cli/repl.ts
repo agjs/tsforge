@@ -92,6 +92,7 @@ import {
   type IStatusInfo,
   type IAgentRow,
 } from "../render";
+import { takeOneInputSequence } from "../render/frame/input-seq";
 import { runMemorySlashCommand } from "./memory-command";
 import {
   saveSession,
@@ -463,6 +464,28 @@ export function paneConsoleRejectReason(opts: {
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
 
+/** Carry resume-only Session.create fields from a persisted record. */
+function resumeCarry(resumed: ISessionRecord | null): {
+  pausedWithEdit?: boolean;
+  touched?: string[];
+  activePlanId?: string;
+} {
+  if (resumed === null) {
+    return {};
+  }
+
+  return {
+    ...(resumed.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
+    ...(resumed.touched !== undefined && resumed.touched.length > 0
+      ? { touched: resumed.touched }
+      : {}),
+    ...(typeof resumed.activePlanId === "string" &&
+    resumed.activePlanId.length > 0
+      ? { activePlanId: resumed.activePlanId }
+      : {}),
+  };
+}
+
 /** Initialize the REPL session: resolve model, gate, context window, and create
  *  the session object. Returns the session, provider, and config metadata.
  *  Extracted to reduce repl() cognitive complexity. */
@@ -574,14 +597,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     // didn't touch, and never with the wrong prettier. (A spec may still set its own
     // per-task `fix`.) MUST also be set on the /clear rebuild below.
     coreFormat: true,
-    // A resumed session with a still-unvalidated pre-pause edit re-seeds the deferred
-    // gate so it re-gates on the first send — never silently dropped across --continue
-    // (WS-C; the persisted counterpart of the /clear carry).
-    ...(resumed?.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
-    ...(typeof resumed?.activePlanId === "string" &&
-    resumed.activePlanId.length > 0
-      ? { activePlanId: resumed.activePlanId }
-      : {}),
+    ...resumeCarry(resumed),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
@@ -724,6 +740,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       planMode,
       // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
       pausedWithEdit: session.hasDeferredGate,
+      touched: session.touchedFiles,
       activePlanId: session.getActivePlanId(),
       messages: [...session.messages],
     });
@@ -1248,6 +1265,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // the on-disk edit on a conversational send (WS-C).
     const carryDeferredGate = session.hasDeferredGate;
     const carryPlanId = session.getActivePlanId();
+    const carryTouched = session.touchedFiles;
 
     session = await Session.create({
       provider,
@@ -1278,6 +1296,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         : {}),
       // Plain boolean (no branch): the constructor only seeds the flag when true.
       pausedWithEdit: carryDeferredGate,
+      ...(carryTouched.length > 0 ? { touched: carryTouched } : {}),
       ...(profile === undefined ? {} : { profile }),
       ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
     });
@@ -1645,7 +1664,18 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    const cols = Math.max(12, paneScreen.panelInnerCols());
+    // Collapsed rail: panelInnerCols is 0; Math.max(12, 0) would rewrap at a
+    // fake 12-col width and leave fragmented text when the rail reopens.
+    const cols = paneScreen.panelInnerCols();
+
+    if (cols <= 0) {
+      if (opts?.soft !== true) {
+        paneScreen.setWorklistBadge(worklistBadge(plan));
+      }
+
+      return;
+    }
+
     const maxPending = Math.max(4, paneScreen.panelListBudgetRows());
     // Spinner ticks only while a turn is live — drive the focused-task mark.
     const spinning = spinner.frameLabel().length > 0;
@@ -2111,6 +2141,14 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     syncPaneChrome();
+  };
+
+  // Ctrl+G changes main width — keep the prompt editor + Tasks rail in sync.
+  paneScreen.onLayoutChange = (): void => {
+    if (panesLive()) {
+      resizeEditor?.(paneScreen.mainInnerCols(), process.stdout.rows);
+      syncWorklistPanel(railPlan);
+    }
   };
 
   // Pane footer + agent tree on every spinner tick — not during a resize storm.
@@ -2766,14 +2804,28 @@ export async function repl(args: ICliArgs): Promise<number> {
           return;
         }
 
-        // Pane chrome keys always win — scroll / Ctrl+G / Esc / Tab must work
-        // even while a turn is busy. Only "handled" is swallowed; passthrough
-        // (e.g. prompt-focused ↑↓) still reaches the editor.
-        if (paneScreen.handleKey(cleaned) === "handled") {
+        // Peel one key sequence at a time so Ctrl+G in `"\x07x"` is not missed.
+        let rest = cleaned;
+
+        while (rest.length > 0) {
+          const peeled = takeOneInputSequence(rest);
+
+          if (peeled.seq.length === 0) {
+            break;
+          }
+
+          const result = paneScreen.handleKey(peeled.seq);
+
+          if (result === "handled") {
+            rest = peeled.rest;
+            continue;
+          }
+
+          // Passthrough: remaining bytes (including this key) go to the editor.
+          cb(rest);
+
           return;
         }
-
-        cb(cleaned);
       };
 
       editorHandle = startEditor({

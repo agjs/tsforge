@@ -47,6 +47,10 @@ export interface ISessionRecord {
    *  restored on `--continue`/`--resume` so a resumed session re-gates that edit on its
    *  first send instead of silently dropping the deferred gate (WS-C, same as /clear). */
   pausedWithEdit?: boolean;
+  /** Files the model wrote this session (relative paths). Restored on `--continue`
+   *  so a workspace-container gate still fans out to the right packages after a
+   *  pause — without this, resume sees an empty touched set and false-greens. */
+  touched?: string[];
   /** Session-bound checklist plan id (`plans/<id>.json`). Restored on `--continue`
    *  so task_* tools, turn inject, and the Tasks rail stay scoped to this session's
    *  plan (concurrent sessions in one project each bind their own id). */
@@ -198,6 +202,13 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
         // of dropping the deferred gate across the process boundary (WS-C).
         ...(typeof data.pausedWithEdit === "boolean"
           ? { pausedWithEdit: data.pausedWithEdit }
+          : {}),
+        ...(Array.isArray(data.touched)
+          ? {
+              touched: data.touched.filter(
+                (f): f is string => typeof f === "string" && f.length > 0
+              ),
+            }
           : {}),
         ...(data.activePlanId === null || typeof data.activePlanId === "string"
           ? { activePlanId: data.activePlanId }

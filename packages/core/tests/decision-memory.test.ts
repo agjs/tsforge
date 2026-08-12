@@ -400,7 +400,7 @@ describe("loadDecisionMemoryAtStart", () => {
 
     expect(loaded.provider).toBe(provider);
     expect(loaded.brief).toBeNull();
-    expect(messages.some((m) => m.includes("ready (empty)"))).toBe(true);
+    expect(messages.some((m) => m.includes("recall timed out"))).toBe(true);
   });
 
   test("announces a loaded brief when recall returns in time", async () => {
