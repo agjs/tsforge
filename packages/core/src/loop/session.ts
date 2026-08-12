@@ -95,7 +95,11 @@ import { activeOverlay } from "../self-harness/overlay";
 import {
   mineLessons,
   consolidate as consolidateMemory,
+  loadDecisionMemoryAtStart,
+  decisionBriefBlock,
+  buildDecisionRetainText,
   type ICandidateLesson,
+  type IMemoryProvider,
 } from "./memory";
 import {
   buildChatSystem,
@@ -773,7 +777,8 @@ function isOfferCheckActive(cfg: ISessionConfig): boolean {
 function systemPrompt(
   cfg: ISessionConfig,
   workspaceMap: string,
-  conventions: IConventions
+  conventions: IConventions,
+  decisionBrief: string | null = null
 ): string {
   const base =
     cfg.executionMode === "drive-to-green"
@@ -791,6 +796,7 @@ function systemPrompt(
   }
 
   const prefix = workspaceMap.length > 0 ? `${workspaceMap}\n\n` : "";
+  const decisions = decisionBriefBlock(decisionBrief);
 
   // TDD-first (default ON) — the headless build prompt gets this via
   // buildSystemPrompt, but the interactive path never did, so the CLI agent was
@@ -810,7 +816,7 @@ function systemPrompt(
     isOfferCheckActive(cfg)
   );
 
-  return `${base}\n\n${tdd}${conv}${prefix}${lines.join("\n")}\n\n${contract}`;
+  return `${base}\n\n${tdd}${conv}${decisions}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
 /** Build the initial message list. A FRESH session gets one freshly-built system
@@ -1037,6 +1043,12 @@ export class Session {
   /** Live `check` tool is offered (drive-to-green + cfg.offerCheck) — keeps the
    *  task-contract Check: line aligned with toolsFor when the auto-gate refreshes. */
   private readonly offerCheckActive: boolean;
+  /** Optional pluggable decision-memory provider (HTTP/MCP). Null when unset. */
+  private decisionMemory: IMemoryProvider | null = null;
+  /** `providers.memory.retainPrompts` — on unless opted out; see retainDecisionAfterGreen. */
+  private retainPrompts = true;
+  /** Last user send text — used to curate a retain summary when the gate goes green. */
+  private lastUserPrompt = "";
 
   private constructor(
     cfg: ISessionConfig,
@@ -1229,6 +1241,16 @@ export class Session {
             report({ kind: "tool", task: SESSION_ID, message });
           });
 
+    // Opt-in decision memory (HTTP/MCP). Fail-soft: missing/down backend → null brief.
+    const { provider: decisionMemory, brief: decisionBrief } =
+      await loadDecisionMemoryAtStart(
+        cfg.cwd,
+        projectConfig.providers?.memory,
+        mcpRegistry,
+        report,
+        SESSION_ID
+      );
+
     // Persisted workspace map (from `/map`), if any — primes the agent with the
     // repo's structure. Cheap: loads + marks drift, never rebuilds here.
     const workspaceMap = await recallMapBlock(cfg.cwd);
@@ -1301,7 +1323,7 @@ export class Session {
       },
       messages: resumeMessages(
         cfg,
-        systemPrompt(cfg, workspaceMap, conventions)
+        systemPrompt(cfg, workspaceMap, conventions, decisionBrief)
       ),
     };
 
@@ -1323,6 +1345,10 @@ export class Session {
     }
 
     const session = new Session(cfg, ctx, autoGateState);
+
+    session.decisionMemory = decisionMemory;
+    session.retainPrompts =
+      projectConfig.providers?.memory?.retainPrompts !== false;
 
     // Build the TTSR manager (built-in + project + memory-learned rules) so the
     // interactive loop gets the SAME mid-stream guidance the headless loop does —
@@ -1896,6 +1922,7 @@ export class Session {
     this.activeThinking = opts.enableThinking;
     this.repairing = false; // fresh send starts in (fast, thinking-off) creation mode
     resetDriveConvergence(this.state);
+    this.lastUserPrompt = text;
 
     // The TtsrManager persists for the whole session, so per-rule silencing and
     // the global interrupt cap must reset per user message — otherwise a rule
@@ -2903,12 +2930,18 @@ export class Session {
     this.sendEvents.length = 0;
 
     try {
-      return await this.driveInner(
+      const result = await this.driveInner(
         maxTurns,
         checkpointIntervalTurns,
         sendStart,
         opts
       );
+
+      if (result.status === "done") {
+        await this.retainDecisionAfterGreen();
+      }
+
+      return result;
     } finally {
       await this.consolidateLessons();
     }
@@ -2932,6 +2965,85 @@ export class Session {
       // Memory is supplementary — never let it break a send.
       trace("session.memory", err);
     }
+  }
+
+  /** Bank id for decision memory, or null when no provider is configured. */
+  decisionMemoryBankId(): string | null {
+    return this.decisionMemory?.bankId ?? null;
+  }
+
+  /** List retained decision strings from the external provider (empty if none). */
+  async listDecisionMemory(): Promise<readonly string[]> {
+    if (this.decisionMemory === null) {
+      return [];
+    }
+
+    try {
+      return await this.decisionMemory.list();
+    } catch (err) {
+      trace("session.decision-memory.list", err);
+
+      return [];
+    }
+  }
+
+  /** Clear the external decision bank (fail-soft). Phase 1 ledger is separate. */
+  async forgetDecisionMemory(): Promise<void> {
+    if (this.decisionMemory === null) {
+      return;
+    }
+
+    try {
+      await this.decisionMemory.forget();
+    } catch (err) {
+      trace("session.decision-memory.forget", err);
+    }
+  }
+
+  /** Retain a curated decision into the external bank (fail-soft). */
+  async retainDecision(content: string): Promise<void> {
+    if (this.decisionMemory === null) {
+      return;
+    }
+
+    try {
+      await this.decisionMemory.retain(content);
+    } catch (err) {
+      trace("session.decision-memory.retain", err);
+    }
+  }
+
+  /**
+   * After a green send, retain the user's request (best-effort). On unless
+   * `providers.memory.retainPrompts` is set to `false`.
+   *
+   * This is the raw prompt rather than a curated decision, so it can carry
+   * pasted logs, snippets and customer data — redaction only strips
+   * secret-SHAPED text. That is the deliberate trade: without this channel the
+   * bank only ever fills from greenfield runs, and ordinary sessions teach it
+   * nothing.
+   */
+  private async retainDecisionAfterGreen(): Promise<void> {
+    if (!this.retainPrompts) {
+      return;
+    }
+
+    const summary = this.lastUserPrompt.trim().slice(0, 500);
+
+    if (summary.length === 0) {
+      return;
+    }
+
+    const text = buildDecisionRetainText({
+      kind: "session",
+      summary,
+    });
+
+    if (text === null) {
+      return;
+    }
+
+    await this.retainDecision(text);
   }
 
   /** The `ttsrManager` completion option, or nothing when TTSR is off. */

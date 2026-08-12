@@ -92,7 +92,7 @@ import {
   type IStatusInfo,
   type IAgentRow,
 } from "../render";
-import { loadLedger, activeRules, forgetMemory } from "../loop/memory";
+import { runMemorySlashCommand } from "./memory-command";
 import {
   saveSession,
   latestSession,
@@ -1453,39 +1453,9 @@ export async function repl(args: ICliArgs): Promise<number> {
         await handleSessions();
         break;
 
-      case "memory": {
-        if (arg.trim() === "forget") {
-          await forgetMemory(args.dir);
-          streamOut("  memory cleared for this repo\n");
-          break;
-        }
-
-        const ledger = await loadLedger(args.dir);
-
-        if (ledger.entries.length === 0) {
-          streamOut("  no learned lessons yet\n");
-          break;
-        }
-
-        const activeNames = new Set(
-          activeRules(ledger, Date.now()).map((r) => r.name)
-        );
-
-        streamOut(
-          `  ${String(ledger.entries.length)} lesson(s), ${String(activeNames.size)} active (● fires · ○ still accruing):\n`
-        );
-
-        for (const entry of ledger.entries.slice(0, 20)) {
-          const mark = activeNames.has(entry.name) ? "●" : "○";
-
-          streamOut(
-            `    ${mark} ${entry.rule} · ${String(entry.hits)} hit(s)\n`
-          );
-        }
-
-        streamOut("  /memory forget to clear\n");
+      case "memory":
+        await runMemorySlashCommand(args.dir, session, arg, streamOut);
         break;
-      }
 
       case "cost": {
         const chars = session.messages.reduce(

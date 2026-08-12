@@ -77,7 +77,7 @@ export const COMMANDS: readonly ICommandSpec[] = [
   {
     name: "/memory",
     arg: "[forget]",
-    summary: "show learned failure→fix lessons (forget to clear)",
+    summary: "show coding lessons + project decisions (forget to clear)",
   },
   {
     name: "/config",

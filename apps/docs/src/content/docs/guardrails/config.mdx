@@ -19,6 +19,7 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 | `conventions` | object | Project taste tsforge adapts to: `interfaces`, `enums`, `tests`, `componentFolders` (written by [`tsforge setup`](/cli/setup/)) |
 | `plugins` | object[] | External modules providing extra rule packs (see below) |
 | `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
+| `providers.memory` | object | Optional [decision memory](/integrations/decision-memory/) backend (`kind: "http"` \| `"mcp"`) for product/architecture choices across sessions |
 | `policy` | object | Permission `mode` + deny/allow/ask `rules` for tool actions. See [Permissions & policy](/guardrails/policy/) |
 | `agents.concurrency` | number | Multiagent cap, integer 1–16 (default `1` = sequential). Bounds how many subagents run at once: both [delegated `spawn_agent` calls](/agent/delegation/) and `tsforge review`'s parallel find/verify passes (fresh provider per unit, live `agents:` progress). Leave at 1 for a local endpoint that serializes requests anyway |
 

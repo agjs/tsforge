@@ -8,6 +8,7 @@ import type {
   IGreenfieldResult,
   IFeature,
 } from "./greenfield.types";
+import { retainFeatureDecision } from "../memory";
 
 /**
  * Resolve the state to run: resume the persisted checklist if one exists, else
@@ -222,6 +223,7 @@ async function attemptFeature(
       delete feature.parked;
       delete feature.handoff;
       say(`feature '${feature.id}': verified ✓`);
+      await retainFeatureDecision(cwd, feature.id, feature.desc);
 
       return undefined;
     }

@@ -1,0 +1,122 @@
+---
+title: Decision memory (BYO)
+description: Optional pluggable project decision memory — retain architecture choices across sessions via HTTP or MCP (e.g. Hindsight). Separate from TTSR coding lessons.
+---
+
+When you build a fullstack app over multiple days, tsforge can remember **product and architecture decisions** (FK UX, naming, what already shipped) by talking to a memory backend **you** run. No vendor is bundled. Fresh `tsforge` in the same project loads the brief — you do **not** need `--continue`.
+
+This is separate from [Learning from past runs](/uplift/memory/) (Phase 1 failure→fix → TTSR). That channel stays local and automatic. Decision memory is opt-in context only: it never changes the gate.
+
+## Quick setup (HTTP / Hindsight)
+
+1. Run a Hindsight-compatible API (example):
+
+```bash
+docker run -it --pull always --name hindsight -p 8888:8888 -p 9999:9999 \
+  -e HINDSIGHT_API_LLM_API_KEY=$OPENAI_API_KEY \
+  -v hindsight-data:/home/hindsight/.pg0 \
+  ghcr.io/vectorize-io/hindsight:latest
+```
+
+2. Add to `tsforge.config.json` at the project root:
+
+```json
+{
+  "providers": {
+    "memory": {
+      "kind": "http",
+      "baseUrl": "http://localhost:8888"
+    }
+  }
+}
+```
+
+Optional: set `"bankId": "tsforge:github.com/acme/crm"` to pin the bank. Otherwise tsforge derives it (see below).
+
+3. Session A: build a feature with a non-obvious decision (“company FK is a native `<select>`”). When the gate goes green — or a greenfield feature verifies — tsforge **retains** it.
+
+4. Session B (new terminal, same repo): `tsforge` again. On start you should see a tool line like `decision memory: loaded brief for bank …`, and the agent should follow Monday’s choices without you restating them.
+
+5. Stop the backend and run again — the session still starts; there is simply no brief. The same holds for a backend that *hangs* rather than refusing: every memory call carries a 3s deadline and the whole start-up load is capped at 5s, so a sick backend cannot block the CLI.
+
+### What gets sent
+
+Two channels, both on by default:
+
+- **Curated summaries** that tsforge builds when a greenfield feature verifies — `Feature verified: <id> — <description>`.
+- **Your request text**, first 500 characters, each time a send reaches green. This is what makes the bank fill from ordinary interactive work; without it only greenfield runs teach it anything and the brief stays empty.
+
+Before anything is sent, a redaction pass drops lines that look like secrets (`API_KEY=…`, `password: …`, `authorization: …`) and rewrites every `sk-…` token. That catches secret-*shaped* text only — a pasted log, a customer name or a snippet in your prompt goes as typed.
+
+To keep prompts local and rely on the curated channel alone:
+
+```json
+{
+  "providers": {
+    "memory": {
+      "kind": "http",
+      "baseUrl": "http://localhost:8888",
+      "retainPrompts": false
+    }
+  }
+}
+```
+
+Worth doing when the bank is shared with other people or hosted by someone else. On a bank you run yourself, leaving it on is the point of the feature.
+
+### Treat the bank as untrusted input
+
+Whatever recall returns is injected into the agent's context inside a `<project-decisions>` block that marks it as reference data, never instructions. Bank contents are model-extracted and unreviewed, so anyone able to write to the bank — a teammate, another project sharing a bank id, a poisoned memory — would otherwise be writing straight into the highest-trust part of the prompt.
+
+## MCP variant
+
+```json
+{
+  "providers": {
+    "memory": {
+      "kind": "mcp",
+      "server": "hindsight",
+      "retainTool": "retain",
+      "recallTool": "recall",
+      "forgetTool": "forget"
+    }
+  },
+  "mcpServers": {
+    "hindsight": {
+      "command": "npx",
+      "args": ["-y", "your-hindsight-mcp"]
+    }
+  }
+}
+```
+
+Tool names default to `retain` / `recall` / `forget`. They are invoked as `mcp__<server>__<tool>` with `bank_id` and `content` / `query`.
+
+## Bank id (per project)
+
+Computed each session — **not** read from `.tsforge/`:
+
+1. `providers.memory.bankId` if set
+2. Else normalized `git remote get-url origin` → `tsforge:github.com/acme/crm`
+3. Else `tsforge:path:` + SHA-256 of the project root (directory that owns `.git` or `tsforge.config.json`)
+
+Same remote on two machines shares one bank. `/memory` prints the resolved bank when configured.
+
+## What is stored
+
+Curated decision text only (e.g. “Contact.companyId required; company FK is native select”). Not full chat, not file dumps. Obvious secrets (`API_KEY=…`, `sk-…`) are redacted before retain. HTTP retains use context tag `tsforge-decision`.
+
+## `/memory`
+
+In an interactive session:
+
+- **Coding lessons** — Phase 1 TTSR ledger (local)
+- **Project decisions** — external provider list (when configured)
+
+`/memory forget` clears the local ledger **and** asks the provider to clear that bank.
+
+## Fail-soft
+
+Backend down, bad config, or unknown `kind` → warn or skip; session and gate continue. Omit `providers.memory` → today’s behavior (Phase 1 only).
+
+→ [tsforge.config.json](/guardrails/config/) · [MCP servers](/integrations/mcp/) · [Learning from past runs](/uplift/memory/) · [Interactive CLI](/cli/interactive/)
