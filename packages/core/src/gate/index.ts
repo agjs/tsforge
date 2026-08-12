@@ -11,6 +11,12 @@ export {
   isWorkspaceContainer,
   listChildPackageRoots,
   activePackageRoots,
+  owningPackageRoot,
   packageLabel,
+  unpackagedCodePaths,
 } from "./workspace-root";
-export { runWorkspaceContainerGate } from "./workspace-gate";
+export {
+  runWorkspaceContainerGate,
+  makeWorkspaceFileLinter,
+} from "./workspace-gate";
+export type { IWorkspaceGateRun } from "./workspace-gate";

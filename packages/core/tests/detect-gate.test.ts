@@ -155,6 +155,87 @@ test("isWatchTestScript: bare vitest / --watch hang; vitest run does not", () =>
   expect(isWatchTestScript("jest")).toBe(false);
 });
 
+test("isWatchTestScript: sees through package runners and --watch=false", () => {
+  // A runner prefix does not make watch mode one-shot.
+  expect(isWatchTestScript("npx vitest")).toBe(true);
+  expect(isWatchTestScript("pnpm vitest --coverage")).toBe(true);
+  expect(isWatchTestScript("bunx vitest")).toBe(true);
+  expect(isWatchTestScript("npx vitest run")).toBe(false);
+  // Explicit opt-out is one-shot.
+  expect(isWatchTestScript("vitest --watch=false")).toBe(false);
+  expect(isWatchTestScript("jest --watchAll=false")).toBe(false);
+  expect(isWatchTestScript("jest --watchAll")).toBe(true);
+});
+
+test("discoverTestCommand: runner-prefixed watch vitest is made one-shot", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "npx vitest --coverage" } })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test -- run");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: --watch script is dropped, never rewritten", async () => {
+  const dir = await tempDir();
+
+  try {
+    // `bun run test -- run` would yield `jest --watch run`: still watching, so
+    // the gate would hang forever. Dropping tests is the only safe answer, and
+    // `bun test` is not a substitute for another runner's suites.
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "jest --watch" } })
+    );
+    await writeFile(join(dir, "a.test.ts"), "export const x = 1;\n");
+
+    expect(await discoverTestCommand(dir)).toBe(null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: composite watch script is dropped, never rewritten", async () => {
+  const dir = await tempDir();
+
+  try {
+    // Appending `run` would land on the LAST command: `tsc --noEmit run`, which
+    // fails on a phantom file named `run`.
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest && tsc --noEmit" } })
+    );
+    await writeFile(join(dir, "a.test.ts"), "export const x = 1;\n");
+
+    expect(await discoverTestCommand(dir)).toBe(null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: watch test:ci falls through to the test script", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", "test:ci": "vitest --watch" },
+      })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("discoverTestCommand: prefers test:ci over watch vitest", async () => {
   const dir = await tempDir();
 

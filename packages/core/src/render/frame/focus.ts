@@ -32,18 +32,17 @@ export class PaneFocus {
       this.panel = "visibleUnfocused";
     }
 
-    if (!hasItems) {
-      if (this.panel !== "hidden") {
-        this.panel = "hidden";
+    if (!hasItems && this.panel !== "hidden") {
+      this.panel = "hidden";
 
-        if (this.active === "panel") {
-          this.active = "prompt";
-        }
+      if (this.active === "panel") {
+        this.active = "prompt";
       }
-
-      // Empty worklist: clear collapse so the landing rail can show again.
-      this.userCollapsed = false;
     }
+
+    // userCollapsed is NOT cleared here. Content sync runs on every panel
+    // repaint (spinner ticks included), so clearing it would un-hide the rail
+    // within a frame of the user pressing Ctrl+G. Only Ctrl+G clears it.
   }
 
   focusPrompt(): FocusAction {

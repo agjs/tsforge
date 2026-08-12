@@ -9,6 +9,7 @@ import type { FileLinter } from "../gate";
 import {
   makeFileLinter,
   isWorkspaceContainer,
+  makeWorkspaceFileLinter,
   runWorkspaceContainerGate,
 } from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
@@ -913,6 +914,37 @@ function rebuildTaskContract(
       : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
 }
 
+/** Gate identity for a workspace-container cycle: the packs that actually ran, over the
+ *  packages that ran them — without this the failure feedback claims `Packs: (none)`
+ *  while the per-package gates were enforcing a full pack set. */
+function workspaceProfile(label: string, packs: string[]): IStackProfile {
+  return {
+    name: `workspace: ${label}`,
+    packs,
+    confidence: "certain",
+    reason: `per-package gates: ${label}`,
+  };
+}
+
+/** Announce packs that just activated, so the model learns the gate got stricter and
+ *  why. Shared by both gate paths (stack re-detection and per-package workspace gates);
+ *  silent on the first cycle, when there is no previous pack set to have grown from. */
+function notePackActivation(
+  ctx: ILoopCtx,
+  prevPacks: string[] | null,
+  packs: string[]
+): void {
+  if (prevPacks === null || !packsGrew(prevPacks, packs)) {
+    return;
+  }
+
+  const activated = newlyActivatedPacks(prevPacks, packs);
+  const notice = formatPackActivationNotice(packs, activated);
+
+  ctx.messages.push({ role: "user", content: notice });
+  ctx.report({ kind: "tool", task: ctx.task.id, message: notice });
+}
+
 /** Build the AUTO-gate runner: a gate that RE-DETECTS the stack each cycle — refreshing
  *  `ctx.task.accept` (run by validate), the stack profile, the task-contract Check:, and
  *  the per-write linter — so a greenfield build enables framework rule-packs once its
@@ -928,6 +960,7 @@ function makeAutoGateRunner(
 ): { runner: IGate; state: { active: boolean } } {
   const state = { active: true };
   let prevPacks: string[] | null = null;
+  let workspaceLint: FileLinter | null = null;
   const runner: IGate = {
     async run(cwd, opts) {
       // F19: external plugins are frozen at session start; a mid-session edit of
@@ -938,7 +971,12 @@ function makeAutoGateRunner(
 
       // Multi-repo workspace root: gate only packages the model touched.
       if (isWorkspaceContainer(cwd)) {
-        const { result, acceptSummary } = await runWorkspaceContainerGate(
+        // One router for the whole session — each package's eslint engine is
+        // built once inside it, so per-write linting isn't lost in this mode.
+        workspaceLint ??= makeWorkspaceFileLinter(cwd);
+        ctx.gate.lintFile = workspaceLint;
+
+        const run = await runWorkspaceContainerGate(
           cwd,
           ctx.task,
           ctx.tool.touched ?? [],
@@ -946,10 +984,20 @@ function makeAutoGateRunner(
           opts ?? {}
         );
 
-        ctx.task.accept = acceptSummary;
+        // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
+        // --continue / a /clear rebuild, so a display label would run as a command.
+        ctx.task.accept = run.accept;
         rebuildTaskContract(ctx, offerCheck);
 
-        return result;
+        if (run.packs.length > 0) {
+          const packs = sortedPacks(run.packs);
+
+          ctx.gate.stackProfile = workspaceProfile(run.label, packs);
+          notePackActivation(ctx, prevPacks, packs);
+          prevPacks = packs;
+        }
+
+        return run.result;
       }
 
       if (state.active) {
@@ -959,19 +1007,7 @@ function makeAutoGateRunner(
         ctx.task.accept = r.command;
         ctx.gate.stackProfile = r.stackProfile;
         rebuildTaskContract(ctx, offerCheck);
-
-        if (packsGrew(prevPacks, packs) && prevPacks !== null) {
-          const activated = newlyActivatedPacks(prevPacks, packs);
-          const notice = formatPackActivationNotice(packs, activated);
-
-          ctx.messages.push({ role: "user", content: notice });
-          ctx.report({
-            kind: "tool",
-            task: ctx.task.id,
-            message: notice,
-          });
-        }
-
+        notePackActivation(ctx, prevPacks, packs);
         prevPacks = packs;
 
         if (r.lintFile !== undefined) {

@@ -74,15 +74,24 @@ describe("PaneFocus", () => {
     expect(f.selection).toBe(3);
   });
 
-  test("syncHasItems hides panel when emptied and clears userCollapsed", () => {
+  test("emptied worklist hides the panel but keeps a user collapse", () => {
     const f = new PaneFocus();
 
     f.syncHasItems(true);
     f.togglePanel(true);
     expect(f.userCollapsed).toBe(true);
+
+    // Content sync runs on every panel repaint (spinner ticks included), so an
+    // empty worklist must not un-hide the rail the user just collapsed.
+    f.syncHasItems(false);
     f.syncHasItems(false);
     expect(f.panel).toBe("hidden");
     expect(f.active).toBe("prompt");
+    expect(f.userCollapsed).toBe(true);
+
+    // Ctrl+G is the only way back.
+    expect(f.togglePanel(false)).toBe("changed");
+    expect(f.panel).toBe("visibleUnfocused");
     expect(f.userCollapsed).toBe(false);
   });
 });
