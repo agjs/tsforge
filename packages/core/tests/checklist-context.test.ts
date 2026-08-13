@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
 import { Session } from "../src/loop";
-import { isChecklistTreeInject } from "../src/loop/harness-inject";
+import {
+  isChecklistTreeInject,
+  isChecklistSnapshot,
+} from "../src/loop/harness-inject";
 import {
   doTaskAdd,
   doTaskFocus,
@@ -87,14 +90,19 @@ describe("checklist context (no per-turn append)", () => {
 
       expect(treeInjects).toHaveLength(0);
 
+      // The tree is APPENDED, never spliced into the system message: editing
+      // index 0 discards the whole server-side prefix cache.
       const system = session.messages[0];
 
       expect(system?.role).toBe("system");
-      expect(system?.content ?? "").toContain("## Active plan checklist");
-      expect(system?.content ?? "").toContain("Create notes.ts");
-      expect(
-        (system?.content ?? "").split("## Active plan checklist").length - 1
-      ).toBe(1);
+      expect(system?.content ?? "").not.toContain("## Active plan checklist");
+
+      const snapshots = session.messages.filter((m) => isChecklistSnapshot(m));
+
+      // An unchanged tree appends nothing, so a multi-turn drive holds exactly
+      // one snapshot — the per-turn inject stays gone.
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.content ?? "").toContain("Create notes.ts");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -143,9 +151,12 @@ describe("checklist context (no per-turn append)", () => {
         session.messages.filter((m) => isChecklistTreeInject(m))
       ).toHaveLength(0);
       expect(session.messages.some((m) => m.content === "continue")).toBe(true);
-      expect(session.messages[0]?.content ?? "").toContain(
+      expect(session.messages[0]?.content ?? "").not.toContain(
         "## Active plan checklist"
       );
+      expect(
+        session.messages.filter((m) => isChecklistSnapshot(m))
+      ).toHaveLength(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

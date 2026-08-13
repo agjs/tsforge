@@ -68,12 +68,15 @@ import {
   sortedPacks,
   summarizeGateCommand,
 } from "./gate-visibility";
-import { isChecklistTreeInject } from "./harness-inject";
+import {
+  isChecklistTreeInject,
+  isChecklistSnapshot,
+  CHECKLIST_SNAPSHOT_MARKER,
+} from "./harness-inject";
 import {
   autoCompactPct as compactThresholdPct,
   compactConversation,
   compactSummaryLine,
-  pruneEphemeralToolResidue,
   scrubLegacyWriteArgStubs,
 } from "./context-hygiene";
 import {
@@ -485,7 +488,8 @@ export const PLAN_APPROVED_NOTE =
   "(vertical slices in the order approved). Implement now: task_focus the first " +
   "open item, then emit the tool calls. Do not re-explore or restate the plan.";
 
-const CHECKLIST_CONTRACT_MARKER = "## Active plan checklist";
+/** Shared with `isChecklistSnapshot` so the writer and the detector cannot drift. */
+const CHECKLIST_CONTRACT_MARKER = CHECKLIST_SNAPSHOT_MARKER;
 
 /** Post-green nudge when the gate is clean but the bound plan still has open nodes. */
 export function checklistOpenNudge(opts: {
@@ -1226,6 +1230,11 @@ export class Session {
     // first model call — they must not sit in context forever.
     this.pruneChecklistTreeInjects();
 
+    // Histories written while the checklist lived in the system message carry a
+    // stale copy of it. Lift it out here, at construction, so the live tree is
+    // only ever the appended snapshot — and so index 0 is never touched again.
+    this.stripLegacyChecklistFromSystem();
+
     // `--continue` used to revive contentMeta stubs; scrub before first call.
     scrubLegacyWriteArgStubs(this.ctx.messages);
 
@@ -1757,36 +1766,60 @@ export class Session {
     }
   }
 
-  /** System block: live plan tree + tools-only status reminder (replace in place). */
+  /**
+   * Append the live plan tree when — and only when — it has changed.
+   *
+   * This block used to be spliced into the SYSTEM message. That put the live
+   * task statuses at byte one of the prompt, so every `task_focus` /
+   * `task_complete` rewrote index 0 and threw away the WHOLE prefix cache:
+   * measured on the Spark box at 130k tokens, an unchanged-prefix turn prefills
+   * in 592ms and a one-checkbox change in 92,787ms. Appending keeps the prefix
+   * byte-identical, so an unchanged turn stays a cache hit and a changed turn
+   * only prefills the new snapshot.
+   *
+   * Unchanged trees append nothing, so this does NOT reintroduce the per-turn
+   * inject that `isChecklistTreeInject` was written to clean up. Superseded
+   * snapshots are dropped at compaction, where the prefix is rebuilt anyway.
+   */
   private refreshChecklistContract(): void {
-    this.pruneChecklistTreeInjects();
+    const block = this.checklistContractText();
 
+    if (block.length === 0) {
+      return;
+    }
+
+    for (let i = this.ctx.messages.length - 1; i >= 0; i -= 1) {
+      const m = this.ctx.messages[i];
+
+      if (m !== undefined && isChecklistSnapshot(m)) {
+        if (m.content === block) {
+          return;
+        }
+
+        break;
+      }
+    }
+
+    this.ctx.messages.push({ role: "user", content: block });
+  }
+
+  /**
+   * One-time migration for histories written while the checklist lived in the
+   * system message. Runs at construction, before any model call, so the rewrite
+   * costs nothing — there is no cached prefix to lose yet.
+   */
+  private stripLegacyChecklistFromSystem(): void {
     const system = this.ctx.messages[0];
 
     if (system?.role !== "system") {
       return;
     }
 
-    const block = this.checklistContractText();
     const idx = system.content.indexOf(CHECKLIST_CONTRACT_MARKER);
-    const previous = idx === -1 ? "" : system.content.slice(idx).trimEnd();
 
-    if (block.length === 0) {
-      if (idx !== -1) {
-        system.content = system.content.slice(0, idx).trimEnd();
-      }
-
-      return;
+    if (idx !== -1) {
+      system.content = system.content.slice(0, idx).trimEnd();
     }
-
-    if (previous === block) {
-      return;
-    }
-
-    system.content =
-      idx === -1
-        ? `${system.content}\n\n${block}`
-        : `${system.content.slice(0, idx).trimEnd()}\n\n${block}`;
   }
 
   private checklistContractText(): string {
@@ -2314,9 +2347,6 @@ export class Session {
     }
 
     ctx.messages.push(assistantMessage(res));
-    // Age prior create/edit bodies once a newer assistant turn exists (must run
-    // after push — start-of-turn prune alone never sees the just-added message).
-    pruneEphemeralToolResidue(ctx.messages);
 
     // Every model call advances TTSR cooldown accounting (including interrupted
     // ones, so repeatGap rules count correctly after a retry).
@@ -3538,11 +3568,14 @@ export class Session {
       // Inject any messages the user typed while the run was in flight, so they
       // steer the next model turn instead of waiting for the run to finish.
       this.injectSteer(opts.steer);
-      // Compact bound-plan tree so every turn sees current checklist status.
+      // Append the bound-plan tree when it changed, so every turn sees current
+      // checklist status without rewriting the prompt prefix.
       this.injectPlanTree();
-      // Mid-drive hygiene: drop stale read dumps / superseded write-guards, then
-      // auto-compact if the last call's prompt tokens crossed the window threshold.
-      pruneEphemeralToolResidue(this.ctx.messages);
+      // History hygiene (stale read dumps, superseded write-guards) is NOT run
+      // per turn: rewriting a message the model already sent invalidates the
+      // server's prefix cache from that point, which costs far more prefill than
+      // the tokens it reclaims. It runs inside compaction instead, where the
+      // prefix is being rebuilt regardless.
       await this.maybeAutoCompact(opts.signal);
 
       report({

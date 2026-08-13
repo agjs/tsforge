@@ -9,7 +9,7 @@
 import type { IChatMessage, IProvider } from "../inference";
 import { TOOL_NAME } from "../agent/agent.constants";
 import { COMPACT_SYSTEM } from "./prompt";
-import { isGateFeedbackInject } from "./harness-inject";
+import { isGateFeedbackInject, isChecklistSnapshot } from "./harness-inject";
 
 /**
  * Max unique file paths that keep a live `read` dump in history. Oldest paths
@@ -482,6 +482,39 @@ export function autoCompactPct(
 }
 
 /**
+ * Keep only the newest appended checklist snapshot.
+ *
+ * The live plan tree is appended rather than spliced into the system message,
+ * so a long session accumulates superseded copies. Only the newest is
+ * authoritative; the rest are dropped here, at the one point where editing
+ * history costs nothing extra.
+ */
+function dropSupersededSnapshots(messages: IChatMessage[]): void {
+  let newest = -1;
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+
+    if (m !== undefined && isChecklistSnapshot(m)) {
+      newest = i;
+      break;
+    }
+  }
+
+  if (newest < 0) {
+    return;
+  }
+
+  for (let i = newest - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+
+    if (m !== undefined && isChecklistSnapshot(m)) {
+      messages.splice(i, 1);
+    }
+  }
+}
+
+/**
  * What a message really costs the context.
  *
  * `content` alone undercounts an assistant turn badly: create/edit tool-call
@@ -583,6 +616,14 @@ export async function compactConversation(
 ): Promise<ICompactResult> {
   const before = messages.length;
   const totalChars = messages.reduce((sum, m) => sum + messageChars(m), 0);
+
+  // Compaction is the ONE point where rewriting history is free: the prefix is
+  // being rebuilt regardless, so the prefix-cache invalidation every one of
+  // these edits causes is already paid for. Running them per turn instead costs
+  // a full cold prefill to reclaim tokens the cache was serving for ~nothing.
+  dropSupersededSnapshots(messages);
+  pruneEphemeralToolResidue(messages);
+
   const prunedChars = pruneOversizedToolResults(messages);
 
   if (

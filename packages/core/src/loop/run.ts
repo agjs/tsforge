@@ -12,7 +12,6 @@ import {
   autoCompactPct,
   compactConversation,
   compactSummaryLine,
-  pruneEphemeralToolResidue,
 } from "./context-hygiene";
 import {
   validate,
@@ -926,7 +925,7 @@ async function runMainLoop(args: {
       });
     }
 
-    pruneEphemeralToolResidue(args.messages);
+    // Hygiene runs inside compaction, not per turn — see compactConversation.
     const didCompact = await maybeHeadlessAutoCompact({
       messages: args.messages,
       ctx: args.ctx,
@@ -1017,7 +1016,6 @@ async function runMainLoop(args: {
     // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)
     // tool_calls so the history has no dangling `tool_calls` (strict APIs 400 otherwise).
     args.messages.push(assistantMessage(res));
-    pruneEphemeralToolResidue(args.messages);
 
     // Every model call advances cooldown accounting — including interrupted
     // ones, otherwise repeatGap rules mis-count after a TTSR retry.
