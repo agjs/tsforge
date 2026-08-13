@@ -53,3 +53,14 @@ export {
   type IDecisionMemoryLoad,
   type IDecisionMemoryLoadDeps,
 } from "./load-at-start";
+export {
+  extractDecisions,
+  parseExtractedDecisions,
+  lastAssistantContent,
+  capExtractText,
+  EXTRACT_DECISIONS_SYSTEM,
+  EXTRACT_USER_CAP,
+  EXTRACT_ASSISTANT_CAP,
+  EXTRACT_DECISION_TIMEOUT_MS,
+  MAX_DECISIONS_PER_TURN,
+} from "./extract-decisions";

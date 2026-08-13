@@ -6,7 +6,13 @@ import {
 } from "../loop/memory";
 import type { Session } from "../loop/session";
 
-/** `/memory` and `/memory forget` — Phase 1 TTSR lessons + optional decision bank. */
+/** Minimal surface `/remember` needs — keeps tests free of Session casts. */
+export interface IRememberTarget {
+  decisionMemoryBankId(): string | null;
+  rememberDecision(text: string): Promise<boolean>;
+}
+
+/** `/memory`, `/memory forget`, `/remember <text>` — TTSR + decision bank. */
 export async function runMemorySlashCommand(
   cwd: string,
   session: Session,
@@ -35,7 +41,43 @@ export async function runMemorySlashCommand(
 
   write("  project decisions (external provider):\n");
   writeDecisionMemory(bankId, decisions, write);
-  write("  /memory forget to clear\n");
+  write("  /remember <decision> to retain · /memory forget to clear\n");
+}
+
+/**
+ * `/remember <text>` — explicitly retain a durable product/architecture
+ * decision into the configured bank.
+ */
+export async function runRememberSlashCommand(
+  session: IRememberTarget,
+  arg: string,
+  write: (text: string) => void
+): Promise<void> {
+  const text = arg.trim();
+
+  if (text.length === 0) {
+    write("  usage: /remember <product or architecture decision>\n");
+
+    return;
+  }
+
+  if (session.decisionMemoryBankId() === null) {
+    write(
+      "  decision memory not configured — set providers.memory in tsforge.config.json\n"
+    );
+
+    return;
+  }
+
+  const ok = await session.rememberDecision(text);
+
+  if (!ok) {
+    write("  could not retain that decision\n");
+
+    return;
+  }
+
+  write(`  remembered in bank ${session.decisionMemoryBankId() ?? "?"}\n`);
 }
 
 function writeCodingLessons(

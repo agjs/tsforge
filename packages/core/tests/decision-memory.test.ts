@@ -531,49 +531,81 @@ describe("decisionBriefBlock", () => {
   });
 });
 
-describe("retainPrompts config", () => {
+describe("autoRetain config", () => {
   // The parsed config carries ONLY the opt-out; `undefined` means the default
   // (enabled), which is what the session reads as `!== false`.
-  test("absent flag leaves retention at the default (enabled)", () => {
+  test("absent flag leaves auto retain at the default (enabled)", () => {
     const cfg = parseMemoryProviderConfig({
       kind: "http",
       baseUrl: "http://localhost:8888",
     });
 
-    expect(cfg?.retainPrompts).toBeUndefined();
-    expect(cfg?.retainPrompts !== false).toBe(true);
+    expect(cfg?.autoRetain).toBeUndefined();
+    expect(cfg?.autoRetain !== false).toBe(true);
   });
 
-  test("only an explicit boolean false opts out", () => {
+  test("autoRetain: false opts out; true is treated as default", () => {
     const on = parseMemoryProviderConfig({
       kind: "http",
       baseUrl: "http://localhost:8888",
-      retainPrompts: true,
+      autoRetain: true,
     });
+    const off = parseMemoryProviderConfig({
+      kind: "http",
+      baseUrl: "http://localhost:8888",
+      autoRetain: false,
+    });
+    const junk = parseMemoryProviderConfig({
+      kind: "http",
+      baseUrl: "http://localhost:8888",
+      autoRetain: "yes",
+    });
+
+    expect(on?.autoRetain).toBeUndefined();
+    expect(off?.autoRetain).toBe(false);
+    expect(junk?.autoRetain).toBeUndefined();
+  });
+
+  test("legacy retainPrompts: false still opts out", () => {
     const off = parseMemoryProviderConfig({
       kind: "http",
       baseUrl: "http://localhost:8888",
       retainPrompts: false,
     });
-    const junk = parseMemoryProviderConfig({
+
+    expect(off?.autoRetain).toBe(false);
+  });
+
+  test("legacy retainPrompts: true is obsolete and does not opt out", () => {
+    const on = parseMemoryProviderConfig({
       kind: "http",
       baseUrl: "http://localhost:8888",
-      retainPrompts: "yes",
+      retainPrompts: true,
     });
 
-    expect(on?.retainPrompts).toBeUndefined();
-    expect(off?.retainPrompts).toBe(false);
-    // Malformed falls back to the default rather than silently disabling.
-    expect(junk?.retainPrompts).toBeUndefined();
+    expect(on?.autoRetain).toBeUndefined();
+    expect(on?.autoRetain !== false).toBe(true);
   });
 
   test("mcp config carries the opt-out too", () => {
     const cfg = parseMemoryProviderConfig({
       kind: "mcp",
       server: "hindsight",
-      retainPrompts: false,
+      autoRetain: false,
     });
 
-    expect(cfg?.retainPrompts).toBe(false);
+    expect(cfg?.autoRetain).toBe(false);
+  });
+});
+
+describe("buildDecisionRetainText session channel", () => {
+  test("session decisions are labeled, not raw prompt dumps", () => {
+    const text = buildDecisionRetainText({
+      kind: "session",
+      summary: "Company FK is a native select",
+    });
+
+    expect(text).toBe("Session decision: Company FK is a native select");
+    expect(text).not.toContain("Your plan is APPROVED");
   });
 });

@@ -57,6 +57,7 @@ const COMMAND_TO_GROUP: Readonly<Record<string, string>> = {
   "/metrics": SESSION_AND_COST,
   "/trace": SESSION_AND_COST,
   "/memory": SESSION_AND_COST,
+  "/remember": SESSION_AND_COST,
 };
 
 // ── Builders ─────────────────────────────────────────────────────────────────

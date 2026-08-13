@@ -20,28 +20,56 @@ function optionalString(value: unknown): string | undefined {
 }
 
 /**
- * `retainPrompts` — ON unless explicitly `false`.
+ * `autoRetain` — ON unless explicitly `false`.
  *
  * Only the opt-out is carried on the parsed config; `undefined` means default
- * (on), so a malformed value falls back to the default rather than silently
- * disabling retention.
+ * (on). Legacy `retainPrompts: false` still opts out; `retainPrompts: true` is
+ * obsolete (raw prompt dump removed) and is ignored with a warning.
  */
-function retainPromptsFlag(raw: Record<string, unknown>): boolean | undefined {
-  const value = raw.retainPrompts;
+function autoRetainFlag(raw: Record<string, unknown>): boolean | undefined {
+  const auto = raw.autoRetain;
 
-  if (value === undefined) {
-    return undefined;
+  if (typeof auto === "boolean") {
+    return auto ? undefined : false;
   }
 
-  if (typeof value !== "boolean") {
+  if (auto !== undefined) {
     warnProviders(
-      `tsforge.config.json: providers.memory.retainPrompts must be a boolean — got ${JSON.stringify(value)} (using the default: enabled)`
+      `tsforge.config.json: providers.memory.autoRetain must be a boolean — got ${JSON.stringify(auto)} (using the default: enabled)`
+    );
+  }
+
+  const legacy = raw.retainPrompts;
+
+  if (legacy === false) {
+    return false;
+  }
+
+  if (legacy === true) {
+    warnProviders(
+      "tsforge.config.json: providers.memory.retainPrompts is obsolete (raw prompt retain removed); use autoRetain (default on) or autoRetain: false to opt out"
     );
 
     return undefined;
   }
 
-  return value ? undefined : false;
+  if (legacy !== undefined) {
+    warnProviders(
+      `tsforge.config.json: providers.memory.retainPrompts must be a boolean — got ${JSON.stringify(legacy)} (using the default: enabled)`
+    );
+  }
+
+  return undefined;
+}
+
+function retentionFields(raw: Record<string, unknown>): { autoRetain?: false } {
+  const autoRetain = autoRetainFlag(raw);
+
+  if (autoRetain === false) {
+    return { autoRetain: false };
+  }
+
+  return {};
 }
 
 function parseHttpMemory(
@@ -58,13 +86,12 @@ function parseHttpMemory(
   }
 
   const bankId = optionalString(raw.bankId);
-  const retainPrompts = retainPromptsFlag(raw);
 
   return {
     kind: "http",
     baseUrl,
     ...(bankId === undefined ? {} : { bankId }),
-    ...(retainPrompts === undefined ? {} : { retainPrompts }),
+    ...retentionFields(raw),
   };
 }
 
@@ -86,12 +113,11 @@ function parseMcpMemory(
   const recallTool = optionalString(raw.recallTool);
   const forgetTool = optionalString(raw.forgetTool);
   const listTool = optionalString(raw.listTool);
-  const retainPrompts = retainPromptsFlag(raw);
 
   return {
     kind: "mcp",
     server,
-    ...(retainPrompts === undefined ? {} : { retainPrompts }),
+    ...retentionFields(raw),
     ...(bankId === undefined ? {} : { bankId }),
     ...(retainTool === undefined ? {} : { retainTool }),
     ...(recallTool === undefined ? {} : { recallTool }),

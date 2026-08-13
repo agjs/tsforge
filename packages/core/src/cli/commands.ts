@@ -80,6 +80,11 @@ export const COMMANDS: readonly ICommandSpec[] = [
     summary: "show coding lessons + project decisions (forget to clear)",
   },
   {
+    name: "/remember",
+    arg: "<decision>",
+    summary: "retain a product/architecture decision to the memory bank",
+  },
+  {
     name: "/config",
     summary: "settings hub: model, mode, gate, tools",
   },

@@ -110,8 +110,11 @@ import {
   loadDecisionMemoryAtStart,
   decisionBriefBlock,
   buildDecisionRetainText,
+  extractDecisions,
+  lastAssistantContent,
   withDeadline,
   MEMORY_REQUEST_TIMEOUT_MS,
+  EXTRACT_DECISION_TIMEOUT_MS,
   type ICandidateLesson,
   type IMemoryProvider,
 } from "./memory";
@@ -1137,9 +1140,12 @@ export class Session {
   private readonly offerCheckActive: boolean;
   /** Optional pluggable decision-memory provider (HTTP/MCP). Null when unset. */
   private decisionMemory: IMemoryProvider | null = null;
-  /** `providers.memory.retainPrompts` — on unless opted out; see retainDecisionAfterGreen. */
-  private retainPrompts = true;
-  /** Last user send text — used to curate a retain summary when the gate goes green. */
+  /**
+   * `providers.memory.autoRetain` — on unless opted out. After a green send,
+   * extract durable product/architecture decisions (never the raw prompt).
+   */
+  private autoRetain = true;
+  /** Last user send text — fed to the decision extractor after a green send. */
   private lastUserPrompt = "";
 
   private constructor(
@@ -1440,8 +1446,7 @@ export class Session {
     const session = new Session(cfg, ctx, autoGateState);
 
     session.decisionMemory = decisionMemory;
-    session.retainPrompts =
-      projectConfig.providers?.memory?.retainPrompts !== false;
+    session.autoRetain = projectConfig.providers?.memory?.autoRetain !== false;
 
     // Build the TTSR manager (built-in + project + memory-learned rules) so the
     // interactive loop gets the SAME mid-stream guidance the headless loop does —
@@ -3077,7 +3082,8 @@ export class Session {
       );
 
       if (result.status === "done") {
-        await this.retainDecisionAfterGreen();
+        // Fire-and-forget: extract + retain must not block the REPL.
+        this.retainDecisionAfterGreen();
       }
 
       return result;
@@ -3173,36 +3179,72 @@ export class Session {
   }
 
   /**
-   * After a green send, retain the user's request (best-effort). On unless
-   * `providers.memory.retainPrompts` is set to `false`.
-   *
-   * This is the raw prompt rather than a curated decision, so it can carry
-   * pasted logs, snippets and customer data — redaction only strips
-   * secret-SHAPED text. That is the deliberate trade: without this channel the
-   * bank only ever fills from greenfield runs, and ordinary sessions teach it
-   * nothing.
+   * Explicit curated retain (`/remember`). Returns false when memory is not
+   * configured or the text is empty after trim.
    */
-  private async retainDecisionAfterGreen(): Promise<void> {
-    if (!this.retainPrompts) {
-      return;
+  async rememberDecision(text: string): Promise<boolean> {
+    if (this.decisionMemory === null) {
+      return false;
     }
 
-    const summary = this.lastUserPrompt.trim().slice(0, 500);
-
-    if (summary.length === 0) {
-      return;
-    }
-
-    const text = buildDecisionRetainText({
+    const curated = buildDecisionRetainText({
       kind: "session",
-      summary,
+      summary: text,
     });
 
-    if (text === null) {
+    if (curated === null) {
+      return false;
+    }
+
+    await this.retainDecision(curated);
+
+    return true;
+  }
+
+  /**
+   * After a green send, extract durable product/architecture decisions and
+   * retain them (best-effort, non-blocking). On unless
+   * `providers.memory.autoRetain` is set to `false`.
+   *
+   * Never dumps the raw user prompt — that filled banks with harness chatter.
+   */
+  private retainDecisionAfterGreen(): void {
+    if (!this.autoRetain || this.decisionMemory === null) {
       return;
     }
 
-    await this.retainDecision(text);
+    const userText = this.lastUserPrompt;
+    const assistantText = lastAssistantContent(this.ctx.messages);
+
+    void this.runExtractAndRetain(userText, assistantText);
+  }
+
+  private async runExtractAndRetain(
+    userText: string,
+    assistantText: string
+  ): Promise<void> {
+    try {
+      const decisions = await withDeadline(
+        extractDecisions(this.provider, userText, assistantText),
+        [],
+        EXTRACT_DECISION_TIMEOUT_MS
+      );
+
+      for (const decision of decisions) {
+        const text = buildDecisionRetainText({
+          kind: "session",
+          summary: decision,
+        });
+
+        if (text === null) {
+          continue;
+        }
+
+        await this.retainDecision(text);
+      }
+    } catch (err) {
+      trace("session.decision-memory.extract", err);
+    }
   }
 
   /** The `ttsrManager` completion option, or nothing when TTSR is off. */
