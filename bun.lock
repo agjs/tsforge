@@ -47,7 +47,7 @@
     },
     "apps/docs": {
       "name": "@tsforge/docs",
-      "version": "0.37.0",
+      "version": "0.38.0",
       "dependencies": {
         "@astrojs/react": "6.0.2",
         "@astrojs/sitemap": "3.7.3",
@@ -69,7 +69,7 @@
     },
     "packages/core": {
       "name": "@agjs/tsforge",
-      "version": "0.37.0",
+      "version": "0.38.0",
       "bin": {
         "tsforge": "./bin/tsforge.js",
       },
@@ -103,6 +103,7 @@
     "dompurify": "^3.4.13",
     "esbuild": "^0.28.1",
     "js-yaml": "4.3.1",
+    "nanoid": "^3.3.18",
     "postcss": "^8.5.23",
     "sharp": "^0.35.3",
     "svgo": "^4.0.2",
@@ -1718,7 +1719,7 @@
 
     "mz": ["mz@2.7.0", "", { "dependencies": { "any-promise": "^1.0.0", "object-assign": "^4.0.1", "thenify-all": "^1.0.0" } }, "sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q=="],
 
-    "nanoid": ["nanoid@3.3.17", "", { "bin": { "nanoid": "bin/nanoid.cjs" } }, "sha512-xQLf0A3HOMlgHq0n247/LRuAOYmB7dXJ/DvAxGvsSBij45XtBSmQycu+F8ODbHwns/XyFZagyL1+J0Offw1E0g=="],
+    "nanoid": ["nanoid@3.3.18", "", { "bin": { "nanoid": "bin/nanoid.cjs" } }, "sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w=="],
 
     "napi-postinstall": ["napi-postinstall@0.3.4", "", { "bin": { "napi-postinstall": "lib/cli.js" } }, "sha512-PHI5f1O0EP5xJ9gQmFGMS6IZcrVvTjpXjz7Na41gTE7eE2hK11lg04CECCYEEjdc17EV4DO+fkGEtt7TpTaTiQ=="],
 
