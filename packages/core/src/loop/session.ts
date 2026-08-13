@@ -1800,7 +1800,18 @@ export class Session {
       }
     }
 
-    this.ctx.messages.push({ role: "user", content: block });
+    // Land the snapshot BEFORE any trailing human turn, so the request stays the
+    // last thing the model reads — appending after it buried the ask under a
+    // checklist and changed how the model answered. Splicing at the tail rewrites
+    // only that final message, which the cache serves for next to nothing; it is
+    // the PREFIX that must not move.
+    let at = this.ctx.messages.length;
+
+    while (at > 0 && this.ctx.messages[at - 1]?.role === "user") {
+      at -= 1;
+    }
+
+    this.ctx.messages.splice(at, 0, { role: "user", content: block });
   }
 
   /**
