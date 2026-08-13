@@ -6,4 +6,28 @@ export {
   formatFiles,
   prettierWriteCommand,
 } from "./linter";
-export { discoverTestCommand } from "./test-discovery";
+export { discoverTestCommand, isWatchTestScript } from "./test-discovery";
+export {
+  isWorkspaceContainer,
+  listChildPackageRoots,
+  activePackageRoots,
+  owningPackageRoot,
+  packageLabel,
+  unpackagedCodePaths,
+} from "./workspace-root";
+export {
+  runWorkspaceContainerGate,
+  makeWorkspaceFileLinter,
+  packageRelativeTouched,
+  relocatePackageError,
+} from "./workspace-gate";
+export type { IWorkspaceGateRun, IWorkspaceGateOpts } from "./workspace-gate";
+export type {
+  IPackageGatePolicy,
+  IPackageGateCaptureOpts,
+} from "./package-gate-policy";
+export {
+  capturePackageGatePolicy,
+  resolvePackageGate,
+  packageLintPacks,
+} from "./package-gate-policy";

@@ -7,6 +7,7 @@ import {
   buildGate,
   makeFileLinter,
   discoverTestCommand,
+  isWatchTestScript,
   buildCoreFix,
   formatFile,
 } from "../src/gate";
@@ -139,6 +140,168 @@ test("discoverTestCommand: real test script → bun run test", async () => {
     );
 
     expect(await discoverTestCommand(dir)).toBe("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("isWatchTestScript: bare vitest / --watch hang; vitest run does not", () => {
+  expect(isWatchTestScript("vitest")).toBe(true);
+  expect(isWatchTestScript("vitest --coverage")).toBe(true);
+  expect(isWatchTestScript("vitest --watch")).toBe(true);
+  expect(isWatchTestScript("jest --watch")).toBe(true);
+  expect(isWatchTestScript("vitest run")).toBe(false);
+  expect(isWatchTestScript("vitest run --coverage")).toBe(false);
+  expect(isWatchTestScript("jest")).toBe(false);
+});
+
+test("isWatchTestScript: sees through package runners and --watch=false", () => {
+  // A runner prefix does not make watch mode one-shot.
+  expect(isWatchTestScript("npx vitest")).toBe(true);
+  expect(isWatchTestScript("pnpm vitest --coverage")).toBe(true);
+  expect(isWatchTestScript("pnpm exec vitest")).toBe(true);
+  expect(isWatchTestScript("pnpm exec vitest run")).toBe(false);
+  expect(isWatchTestScript("bunx vitest")).toBe(true);
+  expect(isWatchTestScript("npx vitest run")).toBe(false);
+  // Explicit opt-out is one-shot.
+  expect(isWatchTestScript("vitest --watch=false")).toBe(false);
+  expect(isWatchTestScript("jest --watchAll=false")).toBe(false);
+  expect(isWatchTestScript("jest --watchAll")).toBe(true);
+});
+
+test("discoverTestCommand: runner-prefixed watch vitest is made one-shot", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "npx vitest --coverage" } })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test -- run");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: --watch script is dropped, never rewritten", async () => {
+  const dir = await tempDir();
+
+  try {
+    // `bun run test -- run` would yield `jest --watch run`: still watching, so
+    // the gate would hang forever. Dropping tests is the only safe answer, and
+    // `bun test` is not a substitute for another runner's suites.
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "jest --watch" } })
+    );
+    await writeFile(join(dir, "a.test.ts"), "export const x = 1;\n");
+
+    expect(await discoverTestCommand(dir)).toBe(null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: composite watch script is dropped, never rewritten", async () => {
+  const dir = await tempDir();
+
+  try {
+    // Appending `run` would land on the LAST command: `tsc --noEmit run`, which
+    // fails on a phantom file named `run`.
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest && tsc --noEmit" } })
+    );
+    await writeFile(join(dir, "a.test.ts"), "export const x = 1;\n");
+
+    expect(await discoverTestCommand(dir)).toBe(null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: watch test:ci falls through to the test script", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", "test:ci": "vitest --watch" },
+      })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: prefers test:ci over watch vitest", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest", "test:ci": "vitest run" },
+      })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test:ci");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: watch vitest → bun run test -- run", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest" } })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test -- run");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: workspace container → null (no whole-tree tests)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "app"));
+    await writeFile(
+      join(dir, "app", "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } })
+    );
+    await writeFile(join(dir, "app", "a.test.ts"), "export const x = 1;\n");
+
+    expect(await discoverTestCommand(dir)).toBe(null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildGate: workspace container → no-op true (package-follow owns gates)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "pkg-a"));
+    await writeFile(
+      join(dir, "pkg-a", "package.json"),
+      JSON.stringify({ name: "pkg-a" })
+    );
+
+    const gate = await buildGate(dir);
+
+    expect(gate.command).toBe("true");
+    expect(gate.label).toContain("workspace container");
+    expect(gate.command).not.toContain("eslint");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

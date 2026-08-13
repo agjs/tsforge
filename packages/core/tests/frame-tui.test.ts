@@ -1188,13 +1188,60 @@ describe("PaneScreen", () => {
     expect(out).toContain(CLEAR_SCREEN);
   });
 
-  test("Ctrl+G focuses panel; Esc restores prompt focus", () => {
+  test("Ctrl+G hides Tasks rail; second Ctrl+G restores it", () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);
 
     panes.enter();
     panes.setPanel(["worklist  0/2", "[>] First", "[ ] Second"]);
+    expect(panes.focusState.panel).toBe("visibleUnfocused");
+    const withRail = panes.mainInnerCols();
+
     expect(panes.handleKey("\x07")).toBe("handled");
+    expect(panes.focusState.panel).toBe("hidden");
+    expect(panes.focusState.userCollapsed).toBe(true);
+    expect(panes.mainInnerCols()).toBeGreaterThan(withRail);
+
+    // Soft panel refresh must not reopen a user-collapsed rail.
+    panes.setPanel(["worklist  1/2", "[x] First", "[>] Second"], {
+      soft: true,
+    });
+    expect(panes.focusState.panel).toBe("hidden");
+
+    expect(panes.handleKey("\x07")).toBe("handled");
+    expect(panes.focusState.panel).toBe("visibleFocused");
+    expect(panes.focusState.panelFocused).toBe(true);
+    expect(panes.focusState.userCollapsed).toBe(false);
+    expect(panes.mainInnerCols()).toBe(withRail);
+  });
+
+  test("setBusy starts heartbeat ticks via onBusyTick", async () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+    let ticks = 0;
+
+    panes.onBusyTick = () => {
+      ticks += 1;
+    };
+
+    panes.enter();
+    panes.setBusy(true);
+    expect(panes.isBusy).toBe(true);
+
+    await Bun.sleep(600);
+    panes.setBusy(false);
+    expect(panes.isBusy).toBe(false);
+    expect(ticks).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Ctrl+G show focuses panel; Esc restores prompt", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    panes.setPanel(["worklist  0/2", "[>] First", "[ ] Second"]);
+    panes.handleKey("\x07"); // hide
+    panes.handleKey("\x07"); // show + focus
     expect(panes.focusState.panelFocused).toBe(true);
 
     const focused = new VirtualScreen(24, 100);

@@ -1,6 +1,7 @@
 import type { PaneFocus } from "./focus";
 import type { Scrollback } from "./scrollback";
 import { parseMouseReport } from "./ansi-plain";
+import { normalizePaneControlSeq } from "./input-seq";
 
 export type PaneKeyResult = "handled" | "passthrough" | "dump";
 
@@ -10,6 +11,8 @@ export interface IPaneKeyDeps {
   readonly panelLen: number;
   /** Wheel: positive = older / up; negative = newer / down. `col` is 1-based. */
   onWheel?(delta: number, col: number, row: number): void;
+  /** After Ctrl+G changes layout width — resize the prompt editor + rewrap rail. */
+  onLayoutChange?(): void;
   paint(): void;
   invalidate(): void;
 }
@@ -19,8 +22,13 @@ export function handleFocusKey(
   seq: string,
   deps: IPaneKeyDeps
 ): PaneKeyResult | null {
-  if (seq === "\x07") {
+  const key = normalizePaneControlSeq(seq);
+
+  if (key === "\x07") {
     if (deps.focus.togglePanel(deps.panelLen > 0) === "changed") {
+      // Layout width changes — invalidate the differential frame, not a body patch.
+      deps.invalidate();
+      deps.onLayoutChange?.();
       deps.paint();
     }
 
@@ -38,6 +46,12 @@ export function handleFocusKey(
   }
 
   if (seq === "\t") {
+    // Don't steal Tab from the prompt editor (indent / completion). Only handle
+    // Tab when the panel already owns focus (return to prompt).
+    if (!deps.focus.panelFocused) {
+      return "passthrough";
+    }
+
     if (deps.focus.tab(deps.panelLen > 0) === "changed") {
       deps.paint();
 

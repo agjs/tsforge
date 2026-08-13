@@ -404,7 +404,7 @@ interface IBoringstackHost {
   setScope(globs: string[]): void;
   setGate(gate: IGate): void;
   setExpertRescueTarget(file: string): void;
-  captureMetaBaseline(): void;
+  captureMetaBaseline(): void | Promise<void>;
   send(
     message: string
   ): Promise<{ status: string; turns: number; handoff?: IHandoff }>;
@@ -1191,7 +1191,7 @@ export async function runBoringstackBuild(opts: {
   // is the safe direction and makes the strict-fallback warning above truthful. (Meta
   // violations on a clean scaffold are empty anyway, so the common case is unchanged.)
   if (isFreshCapture) {
-    host.captureMetaBaseline();
+    await host.captureMetaBaseline();
   }
 
   // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe (a resumed build

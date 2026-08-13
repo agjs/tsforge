@@ -69,6 +69,16 @@ export async function runShellCommand(
   return runArgvCommand(cwd, shellArgvWithPipefail(command), opts);
 }
 
+/**
+ * POSIX single-quote a value for embedding in a shell command string. The ONE
+ * quoting helper — any path/arg spliced into a command built for
+ * `runShellCommand` goes through here, so a space or `$` in a directory name
+ * can't split the word or expand.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 /** Build `argv` for a shell that honors pipefail when bash is present. */
 export function shellArgvWithPipefail(command: string): string[] {
   const bash = Bun.which("bash");

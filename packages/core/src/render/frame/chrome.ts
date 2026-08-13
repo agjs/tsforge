@@ -290,18 +290,18 @@ export type HintFocus = ActiveSurface;
 /** Dim hint strings — unused in the minimal chrome (kept for focus tests). */
 export function formatHints(focus: HintFocus, busy: boolean): string {
   if (busy) {
-    return "Ctrl+C abort  ·  Ctrl+O dump";
+    return "Ctrl+C abort  ·  PgUp scroll  ·  Ctrl+G hide";
   }
 
   if (focus === "panel") {
-    return "↑↓ select  ·  Esc prompt  ·  Ctrl+G toggle";
+    return "↑↓ select  ·  Esc prompt  ·  Ctrl+G hide";
   }
 
   if (focus === "scrollback") {
     return "↑↓ scroll  ·  Esc prompt  ·  Ctrl+O dump";
   }
 
-  return "Shift+Tab mode  ·  @ files  ·  /help  ·  Ctrl+G panel";
+  return "Shift+Tab mode  ·  @ files  ·  /help  ·  Ctrl+G hide";
 }
 
 function statusChip(status: string, color: boolean): string {

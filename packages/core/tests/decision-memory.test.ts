@@ -13,6 +13,7 @@ import {
   createHttpMemoryProvider,
   createMcpMemoryProvider,
   withDeadline,
+  loadDecisionMemoryAtStart,
   type IHttpMemoryFetch,
 } from "../src/loop/memory";
 import {
@@ -255,6 +256,16 @@ describe("createHttpMemoryProvider", () => {
     expect(retainCall?.body).not.toContain("API_KEY=secret");
   });
 
+  test("retain returns false when the backend rejects the write", async () => {
+    const provider = createHttpMemoryProvider(
+      "bank",
+      "http://localhost:8888",
+      async () => ({ ok: false, status: 503, text: async () => "nope" })
+    );
+
+    expect(await provider.retain("a decision")).toBe(false);
+  });
+
   test("retain queues the write rather than waiting for extraction", async () => {
     // Backend-side extraction is an LLM round-trip: ~3.4-4.3s against Hindsight
     // for a realistic decision, versus ~0.03s queued. Synchronous writes both
@@ -272,12 +283,14 @@ describe("createHttpMemoryProvider", () => {
       }
     );
 
-    await provider.retain("Gate settles before verification runs");
+    expect(await provider.retain("Gate settles before verification runs")).toBe(
+      true
+    );
 
     expect(JSON.parse(body ?? "{}").async).toBe(true);
   });
 
-  test("recall returns null when backend fails", async () => {
+  test("recall throws when backend fails (not silent empty)", async () => {
     const provider = createHttpMemoryProvider(
       "bank",
       "http://localhost:1",
@@ -286,7 +299,19 @@ describe("createHttpMemoryProvider", () => {
       }
     );
 
-    expect(await provider.recall("q")).toBeNull();
+    await expect(provider.recall("q")).rejects.toThrow("ECONNREFUSED");
+  });
+
+  test("recall throws on non-OK HTTP so empty banks stay distinct", async () => {
+    const provider = createHttpMemoryProvider(
+      "bank",
+      "http://localhost:8888",
+      async () => ({ ok: false, status: 503, text: async () => "nope" })
+    );
+
+    await expect(provider.recall("q")).rejects.toThrow(
+      "memory recall HTTP 503"
+    );
   });
 
   test("forget and list are fail-soft", async () => {
@@ -323,7 +348,7 @@ describe("createMcpMemoryProvider", () => {
     );
 
     expect(await provider.recall("q")).toBe("prior decision");
-    await provider.retain("new decision");
+    expect(await provider.retain("new decision")).toBe(true);
     expect(seen[0]?.name).toContain("hindsight");
     expect(seen[0]?.args.bank_id).toBe("tsforge:path:abc");
   });
@@ -349,6 +374,138 @@ describe("start-up deadline", () => {
     const quick = Promise.resolve("brief");
 
     expect(await withDeadline(quick, "fallback", 1000)).toBe("brief");
+  });
+});
+
+describe("loadDecisionMemoryAtStart", () => {
+  test("keeps the provider when recall times out (write path stays live)", async () => {
+    // Old bug: one deadline wrapped create+recall, so a slow recall discarded
+    // the provider and every later green send silently skipped retain.
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => {
+        await Bun.sleep(200);
+
+        return "late brief";
+      },
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+    const messages: string[] = [];
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      (ev) => {
+        if (ev.kind === "tool") {
+          messages.push(ev.message);
+        }
+      },
+      "session",
+      {
+        createProvider: async () => provider,
+        startTimeoutMs: 50,
+      }
+    );
+
+    expect(loaded.provider).toBe(provider);
+    expect(loaded.brief).toBeNull();
+    expect(messages.some((m) => m.includes("recall timed out"))).toBe(true);
+  });
+
+  test("announces a loaded brief when recall returns in time", async () => {
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => "Use native selects",
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+    const messages: string[] = [];
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      (ev) => {
+        if (ev.kind === "tool") {
+          messages.push(ev.message);
+        }
+      },
+      "session",
+      {
+        createProvider: async () => provider,
+        startTimeoutMs: 1000,
+      }
+    );
+
+    expect(loaded.brief).toBe("Use native selects");
+    expect(messages.some((m) => m.includes("loaded brief"))).toBe(true);
+  });
+
+  test("keeps provider when create is slow but still within the shared budget", async () => {
+    // Rigid 50/50 used to kill create that took >half the budget even when
+    // recall would still fit in the remainder.
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => null,
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      () => undefined,
+      "session",
+      {
+        createProvider: async () => {
+          await Bun.sleep(70);
+
+          return provider;
+        },
+        startTimeoutMs: 100,
+      }
+    );
+
+    expect(loaded.provider).toBe(provider);
+  });
+
+  test("labels recall transport failures as failed, not empty", async () => {
+    const provider = {
+      bankId: "tsforge:dreamdata",
+      recall: async () => {
+        throw new Error("memory recall HTTP 503");
+      },
+      retain: async () => true,
+      list: async () => [],
+      forget: async () => undefined,
+    };
+    const messages: string[] = [];
+
+    const loaded = await loadDecisionMemoryAtStart(
+      "/tmp",
+      { kind: "http", baseUrl: "http://127.0.0.1:9" },
+      null,
+      (ev) => {
+        if (ev.kind === "tool") {
+          messages.push(ev.message);
+        }
+      },
+      "session",
+      {
+        createProvider: async () => provider,
+        startTimeoutMs: 1000,
+      }
+    );
+
+    expect(loaded.provider).toBe(provider);
+    expect(messages.some((m) => m.includes("recall failed"))).toBe(true);
+    expect(messages.some((m) => m.includes("(empty)"))).toBe(false);
   });
 });
 

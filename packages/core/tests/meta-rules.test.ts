@@ -1005,6 +1005,17 @@ test("lockfile-required: detects missing lockfile", () => {
   expect(relevant.length).toBeGreaterThan(0);
 });
 
+test("lockfile-required: no package.json → no violation (workspace container)", () => {
+  const ctx = buildMetaRuleContext(tempDir, []);
+
+  expect(ctx.packageJson).toBe(null);
+
+  const violations = runMetaRules(META_RULES, ctx);
+  const relevant = violations.filter((v) => v.ruleId === "lockfile-required");
+
+  expect(relevant).toEqual([]);
+});
+
 test("single-package-manager: detects mixed lockfiles", () => {
   writeFileSync(join(tempDir, "package-lock.json"), "{}");
   writeFileSync(join(tempDir, "yarn.lock"), "# yarn");

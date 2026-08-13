@@ -107,8 +107,18 @@ import {
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
-import type { FileLinter } from "../gate";
-import { formatFiles } from "../gate";
+import {
+  formatFiles,
+  isWorkspaceContainer,
+  activePackageRoots,
+  packageRelativeTouched,
+  packageLabel,
+  capturePackageGatePolicy,
+  packageLintPacks,
+  type FileLinter,
+  type IPackageGatePolicy,
+  type IPackageGateCaptureOpts,
+} from "../gate";
 import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
@@ -425,6 +435,12 @@ export interface ILoopCtxGate {
    *  start. Subtracted from each cycle's violations so pre-existing scaffold debt the
    *  model is frozen out of never blocks a feature or clutters feedback. */
   metaBaseline?: MetaBaseline;
+  /** Per-package frozen policies for workspace-container fan-out (meta + gate). */
+  workspacePolicies?: Map<string, IPackageGatePolicy>;
+  /** CLI overlays (--profile / --strict-floor-only) applied on first package capture. */
+  workspaceCapture?: IPackageGateCaptureOpts;
+  /** Per-package meta baselines for workspace containers (keyed by package abs path). */
+  workspaceMetaBaselines?: Map<string, MetaBaseline>;
 }
 
 /** The coordinator's per-task working context: the flat identity/reporting core,
@@ -1442,14 +1458,16 @@ async function runGateStep(
 
 /** STEP 3 — meta-rules: project structure invariants the gate command can't
  *  express (e.g. test-sibling-required), change-scoped to the files the AGENT
- *  wrote this session. Best-effort: a throwing rule degrades to no violations. */
-function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
+ *  wrote this session. Best-effort: a throwing rule degrades to no violations.
+ *  Workspace containers run meta per touched child package (not the bag root). */
+async function runMetaRulesStep(ctx: ILoopCtx): Promise<IMetaRuleViolation[]> {
   try {
-    // The files the AGENT created/edited this session — what change-scoped rules
-    // (test-sibling-required) enforce on. This is the real signal, not git: it
-    // works in any directory (including a freshly generated, non-git project) and
-    // never blocks on the repo's pre-existing untested code.
     const changed = [...(ctx.tool.touched ?? [])];
+
+    if (isWorkspaceContainer(ctx.cwd)) {
+      return await runWorkspaceMetaRules(ctx, changed);
+    }
+
     const metaContext = buildMetaRuleContext(
       ctx.cwd,
       ctx.gate.stackProfile?.packs ?? [],
@@ -1472,6 +1490,54 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   }
 }
 
+/** Fan meta-rules out to each touched package under a workspace container. */
+async function runWorkspaceMetaRules(
+  ctx: ILoopCtx,
+  changed: readonly string[]
+): Promise<IMetaRuleViolation[]> {
+  const packages = activePackageRoots(ctx.cwd, changed);
+
+  if (packages.length === 0) {
+    return [];
+  }
+
+  const policies =
+    ctx.gate.workspacePolicies ?? new Map<string, IPackageGatePolicy>();
+  const capture = ctx.gate.workspaceCapture ?? {};
+
+  ctx.gate.workspacePolicies ??= policies;
+
+  const all: IMetaRuleViolation[] = [];
+
+  for (const pkg of packages) {
+    let policy = policies.get(pkg);
+
+    if (policy === undefined) {
+      policy = await capturePackageGatePolicy(pkg, capture);
+      policies.set(pkg, policy);
+    }
+
+    const pkgTouched = packageRelativeTouched(ctx.cwd, pkg, changed);
+    const packs = packageLintPacks(policy);
+    const violations = runMetaRules(
+      META_RULES,
+      buildMetaRuleContext(pkg, packs, pkgTouched),
+      policy.ruleOverrides
+    );
+    const label = packageLabel(pkg);
+    const relocated = violations.map((v) => ({
+      ...v,
+      file: join(label, v.file.replace(/^\.\//u, "")).replaceAll("\\", "/"),
+    }));
+    const baseline =
+      ctx.gate.workspaceMetaBaselines?.get(pkg) ?? ctx.gate.metaBaseline;
+
+    all.push(...subtractMetaBaseline(relocated, baseline));
+  }
+
+  return all;
+}
+
 /** The FULL gate evaluation — autofix, then the gate command, then the harness
  *  meta-rules — combined into ONE pass/fail with the union error set. This is the
  *  authoritative "is it green?" answer; `settleGate` (the end-of-turn settle) and
@@ -1491,7 +1557,7 @@ export async function evaluateGate(
 }> {
   const autoFixed = await autoFixStep(ctx);
   const gate = await runGateStep(ctx, turn);
-  const metaViolations = runMetaRulesStep(ctx);
+  const metaViolations = await runMetaRulesStep(ctx);
 
   const metaErrors = metaViolations.filter((v) => v.severity === "error");
   const errors = gate.errors.concat(

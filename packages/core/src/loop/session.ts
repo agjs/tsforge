@@ -5,8 +5,19 @@ import type {
   ITokenUsage,
 } from "../inference";
 import type { ITask } from "../spec";
-import type { FileLinter } from "../gate";
-import { makeFileLinter } from "../gate";
+import {
+  makeFileLinter,
+  isWorkspaceContainer,
+  makeWorkspaceFileLinter,
+  runWorkspaceContainerGate,
+  listChildPackageRoots,
+  packageLabel,
+  capturePackageGatePolicy,
+  packageLintPacks,
+  type FileLinter,
+  type IPackageGatePolicy,
+  type IPackageGateCaptureOpts,
+} from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
 import type { IStackProfile } from "../stack-detection";
 import {
@@ -21,6 +32,7 @@ import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { mergePolicyRules } from "../policy";
 import type { ProfileId } from "../config/profiles";
+import { join } from "node:path";
 import {
   buildMetaRuleContext,
   runMetaRules,
@@ -98,6 +110,8 @@ import {
   loadDecisionMemoryAtStart,
   decisionBriefBlock,
   buildDecisionRetainText,
+  withDeadline,
+  MEMORY_REQUEST_TIMEOUT_MS,
   type ICandidateLesson,
   type IMemoryProvider,
 } from "./memory";
@@ -227,6 +241,9 @@ export interface ISessionConfig {
   editGuard?: EditGuard;
   /** Rule profile override for this session (from a recipe); defaults to config file. */
   profile?: ProfileId;
+  /** When true, per-package workspace gates omit the project's test command
+   *  (CLI `--strict-floor-only`). */
+  strictFloorOnly?: boolean;
   /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Drive-to-green sessions without a provider get the house
@@ -258,6 +275,9 @@ export interface ISessionConfig {
    *  yields (or churns) then validates the on-disk edit. Without this the rebuilt session
    *  starts `edited=false` and a conversational send silently skips the gate (WS-C). */
   pausedWithEdit?: boolean;
+  /** Seed `ctx.tool.touched` from a resumed session so workspace gates still
+   *  know which packages were edited before the pause. */
+  touched?: readonly string[];
   /** Session-bound plan id restored from the session store on `--continue`. */
   activePlanId?: string | null;
   /** Fired when a task_* tool persists a plan change (REPL refreshes the Tasks rail). */
@@ -909,6 +929,37 @@ function rebuildTaskContract(
       : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
 }
 
+/** Gate identity for a workspace-container cycle: the packs that actually ran, over the
+ *  packages that ran them — without this the failure feedback claims `Packs: (none)`
+ *  while the per-package gates were enforcing a full pack set. */
+function workspaceProfile(label: string, packs: string[]): IStackProfile {
+  return {
+    name: `workspace: ${label}`,
+    packs,
+    confidence: "certain",
+    reason: `per-package gates: ${label}`,
+  };
+}
+
+/** Announce packs that just activated, so the model learns the gate got stricter and
+ *  why. Shared by both gate paths (stack re-detection and per-package workspace gates);
+ *  silent on the first cycle, when there is no previous pack set to have grown from. */
+function notePackActivation(
+  ctx: ILoopCtx,
+  prevPacks: string[] | null,
+  packs: string[]
+): void {
+  if (prevPacks === null || !packsGrew(prevPacks, packs)) {
+    return;
+  }
+
+  const activated = newlyActivatedPacks(prevPacks, packs);
+  const notice = formatPackActivationNotice(packs, activated);
+
+  ctx.messages.push({ role: "user", content: notice });
+  ctx.report({ kind: "tool", task: ctx.task.id, message: notice });
+}
+
 /** Build the AUTO-gate runner: a gate that RE-DETECTS the stack each cycle — refreshing
  *  `ctx.task.accept` (run by validate), the stack profile, the task-contract Check:, and
  *  the per-write linter — so a greenfield build enables framework rule-packs once its
@@ -916,14 +967,30 @@ function rebuildTaskContract(
  *  shared `active` flag; `setGate` flips that off so a manual override wins. Returned
  *  alongside its `state` so `Session.create` can hand the flag to the constructor, and kept
  *  module-level so the large factory stays within the complexity budget. */
+/** CLI overlays for per-package workspace gate capture. */
+function packageGateCaptureFrom(cfg: ISessionConfig): IPackageGateCaptureOpts {
+  return {
+    ...(cfg.profile !== undefined ? { profile: cfg.profile } : {}),
+    ...(cfg.strictFloorOnly === true ? { strictFloorOnly: true } : {}),
+  };
+}
+
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
   parse: ErrorParser | undefined,
-  offerCheck = false
+  offerCheck = false,
+  capture: IPackageGateCaptureOpts = {}
 ): { runner: IGate; state: { active: boolean } } {
   const state = { active: true };
   let prevPacks: string[] | null = null;
+  let workspaceLint: FileLinter | null = null;
+  /** Frozen per-package policies for workspace fan-out (test cmd + packs). */
+  const workspacePolicies = new Map<string, IPackageGatePolicy>();
+
+  ctx.gate.workspacePolicies = workspacePolicies;
+  ctx.gate.workspaceCapture = capture;
+
   const runner: IGate = {
     async run(cwd, opts) {
       // F19: external plugins are frozen at session start; a mid-session edit of
@@ -932,6 +999,43 @@ function makeAutoGateRunner(
 
       await assertExternalPacksFrozen();
 
+      // Multi-repo workspace root: gate only packages the model touched — but
+      // only while auto-gate is active. `setGate` flips active off; then we
+      // honor the manual command via validate (same as non-workspace).
+      if (isWorkspaceContainer(cwd) && state.active) {
+        // One router for the whole session — each package's eslint engine is
+        // rebuilt when packs grow so newly activated frameworks aren't missed.
+        workspaceLint ??= makeWorkspaceFileLinter(
+          cwd,
+          workspacePolicies,
+          capture
+        );
+        ctx.gate.lintFile = workspaceLint;
+
+        const run = await runWorkspaceContainerGate(
+          cwd,
+          ctx.task,
+          ctx.tool.touched ?? [],
+          parse,
+          { ...(opts ?? {}), policies: workspacePolicies, capture }
+        );
+
+        // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
+        // --continue / a /clear rebuild, so a display label would run as a command.
+        ctx.task.accept = run.accept;
+        rebuildTaskContract(ctx, offerCheck);
+
+        if (run.packs.length > 0) {
+          const packs = sortedPacks(run.packs);
+
+          ctx.gate.stackProfile = workspaceProfile(run.label, packs);
+          notePackActivation(ctx, prevPacks, packs);
+          prevPacks = packs;
+        }
+
+        return run.result;
+      }
+
       if (state.active) {
         const r = await resolve();
         const packs = sortedPacks(r.stackProfile.packs);
@@ -939,19 +1043,7 @@ function makeAutoGateRunner(
         ctx.task.accept = r.command;
         ctx.gate.stackProfile = r.stackProfile;
         rebuildTaskContract(ctx, offerCheck);
-
-        if (packsGrew(prevPacks, packs) && prevPacks !== null) {
-          const activated = newlyActivatedPacks(prevPacks, packs);
-          const notice = formatPackActivationNotice(packs, activated);
-
-          ctx.messages.push({ role: "user", content: notice });
-          ctx.report({
-            kind: "tool",
-            task: ctx.task.id,
-            message: notice,
-          });
-        }
-
+        notePackActivation(ctx, prevPacks, packs);
         prevPacks = packs;
 
         if (r.lintFile !== undefined) {
@@ -1279,7 +1371,7 @@ export class Session {
       tsService: await buildTsService(cfg.cwd),
       report,
       tool: {
-        touched: new Set<string>(),
+        touched: new Set<string>(cfg.touched ?? []),
         policyMode: baseMode,
         ...(cfg.extraRoots !== undefined && cfg.extraRoots.length > 0
           ? { extraRoots: cfg.extraRoots }
@@ -1337,7 +1429,8 @@ export class Session {
         ctx,
         cfg.autoGate,
         cfg.parse,
-        isOfferCheckActive(cfg)
+        isOfferCheckActive(cfg),
+        packageGateCaptureFrom(cfg)
       );
 
       ctx.gate.runner = auto.runner;
@@ -1396,6 +1489,11 @@ export class Session {
    *  gate survives the rebuild instead of being silently dropped (WS-C). */
   get hasDeferredGate(): boolean {
     return this.state.pausedWithEdit === true;
+  }
+
+  /** Relative paths the model wrote this session — persisted for workspace gates. */
+  get touchedFiles(): string[] {
+    return [...(this.ctx.tool.touched ?? [])].sort();
   }
 
   /** The session's TS LanguageService (null when the workspace has no tsconfig),
@@ -1517,14 +1615,27 @@ export class Session {
     this.ctx.gate.expertRescueTarget = file.length > 0 ? file : undefined;
   }
 
-  /** Capture the meta-rule baseline of the CURRENT (pristine) workspace using this
-   *  session's own resolved stack profile + rule overrides, and store it so every
-   *  later cycle subtracts it (pre-existing scaffold debt never blocks a feature).
-   *  Call ONCE before any model work. Empty `changed` ⇒ only global rules seed it;
-   *  change-scoped rules (e.g. test-sibling) correctly don't enter the baseline.
-   *  Degrades silently — a throwing rule leaves the baseline unset (no suppression). */
-  captureMetaBaseline(): void {
+  /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
+   *  session into a from-scratch web build, whose heavy gate needs the bigger
+   *  webMaxTurns budget (0/undefined restores the config default). */
+  setMaxTurns(n?: number): void {
+    this.maxTurnsOverride = n !== undefined && n > 0 ? n : undefined;
+  }
+
+  /**
+   * Capture pristine meta-rule violations to subtract later. Workspace containers
+   * fan out per child package (with that package's packs/overrides) so pre-existing
+   * child debt is suppressed the same way a single-repo scaffold is.
+   * Call ONCE before any model work. Empty `changed` ⇒ only global rules seed it.
+   */
+  async captureMetaBaseline(): Promise<void> {
     try {
+      if (isWorkspaceContainer(this.ctx.cwd)) {
+        await this.captureWorkspaceMetaBaselines();
+
+        return;
+      }
+
       const metaContext = buildMetaRuleContext(
         this.ctx.cwd,
         this.ctx.gate.stackProfile?.packs ?? [],
@@ -1542,11 +1653,39 @@ export class Session {
     }
   }
 
-  /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
-   *  session into a from-scratch web build, whose heavy gate needs the bigger
-   *  webMaxTurns budget (0/undefined restores the config default). */
-  setMaxTurns(n?: number): void {
-    this.maxTurnsOverride = n !== undefined && n > 0 ? n : undefined;
+  /** Per-child meta baselines for a workspace container. */
+  private async captureWorkspaceMetaBaselines(): Promise<void> {
+    const capture = this.ctx.gate.workspaceCapture ?? {};
+    const policies =
+      this.ctx.gate.workspacePolicies ?? new Map<string, IPackageGatePolicy>();
+
+    this.ctx.gate.workspacePolicies = policies;
+
+    const baselines = new Map<string, ReturnType<typeof buildMetaBaseline>>();
+
+    for (const pkg of listChildPackageRoots(this.ctx.cwd)) {
+      let policy = policies.get(pkg);
+
+      if (policy === undefined) {
+        policy = await capturePackageGatePolicy(pkg, capture);
+        policies.set(pkg, policy);
+      }
+
+      const violations = runMetaRules(
+        META_RULES,
+        buildMetaRuleContext(pkg, packageLintPacks(policy), []),
+        policy.ruleOverrides
+      );
+      const label = packageLabel(pkg);
+      const relocated = violations.map((v) => ({
+        ...v,
+        file: join(label, v.file.replace(/^\.\//u, "")).replaceAll("\\", "/"),
+      }));
+
+      baselines.set(pkg, buildMetaBaseline(relocated));
+    }
+
+    this.ctx.gate.workspaceMetaBaselines = baselines;
   }
 
   /** Toggle GENERAL plan mode: read-only tools + the plan-then-approve workflow.
@@ -3000,16 +3139,36 @@ export class Session {
     }
   }
 
-  /** Retain a curated decision into the external bank (fail-soft). */
+  /** Retain a curated decision into the external bank (fail-soft, visible). */
   async retainDecision(content: string): Promise<void> {
     if (this.decisionMemory === null) {
       return;
     }
 
+    const bankId = this.decisionMemory.bankId;
+
     try {
-      await this.decisionMemory.retain(content);
+      // Bound MCP/HTTP retains so a hung backend cannot stall a green send.
+      const ok = await withDeadline(
+        this.decisionMemory.retain(content),
+        false,
+        MEMORY_REQUEST_TIMEOUT_MS
+      );
+
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message: ok
+          ? `decision memory: retained to bank ${bankId}`
+          : `decision memory: retain failed for bank ${bankId}`,
+      });
     } catch (err) {
       trace("session.decision-memory.retain", err);
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message: `decision memory: retain failed for bank ${bankId}`,
+      });
     }
   }
 

@@ -90,6 +90,24 @@ export function registerExternalPack(
   pack: IRulePack,
   freeze: IExternalPackFreeze
 ): void {
+  const existing = EXTERNAL_PACKS.get(pack.id);
+
+  if (existing !== undefined) {
+    // Idempotent when the same entry is loaded again (workspace children that
+    // inherit one root plugin). Different paths/content must not overwrite.
+    if (
+      existing.freeze.entryPath === freeze.entryPath &&
+      existing.freeze.fingerprint === freeze.fingerprint
+    ) {
+      return;
+    }
+
+    throw new Error(
+      `tsforge: external pack id '${pack.id}' already registered from ${existing.freeze.entryPath}; ` +
+        `refusing to overwrite with ${freeze.entryPath}`
+    );
+  }
+
   EXTERNAL_PACKS.set(pack.id, { pack, freeze });
 }
 
