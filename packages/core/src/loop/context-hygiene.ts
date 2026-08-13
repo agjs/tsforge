@@ -24,6 +24,96 @@ export const MAX_LIVE_READ_PATHS = 12;
  */
 export const STALE_WRITE_ASSISTANT_TURNS = 1;
 
+/**
+ * Characters of the newest conversation kept VERBATIM alongside a compaction
+ * summary. A summary alone loses the turn in progress — the file being edited,
+ * the error just seen — which reads as the model forgetting mid-task.
+ *
+ * Characters, not tokens: nothing in this codebase estimates tokens, and a
+ * guess that has to track the server's tokenizer would be worse than a measure
+ * that is exact but indirect.
+ */
+export const RETAIN_CHARS = 40_000;
+
+/** Tool results longer than this get their middle dropped (no model involved). */
+export const PRUNE_THRESHOLD_CHARS = 8192;
+
+const PRUNE_HEAD_CHARS = 4096;
+const PRUNE_TAIL_CHARS = 1024;
+
+/**
+ * Stands in for a removed tool-result middle, and doubles as the idempotence
+ * guard — a result already carrying it is never pruned again, so a second pass
+ * reclaims nothing and the caller can tell that pruning is spent.
+ */
+export const PRUNE_MARKER = "\n\n[... tool result middle pruned ...]\n\n";
+
+/** A prune reclaiming this fraction (1/N) of the transcript stands in for a summary. */
+const PRUNE_SUFFICIENT_DIVISOR = 4;
+
+/** What a compaction did: the new history, plus what a prune-only pass freed. */
+export interface ICompactResult {
+  before: number;
+  after: number;
+  messages: IChatMessage[];
+  /** Characters reclaimed when pruning alone sufficed and no summary was written.
+   *  Absent on a summarizing compact. */
+  prunedChars?: number;
+}
+
+/**
+ * What a compaction did, in one line, for every surface that reports it.
+ *
+ * A prune-only pass leaves the message COUNT untouched, so the message-count
+ * phrasing would read as `compacted 40 → 40 messages` — a change reported as
+ * nothing. Shared so the three report sites cannot drift.
+ */
+export function compactSummaryLine(result: {
+  before: number;
+  after: number;
+  prunedChars?: number;
+}): string {
+  if (result.prunedChars === undefined) {
+    return `compacted ${String(result.before)} → ${String(result.after)} messages`;
+  }
+
+  const kb = Math.max(1, Math.round(result.prunedChars / 1024));
+
+  return `pruned ${String(kb)}KB of tool output — no summary needed`;
+}
+
+/**
+ * Replace the middle of oversized tool results with {@link PRUNE_MARKER};
+ * returns the characters reclaimed.
+ *
+ * Deliberately a SIBLING of `pruneEphemeralToolResidue` rather than part of it.
+ * That one is semantic — it supersedes same-path reads and ages write-guard
+ * appendices — and it already runs every turn, so by the time compaction fires
+ * it has nothing left to give. It also never touches the results that actually
+ * dominate a long session: `run` output, test logs, gate dumps. This one is
+ * purely about size and knows nothing about which tool produced the bytes.
+ */
+export function pruneOversizedToolResults(messages: IChatMessage[]): number {
+  let freed = 0;
+
+  for (const m of messages) {
+    if (m.role !== "tool" || m.content.length <= PRUNE_THRESHOLD_CHARS) {
+      continue;
+    }
+
+    if (m.content.includes(PRUNE_MARKER)) {
+      continue;
+    }
+
+    const original = m.content.length;
+
+    m.content = `${m.content.slice(0, PRUNE_HEAD_CHARS)}${PRUNE_MARKER}${m.content.slice(-PRUNE_TAIL_CHARS)}`;
+    freed += original - m.content.length;
+  }
+
+  return freed;
+}
+
 /** True when a string is (or contains) a harness history marker — never source. */
 export function looksLikeHarnessOmitMarker(text: string): boolean {
   return (
@@ -392,24 +482,136 @@ export function autoCompactPct(
 }
 
 /**
- * Summarize the conversation into [system?, summary user], freeing context.
- * Shared by interactive Session and headless runTask.
+ * What a message really costs the context.
+ *
+ * `content` alone undercounts an assistant turn badly: create/edit tool-call
+ * ARGUMENTS carry whole file bodies and are deliberately kept full in history
+ * (see this module's header), so a turn holding an 80KB write measures as ~0
+ * against a character budget that is supposed to bound it.
+ */
+function messageChars(m: IChatMessage): number {
+  const args =
+    m.toolCalls?.reduce(
+      (sum, tc) => sum + JSON.stringify(tc.arguments).length,
+      0
+    ) ?? 0;
+
+  return m.content.length + args;
+}
+
+/**
+ * Indices a retain window is allowed to begin at: every message that is not a
+ * tool result, i.e. every step boundary.
+ *
+ * A step is one non-tool message plus the tool results answering it, and the
+ * window may only ever start on one. Beginning mid-step would retain a result
+ * whose declaring `tool_calls` turn was summarized away; `toWire` then emits a
+ * `tool_call_id` that no preceding assistant message declares, which an
+ * OpenAI-compatible server rejects. Because the compacted array becomes the live
+ * history, that ends the session rather than one request. The wipe-everything
+ * compaction this replaced could not orphan anything — the retain window is what
+ * introduces the hazard, so this is a correctness constraint, not a nicety.
+ *
+ * Leading orphans (results already in history with nothing declaring them) are
+ * not boundaries either, so they can only ever fall in the summarized region.
+ */
+function stepStartIndices(conversation: readonly IChatMessage[]): number[] {
+  const starts: number[] = [];
+
+  conversation.forEach((m, i) => {
+    if (m.role !== "tool") {
+      starts.push(i);
+    }
+  });
+
+  return starts;
+}
+
+/**
+ * Where the verbatim retain window begins: the oldest step boundary whose whole
+ * suffix still fits the budget.
+ *
+ * Whole steps only. Admitting a partial step and then snapping backward to pick
+ * up its declaring turn cannot work — the walk stopped precisely because that
+ * turn did not fit, so re-admitting it always breaks the budget it just
+ * respected. When even the newest step is too big to fit, nothing is retained.
+ */
+function retainStartIndex(conversation: readonly IChatMessage[]): number {
+  const costs = conversation.map(messageChars);
+  const total = costs.reduce((sum, c) => sum + c, 0);
+  // Half the transcript caps the window, so an older region always survives to
+  // be summarized and "everything fits, nothing to summarize" cannot arise.
+  const budget = Math.min(RETAIN_CHARS, Math.floor(total / 2));
+  const starts = stepStartIndices(conversation);
+  let suffix = 0;
+  let next = conversation.length;
+  let start = conversation.length;
+
+  for (let k = starts.length - 1; k >= 0; k -= 1) {
+    const boundary = starts[k] ?? 0;
+
+    for (let i = next - 1; i >= boundary; i -= 1) {
+      suffix += costs[i] ?? 0;
+    }
+
+    next = boundary;
+
+    if (suffix > budget) {
+      break;
+    }
+
+    start = boundary;
+  }
+
+  return start;
+}
+
+/**
+ * Free context: summarize the older conversation and keep the newest stretch
+ * VERBATIM as [system?, summary, ...retained]. Shared by interactive Session and
+ * headless runTask.
+ *
+ * A model-free prune runs first. When it reclaims enough on its own the summary
+ * call is skipped entirely — the session clears its stale usage reading after a
+ * compact, so the next real model call re-measures against the server's own
+ * token count and decides whether more is needed. Nothing here estimates tokens.
  */
 export async function compactConversation(
   messages: IChatMessage[],
   provider: IProvider,
   signal?: AbortSignal
-): Promise<{ before: number; after: number; messages: IChatMessage[] }> {
+): Promise<ICompactResult> {
   const before = messages.length;
+  const totalChars = messages.reduce((sum, m) => sum + messageChars(m), 0);
+  const prunedChars = pruneOversizedToolResults(messages);
+
+  if (
+    prunedChars > 0 &&
+    prunedChars >= Math.floor(totalChars / PRUNE_SUFFICIENT_DIVISOR)
+  ) {
+    return { before, after: before, messages, prunedChars };
+  }
+
+  // Pruning already mutated `messages`, so an early return still has to report
+  // what it freed — otherwise a compact that did real work prints as a no-op.
+  // Both branches below are only reachable on an empty transcript today (the
+  // half-transcript cap guarantees an older region whenever there is content),
+  // but they are on the honest side of that guarantee rather than relying on it.
+  const freed = prunedChars > 0 ? { prunedChars } : {};
   const conversation = messages.filter((m) => m.role !== "system");
 
   if (conversation.length === 0) {
-    return { before, after: before, messages };
+    return { before, after: before, messages, ...freed };
   }
 
-  const transcript = conversation
-    .map((m) => `[${m.role}] ${m.content}`)
-    .join("\n\n");
+  const start = retainStartIndex(conversation);
+  const older = conversation.slice(0, start);
+
+  if (older.length === 0) {
+    return { before, after: before, messages, ...freed };
+  }
+
+  const transcript = older.map((m) => `[${m.role}] ${m.content}`).join("\n\n");
   const res = await provider.complete(
     [
       { role: "system", content: COMPACT_SYSTEM },
@@ -423,8 +625,11 @@ export async function compactConversation(
     role: "user",
     content: `[Summary of the earlier conversation]\n${res.content}`,
   };
+  const retained = conversation.slice(start);
   const next: IChatMessage[] =
-    system?.role === "system" ? [system, summary] : [summary];
+    system?.role === "system"
+      ? [system, summary, ...retained]
+      : [summary, ...retained];
 
   return { before, after: next.length, messages: next };
 }

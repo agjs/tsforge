@@ -364,8 +364,15 @@ test("auto-compacts before a send once context exceeds the window threshold", as
 
     await session.send("second"); // 90% ≥ 80% → compacts before the turn
     expect(compactions).toBe(1);
-    // history collapsed to [system, summary, "second", assistant-reply]
-    expect(session.messages.length).toBeLessThanOrEqual(4);
+    // History collapses to [system, summary, retained tail, "second", reply]:
+    // the summary stands in for the older turns while the newest survive.
+    expect(session.messages.length).toBeLessThanOrEqual(5);
+    expect(session.messages.some((m) => m.content.includes("summary"))).toBe(
+      true
+    );
+    expect(session.messages.some((m) => m.content.includes("second"))).toBe(
+      true
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -771,7 +778,7 @@ test("send returns 'interrupted' when its signal is aborted mid-turn", async () 
   }
 });
 
-test("compact replaces the conversation with [system, summary]", async () => {
+test("compact replaces the conversation with [system, summary, retained tail]", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 
   try {
@@ -788,9 +795,15 @@ test("compact replaces the conversation with [system, summary]", async () => {
     const result = await session.compact();
 
     expect(result.before).toBe(before);
-    expect(session.messages.length).toBe(2); // system + summary
+    expect(session.messages.length).toBe(3); // system + summary + retained tail
     expect(session.messages[0]?.role).toBe("system");
     expect(session.messages[1]?.content).toContain("SUMMARY");
+    // The newest turn survives a compact verbatim — losing it mid-task is what
+    // read as the model forgetting what it was doing. (The stub answers every
+    // call with "SUMMARY", so the ROLE is what distinguishes the retained
+    // assistant turn from the injected user-role summary above it.)
+    expect(session.messages[1]?.role).toBe("user");
+    expect(session.messages[2]?.role).toBe("assistant");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

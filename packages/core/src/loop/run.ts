@@ -11,6 +11,7 @@ import { usageEvent } from "./model-call";
 import {
   autoCompactPct,
   compactConversation,
+  compactSummaryLine,
   pruneEphemeralToolResidue,
 } from "./context-hygiene";
 import {
@@ -876,7 +877,7 @@ async function maybeHeadlessAutoCompact(args: {
   args.report({
     kind: "tool",
     task: args.taskId,
-    message: `⊙ compacted ${compacted.before} → ${compacted.after} messages`,
+    message: `⊙ ${compactSummaryLine(compacted)}`,
   });
 
   return true;

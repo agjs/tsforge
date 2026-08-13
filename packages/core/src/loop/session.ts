@@ -72,6 +72,7 @@ import { isChecklistTreeInject } from "./harness-inject";
 import {
   autoCompactPct as compactThresholdPct,
   compactConversation,
+  compactSummaryLine,
   pruneEphemeralToolResidue,
   scrubLegacyWriteArgStubs,
 } from "./context-hygiene";
@@ -1574,16 +1575,18 @@ export class Session {
       message: `⊙ context ~${pct}% full — auto-compacting to free room`,
     });
 
-    const { before, after } = await this.compact(signal);
+    const result = await this.compact(signal);
 
     // Drop stale usage so the same pre-compact reading cannot re-fire every
     // mid-drive turn before the next model call records a fresh prompt size.
+    // This is also what lets a prune-only compact skip the summary: the next
+    // real model call re-measures against the server's own token count.
     this.lastUsage = undefined;
 
     this.report({
       kind: "tool",
       task: SESSION_ID,
-      message: `⊙ compacted ${before} → ${after} messages`,
+      message: `⊙ ${compactSummaryLine(result)}`,
     });
   }
 
@@ -2020,13 +2023,15 @@ export class Session {
   }
 
   /**
-   * Compress the conversation: ask the model to summarize everything so far, then
-   * replace the history with [system, summary]. Frees context for long sessions
-   * while preserving goals/decisions/changes. Returns the message count before/after.
+   * Compress the conversation to [system?, summary, ...retained]: summarize the
+   * older turns and keep the newest stretch verbatim, so a compact mid-task does
+   * not cost the model the work in progress. When a model-free prune of fat tool
+   * results frees enough on its own, no summary is written and `prunedChars`
+   * reports what it reclaimed. Returns the message count before/after.
    */
   async compact(
     signal?: AbortSignal
-  ): Promise<{ before: number; after: number }> {
+  ): Promise<{ before: number; after: number; prunedChars?: number }> {
     const result = await compactConversation(
       this.ctx.messages,
       this.provider,
@@ -2035,7 +2040,13 @@ export class Session {
 
     this.ctx.messages = result.messages;
 
-    return { before: result.before, after: result.after };
+    return {
+      before: result.before,
+      after: result.after,
+      ...(result.prunedChars === undefined
+        ? {}
+        : { prunedChars: result.prunedChars }),
+    };
   }
 
   /** The live conversation (system + every exchange). Read-only view. */
