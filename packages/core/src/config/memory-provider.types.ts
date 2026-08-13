@@ -7,18 +7,21 @@
 export type MemoryProviderKind = "http" | "mcp";
 
 /**
- * Send the user's own prompt text to the bank when a send goes green.
+ * Retention options for post-green decision capture.
  *
- * ON by default: without it a bank only ever fills from greenfield
- * feature-verified runs, so ordinary interactive sessions teach it nothing and
- * the recalled brief stays empty — which reads as "memory is broken".
+ * `autoRetain` — ON unless explicitly `false`. When on, a green interactive
+ * send runs a bounded LLM extraction for durable product/architecture
+ * decisions (0..N) and retains those — never the raw user prompt.
  *
- * Set `false` to opt out. Worth doing when the bank is shared or hosted by
- * someone else: this stores the raw request as typed (first 500 chars), and
- * redaction only strips secret-SHAPED text (`API_KEY=`, `password:`, `sk-…`),
- * so pasted logs, snippets and customer data go as-is.
+ * Legacy `retainPrompts: false` still opts out (compat). `retainPrompts: true`
+ * is obsolete (prompt dump removed) and is ignored with a warning.
  */
 interface IMemoryRetentionOptions {
+  readonly autoRetain?: boolean;
+  /**
+   * @deprecated Prompt dump removed. Use `autoRetain: false` to disable
+   * post-green extraction. `false` still opts out for compatibility.
+   */
   readonly retainPrompts?: boolean;
 }
 

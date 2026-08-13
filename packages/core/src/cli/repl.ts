@@ -93,7 +93,10 @@ import {
   type IAgentRow,
 } from "../render";
 import { takeOneInputSequence } from "../render/frame/input-seq";
-import { runMemorySlashCommand } from "./memory-command";
+import {
+  runMemorySlashCommand,
+  runRememberSlashCommand,
+} from "./memory-command";
 import {
   saveSession,
   latestSession,
@@ -1480,6 +1483,10 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       case "memory":
         await runMemorySlashCommand(args.dir, session, arg, streamOut);
+        break;
+
+      case "remember":
+        await runRememberSlashCommand(session, arg, streamOut);
         break;
 
       case "cost": {

@@ -41,14 +41,15 @@ Optional: set `"bankId": "tsforge:github.com/acme/crm"` to pin the bank. Otherwi
 
 ### What gets sent
 
-Two channels, both on by default:
+Three curated channels (never the raw user prompt):
 
-- **Curated summaries** that tsforge builds when a greenfield feature verifies — `Feature verified: <id> — <description>`.
-- **Your request text**, first 500 characters, each time a send reaches green. This is what makes the bank fill from ordinary interactive work; without it only greenfield runs teach it anything and the brief stays empty.
+- **Post-green extraction** (default on) — after an interactive send goes green, tsforge asks the session model for durable **product/architecture** decisions from that turn and retains 0..N of them. Plan approvals, harness chatter, debugging, and one-off tasks yield nothing.
+- **`/remember <decision>`** — you explicitly park a decision in the bank.
+- **Greenfield feature verified** — `Feature verified: <id> — <description>`.
 
-Before anything is sent, a redaction pass drops lines that look like secrets (`API_KEY=…`, `password: …`, `authorization: …`) and rewrites every `sk-…` token. That catches secret-*shaped* text only — a pasted log, a customer name or a snippet in your prompt goes as typed.
+Before anything is sent, a redaction pass drops lines that look like secrets (`API_KEY=…`, `password: …`, `authorization: …`) and rewrites every `sk-…` token.
 
-To keep prompts local and rely on the curated channel alone:
+To disable automatic post-green extraction (and rely on `/remember` + greenfield only):
 
 ```json
 {
@@ -56,13 +57,13 @@ To keep prompts local and rely on the curated channel alone:
     "memory": {
       "kind": "http",
       "baseUrl": "http://localhost:8888",
-      "retainPrompts": false
+      "autoRetain": false
     }
   }
 }
 ```
 
-Worth doing when the bank is shared with other people or hosted by someone else. On a bank you run yourself, leaving it on is the point of the feature.
+Legacy `retainPrompts: false` still opts out. Raw prompt retain is gone — `retainPrompts: true` is obsolete and ignored.
 
 ### Treat the bank as untrusted input
 
@@ -106,14 +107,15 @@ Same remote on two machines shares one bank. `/memory` prints the resolved bank 
 
 Curated decision text only (e.g. “Contact.companyId required; company FK is native select”). Not full chat, not file dumps. Obvious secrets (`API_KEY=…`, `sk-…`) are redacted before retain. HTTP retains use context tag `tsforge-decision`.
 
-## `/memory`
+## `/memory` and `/remember`
 
 In an interactive session:
 
-- **Coding lessons** — Phase 1 TTSR ledger (local)
-- **Project decisions** — external provider list (when configured)
+- **`/memory`** — coding lessons (Phase 1 TTSR ledger) + project decisions from the external provider
+- **`/remember <decision>`** — retain one durable product/architecture decision now
+- **`/memory forget`** — clear the local ledger **and** ask the provider to clear that bank
 
-`/memory forget` clears the local ledger **and** asks the provider to clear that bank.
+`/memory` prints the resolved bank id when configured.
 
 ## Fail-soft
 
