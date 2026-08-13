@@ -6,7 +6,22 @@ import {
   pruneOversizedToolResults,
   PRUNE_MARKER,
   PRUNE_THRESHOLD_CHARS,
+  RETAIN_CHARS,
 } from "../src/loop/context-hygiene";
+
+/** Everything a retained message really costs, tool-call arguments included. */
+function retainedChars(messages: readonly IChatMessage[]): number {
+  return messages.reduce(
+    (sum, m) =>
+      sum +
+      m.content.length +
+      (m.toolCalls?.reduce(
+        (n, tc) => n + JSON.stringify(tc.arguments).length,
+        0
+      ) ?? 0),
+    0
+  );
+}
 
 /** Records how many times the summarizer was asked to run. */
 function countingProvider(): { provider: IProvider; calls: () => number } {
@@ -31,17 +46,26 @@ const refusingProvider: IProvider = {
   },
 };
 
-/** A step whose assistant turn is far too large to fit in the retain budget,
- *  so the budget cut lands on its tool RESULT and the pair must be re-joined. */
-function historyCutMidStep(): IChatMessage[] {
+/** An old turn far too large to retain, then a newest step that fits — so the
+ *  window must begin at that step's assistant turn and carry its result along. */
+function historyWithFittingNewestStep(): IChatMessage[] {
   return [
     { role: "system", content: "sys" },
+    { role: "user", content: "A".repeat(100_000) },
     {
       role: "assistant",
-      content: "old",
-      toolCalls: [{ id: "c1", name: "read", arguments: {} }],
+      content: "step",
+      toolCalls: [{ id: "c2", name: "read", arguments: {} }],
     },
-    { role: "tool", content: "old result", toolCallId: "c1" },
+    { role: "tool", content: "fresh result", toolCallId: "c2" },
+  ];
+}
+
+/** A newest step whose own assistant turn already blows the retain budget. */
+function historyWithOversizedNewestStep(): IChatMessage[] {
+  return [
+    { role: "system", content: "sys" },
+    { role: "user", content: "older turn" },
     {
       role: "assistant",
       content: "A".repeat(100_000),
@@ -77,34 +101,43 @@ function hasNoOrphanToolResult(messages: readonly IChatMessage[]): boolean {
 describe("compaction retain window", () => {
   test("keeps the newest turns verbatim instead of wiping the history", async () => {
     const { provider } = countingProvider();
-    const messages = historyCutMidStep();
 
-    const result = await compactConversation(messages, provider);
+    const result = await compactConversation(
+      historyWithFittingNewestStep(),
+      provider
+    );
     const kept = result.messages.map((m) => m.content);
 
     expect(kept).toContain("fresh result");
+    expect(kept).toContain("step");
     expect(kept.some((c) => c.includes("brief summary"))).toBe(true);
-    // The summarized turn is gone; only the retained tail survives verbatim.
-    expect(kept).not.toContain("old result");
+    // The oversized older turn is gone; only the retained tail survives verbatim.
+    expect(kept.some((c) => c.startsWith("A".repeat(100)))).toBe(false);
   });
 
-  test("never retains a tool result whose declaring turn was summarized away", async () => {
+  test("a retained tool result always brings its declaring turn with it", async () => {
     const { provider } = countingProvider();
 
-    const result = await compactConversation(historyCutMidStep(), provider);
+    const result = await compactConversation(
+      historyWithFittingNewestStep(),
+      provider
+    );
 
     expect(hasNoOrphanToolResult(result.messages)).toBe(true);
-    // The pair was re-joined rather than dropped: both halves are present.
+    // Both halves of the step are present — the pair was kept, not split.
     const kept = result.messages.map((m) => m.content);
 
+    expect(kept).toContain("step");
     expect(kept).toContain("fresh result");
-    expect(kept.some((c) => c.startsWith("A".repeat(100)))).toBe(true);
   });
 
   test("orders output as system, summary, then the retained tail", async () => {
     const { provider } = countingProvider();
 
-    const result = await compactConversation(historyCutMidStep(), provider);
+    const result = await compactConversation(
+      historyWithFittingNewestStep(),
+      provider
+    );
     const [first, second] = result.messages;
 
     expect(first?.role).toBe("system");
@@ -113,17 +146,74 @@ describe("compaction retain window", () => {
     expect(result.messages.at(-1)?.content).toBe("fresh result");
   });
 
+  test("retains nothing rather than blowing the budget on one huge step", async () => {
+    const { provider } = countingProvider();
+
+    const result = await compactConversation(
+      historyWithOversizedNewestStep(),
+      provider
+    );
+
+    expect(hasNoOrphanToolResult(result.messages)).toBe(true);
+    expect(result.messages.some((m) => m.role === "tool")).toBe(false);
+    expect(retainedChars(result.messages)).toBeLessThanOrEqual(RETAIN_CHARS);
+  });
+
+  test("counts tool-call arguments against the retain budget", async () => {
+    const { provider } = countingProvider();
+    // The write BODY lives in toolCall arguments, not in `content` — a budget
+    // reading only `content` would score this turn at ~0 and retain it.
+    const messages: IChatMessage[] = [
+      { role: "user", content: "U".repeat(1000) },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "c1",
+            name: "create",
+            arguments: { file: "a.ts", content: "Z".repeat(80_000) },
+          },
+        ],
+      },
+      { role: "tool", content: "ok", toolCallId: "c1" },
+    ];
+
+    const result = await compactConversation(messages, provider);
+
+    expect(retainedChars(result.messages)).toBeLessThanOrEqual(RETAIN_CHARS);
+  });
+
+  test("a summarizing compact actually shrinks the transcript", async () => {
+    const { provider } = countingProvider();
+    const messages = historyWithFittingNewestStep();
+    const sizeBefore = retainedChars(messages);
+
+    const result = await compactConversation(messages, provider);
+
+    expect(retainedChars(result.messages)).toBeLessThan(sizeBefore / 2);
+  });
+
   test("drops an already-orphaned tool result rather than retaining it", async () => {
     const { provider } = countingProvider();
+    // Every tool result stays under the prune threshold so this exercises the
+    // retain path rather than short-circuiting on a prune-only compact.
     const messages: IChatMessage[] = [
       { role: "user", content: "U".repeat(100_000) },
       { role: "tool", content: "leftover", toolCallId: "ghost" },
+      {
+        role: "assistant",
+        content: "step",
+        toolCalls: [{ id: "c1", name: "read", arguments: {} }],
+      },
+      { role: "tool", content: "fresh result", toolCallId: "c1" },
     ];
 
     const result = await compactConversation(messages, provider);
 
     expect(hasNoOrphanToolResult(result.messages)).toBe(true);
-    expect(result.messages.some((m) => m.role === "tool")).toBe(false);
+    // Retention still happened — the orphan was excluded, not the whole tail.
+    expect(result.messages.map((m) => m.content)).toContain("fresh result");
   });
 });
 

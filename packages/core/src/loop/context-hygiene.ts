@@ -48,8 +48,8 @@ const PRUNE_TAIL_CHARS = 1024;
  */
 export const PRUNE_MARKER = "\n\n[... tool result middle pruned ...]\n\n";
 
-/** Fraction of the transcript a prune must reclaim to stand in for a summary. */
-const PRUNE_SUFFICIENT_FRACTION = 4;
+/** A prune reclaiming this fraction (1/N) of the transcript stands in for a summary. */
+const PRUNE_SUFFICIENT_DIVISOR = 4;
 
 /** What a compaction did: the new history, plus what a prune-only pass freed. */
 export interface ICompactResult {
@@ -482,74 +482,88 @@ export function autoCompactPct(
 }
 
 /**
- * Move a retain-window start off a tool result and onto the assistant turn that
- * declared it.
+ * What a message really costs the context.
  *
- * A window chosen purely by size can begin at a `tool` message whose owning
- * `tool_calls` turn falls in the summarized region. `toWire` then emits a
- * `tool_call_id` that no preceding assistant message declares, which an
- * OpenAI-compatible server rejects — and because the compacted array is written
- * back into the live history, it is re-sent on every later turn, so one bad cut
- * ends the session rather than one request. The wipe-everything compaction this
- * replaced could not orphan anything; a retain window is what introduces the
- * hazard, so the snap is a correctness requirement and not a nicety.
- *
- * Ownership is resolved by walking back to the nearest declaring turn rather
- * than through `callMeta`, whose `call_${i}` fallback ids collide across
- * messages and would resolve some owners to the wrong turn.
+ * `content` alone undercounts an assistant turn badly: create/edit tool-call
+ * ARGUMENTS carry whole file bodies and are deliberately kept full in history
+ * (see this module's header), so a turn holding an 80KB write measures as ~0
+ * against a character budget that is supposed to bound it.
  */
-function balancedRetainStart(
-  conversation: readonly IChatMessage[],
-  start: number
-): number {
-  let owner = start;
+function messageChars(m: IChatMessage): number {
+  const args =
+    m.toolCalls?.reduce(
+      (sum, tc) => sum + JSON.stringify(tc.arguments).length,
+      0
+    ) ?? 0;
 
-  while (owner > 0 && conversation[owner]?.role === "tool") {
-    owner -= 1;
-  }
-
-  const declaring = conversation[owner];
-
-  if (
-    declaring?.role === "assistant" &&
-    declaring.toolCalls !== undefined &&
-    declaring.toolCalls.length > 0
-  ) {
-    return owner;
-  }
-
-  // Nothing above these results declares them (an orphan already in history):
-  // drop them from the window rather than carry a dangling id forward.
-  let next = start;
-
-  while (next < conversation.length && conversation[next]?.role === "tool") {
-    next += 1;
-  }
-
-  return next;
+  return m.content.length + args;
 }
 
-/** Newest-first index where the verbatim retain window begins. */
+/**
+ * Indices a retain window is allowed to begin at: every message that is not a
+ * tool result, i.e. every step boundary.
+ *
+ * A step is one non-tool message plus the tool results answering it, and the
+ * window may only ever start on one. Beginning mid-step would retain a result
+ * whose declaring `tool_calls` turn was summarized away; `toWire` then emits a
+ * `tool_call_id` that no preceding assistant message declares, which an
+ * OpenAI-compatible server rejects. Because the compacted array becomes the live
+ * history, that ends the session rather than one request. The wipe-everything
+ * compaction this replaced could not orphan anything — the retain window is what
+ * introduces the hazard, so this is a correctness constraint, not a nicety.
+ *
+ * Leading orphans (results already in history with nothing declaring them) are
+ * not boundaries either, so they can only ever fall in the summarized region.
+ */
+function stepStartIndices(conversation: readonly IChatMessage[]): number[] {
+  const starts: number[] = [];
+
+  conversation.forEach((m, i) => {
+    if (m.role !== "tool") {
+      starts.push(i);
+    }
+  });
+
+  return starts;
+}
+
+/**
+ * Where the verbatim retain window begins: the oldest step boundary whose whole
+ * suffix still fits the budget.
+ *
+ * Whole steps only. Admitting a partial step and then snapping backward to pick
+ * up its declaring turn cannot work — the walk stopped precisely because that
+ * turn did not fit, so re-admitting it always breaks the budget it just
+ * respected. When even the newest step is too big to fit, nothing is retained.
+ */
 function retainStartIndex(conversation: readonly IChatMessage[]): number {
-  const total = conversation.reduce((sum, m) => sum + m.content.length, 0);
+  const costs = conversation.map(messageChars);
+  const total = costs.reduce((sum, c) => sum + c, 0);
   // Half the transcript caps the window, so an older region always survives to
   // be summarized and "everything fits, nothing to summarize" cannot arise.
   const budget = Math.min(RETAIN_CHARS, Math.floor(total / 2));
-  let spent = 0;
+  const starts = stepStartIndices(conversation);
+  let suffix = 0;
+  let next = conversation.length;
   let start = conversation.length;
 
-  while (start > 0) {
-    const cost = conversation[start - 1]?.content.length ?? 0;
+  for (let k = starts.length - 1; k >= 0; k -= 1) {
+    const boundary = starts[k] ?? 0;
 
-    if (spent + cost > budget) {
+    for (let i = next - 1; i >= boundary; i -= 1) {
+      suffix += costs[i] ?? 0;
+    }
+
+    next = boundary;
+
+    if (suffix > budget) {
       break;
     }
 
-    spent += cost;
-    start -= 1;
+    start = boundary;
   }
 
-  return balancedRetainStart(conversation, start);
+  return start;
 }
 
 /**
@@ -568,12 +582,12 @@ export async function compactConversation(
   signal?: AbortSignal
 ): Promise<ICompactResult> {
   const before = messages.length;
-  const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+  const totalChars = messages.reduce((sum, m) => sum + messageChars(m), 0);
   const prunedChars = pruneOversizedToolResults(messages);
 
   if (
     prunedChars > 0 &&
-    prunedChars >= Math.floor(totalChars / PRUNE_SUFFICIENT_FRACTION)
+    prunedChars >= Math.floor(totalChars / PRUNE_SUFFICIENT_DIVISOR)
   ) {
     return { before, after: before, messages, prunedChars };
   }
