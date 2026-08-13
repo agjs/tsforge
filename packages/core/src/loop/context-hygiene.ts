@@ -592,17 +592,23 @@ export async function compactConversation(
     return { before, after: before, messages, prunedChars };
   }
 
+  // Pruning already mutated `messages`, so an early return still has to report
+  // what it freed — otherwise a compact that did real work prints as a no-op.
+  // Both branches below are only reachable on an empty transcript today (the
+  // half-transcript cap guarantees an older region whenever there is content),
+  // but they are on the honest side of that guarantee rather than relying on it.
+  const freed = prunedChars > 0 ? { prunedChars } : {};
   const conversation = messages.filter((m) => m.role !== "system");
 
   if (conversation.length === 0) {
-    return { before, after: before, messages };
+    return { before, after: before, messages, ...freed };
   }
 
   const start = retainStartIndex(conversation);
   const older = conversation.slice(0, start);
 
   if (older.length === 0) {
-    return { before, after: before, messages };
+    return { before, after: before, messages, ...freed };
   }
 
   const transcript = older.map((m) => `[${m.role}] ${m.content}`).join("\n\n");
