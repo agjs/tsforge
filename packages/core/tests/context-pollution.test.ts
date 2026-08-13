@@ -545,7 +545,7 @@ describe("assistantMessage clones tool args for history", () => {
 });
 
 describe("headless mid-drive compact wiring", () => {
-  test("compactConversation replaces history with system + summary", async () => {
+  test("compactConversation replaces history with system + summary + retained tail", async () => {
     const provider: IProvider = {
       async complete() {
         return { content: "brief summary", toolCalls: [] };
@@ -560,9 +560,11 @@ describe("headless mid-drive compact wiring", () => {
     const result = await compactConversation(messages, provider);
 
     expect(result.before).toBe(3);
-    expect(result.after).toBe(2);
+    expect(result.after).toBe(3);
     expect(result.messages[0]?.role).toBe("system");
     expect(result.messages[1]?.content).toContain("brief summary");
+    // The newest turn survives the compact verbatim — that is the point of it.
+    expect(result.messages[2]?.content).toBe("world");
   });
 });
 

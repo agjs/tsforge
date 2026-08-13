@@ -31,7 +31,17 @@ export interface IModelEntry {
   /** Name of an env var holding the key — resolved at use time. Used when
    *  `apiKey` is unset, so the registry can be shared/committed without secrets. */
   apiKeyEnv?: string;
-  /** Context window (tokens) for the status line + auto-compaction. */
+  /** The USABLE context window in tokens — the point past which this endpoint
+   *  stops being practical to drive, NOT the model's advertised maximum. It
+   *  feeds the status gauge and the auto-compaction trigger and is never sent
+   *  to the server, so the number that belongs here is the one the hardware
+   *  actually sustains.
+   *
+   *  Omitted → `detectContextWindow` asks the server, which answers with its
+   *  ADVERTISED `max_model_len`. On a self-hosted box that is routinely far
+   *  past the usable point (a 1M-token vLLM checkpoint whose prefill crawls
+   *  from ~250k), and compaction keyed to 80% of the advertised figure then
+   *  never fires at all. Set it explicitly for self-hosted entries. */
   contextWindow?: number;
   /** Default thinking mode for this model. */
   thinking?: boolean;

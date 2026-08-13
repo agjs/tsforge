@@ -24,6 +24,7 @@ import {
 } from "../render/file-menu";
 import { listWorkspaceFiles } from "../lib/fs";
 import { composeMessage } from "../loop/prompt";
+import { compactSummaryLine } from "../loop/context-hygiene";
 import { resolveImageInput } from "./image-input";
 import { resolveImageCapabilityFlags } from "../loop/tools/image-tools";
 import {
@@ -561,9 +562,13 @@ async function initReplSession(args: ICliArgs): Promise<{
   const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
   // Auto-compaction threshold (fraction of the window); session default 0.8.
   const autoCompactAt = envNumber("TSFORGE_COMPACT_AT");
-  // The model's real context window: explicit env wins, else ask the server
-  // (max_model_len), else a conservative fallback. Drives the status gauge AND
-  // auto-compaction (the session compacts before a send once it nears the window).
+  // The USABLE context window: the model entry wins, then env, then the server's
+  // advertised max_model_len, then a conservative fallback. Drives the status gauge
+  // AND auto-compaction (the session compacts before a send once it nears this).
+  // The server's answer is the ADVERTISED maximum, which on a self-hosted box can
+  // sit far past the point where prefill stops being practical — a window set too
+  // high doesn't just skew the gauge, it puts the compaction threshold out of reach
+  // entirely. Self-hosted entries should declare the number the hardware sustains.
   const contextWindow =
     activeModel.entry.contextWindow ??
     envNumber("TSFORGE_CONTEXT_WINDOW") ??
@@ -1361,10 +1366,10 @@ export async function repl(args: ICliArgs): Promise<number> {
         spinner.setLabel("compacting");
 
         try {
-          const { before, after } = await session.compact();
+          const result = await session.compact();
 
           await persist();
-          streamOut(`compacted ${before} → ${after} messages\n`);
+          streamOut(`${compactSummaryLine(result)}\n`);
         } finally {
           spinner.stop();
           lastStatus = "ready";
