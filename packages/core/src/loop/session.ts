@@ -3146,9 +3146,9 @@ export class Session {
   }
 
   /** Retain a curated decision into the external bank (fail-soft, visible). */
-  async retainDecision(content: string): Promise<void> {
+  async retainDecision(content: string): Promise<boolean> {
     if (this.decisionMemory === null) {
-      return;
+      return false;
     }
 
     const bankId = this.decisionMemory.bankId;
@@ -3168,6 +3168,8 @@ export class Session {
           ? `decision memory: retained to bank ${bankId}`
           : `decision memory: retain failed for bank ${bankId}`,
       });
+
+      return ok;
     } catch (err) {
       trace("session.decision-memory.retain", err);
       this.report({
@@ -3175,12 +3177,14 @@ export class Session {
         task: SESSION_ID,
         message: `decision memory: retain failed for bank ${bankId}`,
       });
+
+      return false;
     }
   }
 
   /**
    * Explicit curated retain (`/remember`). Returns false when memory is not
-   * configured or the text is empty after trim.
+   * configured, the text is empty after trim, or the backend reject/timeouts.
    */
   async rememberDecision(text: string): Promise<boolean> {
     if (this.decisionMemory === null) {
@@ -3196,9 +3200,7 @@ export class Session {
       return false;
     }
 
-    await this.retainDecision(curated);
-
-    return true;
+    return this.retainDecision(curated);
   }
 
   /**
@@ -3223,11 +3225,16 @@ export class Session {
     userText: string,
     assistantText: string
   ): Promise<void> {
+    const abort = new AbortController();
+
     try {
       const decisions = await withDeadline(
-        extractDecisions(this.provider, userText, assistantText),
+        extractDecisions(this.provider, userText, assistantText, {
+          signal: abort.signal,
+        }),
         [],
-        EXTRACT_DECISION_TIMEOUT_MS
+        EXTRACT_DECISION_TIMEOUT_MS,
+        { abort }
       );
 
       for (const decision of decisions) {

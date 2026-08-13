@@ -375,6 +375,17 @@ describe("start-up deadline", () => {
 
     expect(await withDeadline(quick, "fallback", 1000)).toBe("brief");
   });
+
+  test("aborts the controller on timeout so in-flight work can stop", async () => {
+    const abort = new AbortController();
+    const never = new Promise<string>(() => {
+      /* deliberately never settles */
+    });
+
+    await withDeadline(never, "fallback", 50, { abort });
+
+    expect(abort.signal.aborted).toBe(true);
+  });
 });
 
 describe("loadDecisionMemoryAtStart", () => {

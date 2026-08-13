@@ -155,23 +155,12 @@ function tryParseJsonDecisions(trimmed: string): readonly string[] | null {
   }
 }
 
-function decisionsFromLines(trimmed: string): readonly string[] {
-  const fromLines: string[] = [];
-
-  for (const line of trimmed.split("\n")) {
-    const n = normalizeDecision(line);
-
-    if (n !== null) {
-      fromLines.push(n);
-    }
-  }
-
-  return uniqueDecisions(fromLines);
-}
-
 /**
- * Parse model output into decision strings. Accepts a JSON string array or
- * simple line/bullet lists. Junk / NONE → [].
+ * Parse model output into decision strings.
+ *
+ * Only a JSON string array is accepted (optionally wrapped in prose). Non-JSON
+ * replies — refusals, preambles, bare bullet lists — yield []. Banking the
+ * model's prose is how harness chatter re-enters the bank.
  */
 export function parseExtractedDecisions(raw: string): readonly string[] {
   const trimmed = raw.trim();
@@ -180,8 +169,7 @@ export function parseExtractedDecisions(raw: string): readonly string[] {
     return [];
   }
 
-  // Prefer a JSON array anywhere in the reply (models often wrap with prose).
-  return tryParseJsonDecisions(trimmed) ?? decisionsFromLines(trimmed);
+  return tryParseJsonDecisions(trimmed) ?? [];
 }
 
 /** Walk messages backward for the latest non-empty assistant content. */

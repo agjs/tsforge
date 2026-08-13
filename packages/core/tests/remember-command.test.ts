@@ -72,4 +72,20 @@ describe("runRememberSlashCommand", () => {
     expect(seen).toBe("Company FK is a native select");
     expect(lines.join("")).toContain("remembered in bank tsforge:dreamdata");
   });
+
+  test("surfaces backend retain failure instead of claiming success", async () => {
+    const lines: string[] = [];
+
+    await runRememberSlashCommand(
+      fakeSession({
+        bankId: "tsforge:dreamdata",
+        remember: async () => false,
+      }),
+      "Company FK is a native select",
+      (t) => lines.push(t)
+    );
+
+    expect(lines.join("")).toContain("could not retain that decision");
+    expect(lines.join("")).not.toContain("remembered in bank");
+  });
 });

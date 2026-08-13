@@ -37,20 +37,41 @@ describe("parseExtractedDecisions", () => {
     ]);
   });
 
-  test("parses bullet lines when JSON is missing", () => {
+  test("rejects non-JSON prose — including refusals and preambles", () => {
+    // Regression: the old line fallback banked these as "decisions".
+    expect(
+      parseExtractedDecisions(
+        "Sure! Here are the durable decisions I found in this turn:\n- Company FK is a native select"
+      )
+    ).toEqual([]);
+    expect(
+      parseExtractedDecisions("I could not find any durable decisions [none]")
+    ).toEqual([]);
+    expect(
+      parseExtractedDecisions(
+        "There are no durable product or architecture decisions in this turn."
+      )
+    ).toEqual([]);
+  });
+
+  test("ignores bare bullet lists without a JSON array", () => {
+    // System prompt requires JSON; banking bullets re-opens the prose path.
+    expect(
+      parseExtractedDecisions(
+        [
+          "- Company FK is a native select, not a combobox",
+          "- Prefer package-follow gates in workspace containers",
+        ].join("\n")
+      )
+    ).toEqual([]);
+  });
+
+  test("still accepts a JSON array wrapped in prose", () => {
     const out = parseExtractedDecisions(
-      [
-        "- Company FK is a native select, not a combobox",
-        "- Prefer package-follow gates in workspace containers",
-        "NONE",
-      ].join("\n")
+      'Sure!\n["Company FK is a native select, not a combobox"]\n'
     );
 
-    expect(out).toContain("Company FK is a native select, not a combobox");
-    expect(out).toContain(
-      "Prefer package-follow gates in workspace containers"
-    );
-    expect(out).not.toContain("NONE");
+    expect(out).toEqual(["Company FK is a native select, not a combobox"]);
   });
 
   test("dedupes case-insensitively and caps at 5", () => {
