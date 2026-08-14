@@ -2390,6 +2390,7 @@ export class Session {
           task: SESSION_ID,
           usage: res.usage,
           genMs,
+          callMs: ended - callStart,
           ...(enableThinking === undefined ? {} : { thinking: enableThinking }),
         })
       );

@@ -158,9 +158,14 @@ export function usageEvent(args: {
   task: string;
   usage: ITokenUsage;
   genMs?: number;
+  /** WALL time for the whole call, prefill included. `genMs` starts at the first
+   *  token, so on a prefix-caching server it can hide almost the entire cost: a
+   *  logged 168s call reported 6.7s. Kept separate rather than folded into `ms`
+   *  so tok/s stays a GENERATION rate. */
+  callMs?: number;
   thinking?: boolean;
 }): ILoopEvent {
-  const { task, usage, genMs, thinking } = args;
+  const { task, usage, genMs, callMs, thinking } = args;
   const tps = generationRate(usage.completionTokens, genMs);
   const rate = tps === undefined ? "" : ` · ${String(tps)} tok/s`;
 
@@ -176,6 +181,7 @@ export function usageEvent(args: {
       : { cachedPromptTokens: usage.cachedPromptTokens }),
     ...(tps === undefined ? {} : { tokensPerSecond: tps }),
     ...(genMs === undefined ? {} : { ms: Math.round(genMs) }),
+    ...(callMs === undefined ? {} : { callMs: Math.round(callMs) }),
     ...(thinking === undefined ? {} : { thinking }),
   };
 }
