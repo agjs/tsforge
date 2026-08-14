@@ -977,6 +977,9 @@ async function runMainLoop(args: {
     // into the next successful call (exception-safe one-shot semantics).
     args.state.pendingModelOverride = null;
 
+    // Wall time for the whole call, prefill included — the headless driver runs
+    // the long builds, and on a prefix-caching server prefill IS the cost.
+    const callStart = performance.now();
     const res = await args.provider.complete(
       args.messages,
       completionOptionsFor({
@@ -1002,6 +1005,7 @@ async function runMainLoop(args: {
         usageEvent({
           task: args.taskId,
           usage: res.usage,
+          callMs: performance.now() - callStart,
           // Carried so malformed-tool-call rate stays correlatable with the
           // thinking mode (analyze-malformed) on the headless path too — the
           // whole point of one shared builder is that neither loop logs less

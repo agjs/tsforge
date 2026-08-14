@@ -1,5 +1,5 @@
 import type { ILoopEvent } from "../loop/loop.types";
-import { analyzeEvents } from "./metrics";
+import { analyzeEvents, type IRunMetrics } from "./metrics";
 
 /** Run identity from the `start` event (a `--log` is self-describing). */
 function runMeta(events: readonly ILoopEvent[]): {
@@ -12,6 +12,20 @@ function runMeta(events: readonly ILoopEvent[]): {
     model: start?.model ?? "?",
     contextWindow: start?.contextWindow ?? 0,
   };
+}
+
+/** Model-call wall time, with the prefill share when generation time was
+ *  measured. "—" when no call reported a duration — never an invented 0. */
+function callTimeCell(m: IRunMetrics): string {
+  if (m.modelCallMs <= 0) {
+    return "—";
+  }
+
+  const total = `${String(Math.round(m.modelCallMs / 1000))}s`;
+
+  return m.prefillMs > 0
+    ? `${total} (${String(Math.round(m.prefillMs / 1000))}s prefill)`
+    : total;
 }
 
 /** A compact "n high, 1 critical" summary of denials by risk (empty → ""). */
@@ -56,6 +70,10 @@ export function formatTrace(events: readonly ILoopEvent[]): string {
         ? "—"
         : `${String(Math.round(m.cacheHitRate * 100))}% of prompt reused`,
     ],
+    // Wall time for the calls themselves. `tok/s` is a GENERATION rate, so it
+    // says nothing about prefill — which on a prefix-caching server is most of
+    // the cost, and stayed invisible while a cache bug ate half a session.
+    ["model call time", callTimeCell(m)],
     ["edits/creates", `${m.edits} (${m.filesCreated} created)`],
     [
       "accept rate",

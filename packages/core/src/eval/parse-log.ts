@@ -107,12 +107,17 @@ function assignText(event: ILoopEvent, src: Record<string, unknown>): void {
 function assignNumbers(event: ILoopEvent, src: Record<string, unknown>): void {
   const count = optionalNumber(src.count);
   const ms = optionalNumber(src.ms);
+  const callMs = optionalNumber(src.callMs);
 
   if (count !== undefined) {
     event.count = count;
   }
 
   const promptTokens = optionalNumber(src.promptTokens);
+  // Without this the trace prints `prefix cache —` on a log that recorded the
+  // hit rate on every single call: the metric existed, the parser just dropped
+  // the field. That blind spot hid a cache bug worth half a session's wall clock.
+  const cachedPromptTokens = optionalNumber(src.cachedPromptTokens);
   const completionTokens = optionalNumber(src.completionTokens);
   const totalTokens = optionalNumber(src.totalTokens);
   const tokensPerSecond = optionalNumber(src.tokensPerSecond);
@@ -122,8 +127,16 @@ function assignNumbers(event: ILoopEvent, src: Record<string, unknown>): void {
     event.ms = ms;
   }
 
+  if (callMs !== undefined) {
+    event.callMs = callMs;
+  }
+
   if (promptTokens !== undefined) {
     event.promptTokens = promptTokens;
+  }
+
+  if (cachedPromptTokens !== undefined) {
+    event.cachedPromptTokens = cachedPromptTokens;
   }
 
   if (completionTokens !== undefined) {

@@ -30,6 +30,10 @@ export interface IRunMetrics {
    *  field count toward either side of the ratio, so an endpoint that reports it
    *  intermittently isn't diluted by the calls that stayed silent. */
   cacheHitRate: number | null;
+  /** Wall ms across model calls, prefill included. */
+  modelCallMs: number;
+  /** Of that, the share spent BEFORE the first token — i.e. prefill. */
+  prefillMs: number;
   /** File mutations (`edit` + `create`). */
   edits: number;
   /** Edit batches rolled back (`reverted` events) — gate-break or no quality gain.
@@ -71,6 +75,8 @@ function emptyMetrics(): IRunMetrics {
     tokensOut: 0,
     peakContext: 0,
     cacheHitRate: null,
+    modelCallMs: 0,
+    prefillMs: 0,
     edits: 0,
     editsReverted: 0,
     acceptRate: 0,
@@ -122,6 +128,23 @@ function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   if (event.tokensPerSecond !== undefined && event.tokensPerSecond > 0) {
     acc.tpsSum += event.tokensPerSecond;
     acc.tpsCount += 1;
+  }
+
+  // `ms` is generation only. On a prefix-caching server the gap between the two
+  // IS the prefill, and it dominates: one logged run spent 2645s in model calls
+  // while reporting 664s. Track both so the difference is visible.
+  const callMs = event.callMs ?? 0;
+
+  if (Number.isFinite(callMs) && callMs > 0) {
+    m.modelCallMs += callMs;
+
+    // Only split out prefill when generation time was actually measured.
+    // Without `ms`, `callMs - 0` would report the whole call as prefill — a
+    // fabricated number, and exactly the kind of confident-but-wrong metric
+    // this change exists to remove.
+    if (event.ms !== undefined && Number.isFinite(event.ms)) {
+      m.prefillMs += Math.max(0, callMs - event.ms);
+    }
   }
 
   // Bounded PER CALL, not just on the final quotient. A call carrying cached

@@ -92,6 +92,8 @@ export interface ILoopEvent {
   count?: number;
   /** For `timing` events: how long the turn took, in milliseconds. */
   ms?: number;
+  /** Wall time for a whole model call, prefill included (`ms` is generation only). */
+  callMs?: number;
   errors?: number;
   /** For `validated` events: the failing gate rules/codes (e.g. "TS18048",
    *  "no-restricted-syntax") — the structured substrate the failure classifier
