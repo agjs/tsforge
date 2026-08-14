@@ -172,6 +172,9 @@ export function buildHistoryFreshnessGuidance(): string {
     "  • Per-write guard notes (`⚠ CHECK`, `⚠ BLAST RADIUS`) on older create/edit",
     "    results describe the file AS IT WAS THEN. The newest gate feedback is the",
     "    live state — fix what it reports, not what an older note reported.",
+    "  • Gate feedback may appear more than once. Only the LAST one is the current",
+    "    gate result; every earlier list was already acted on. Do not re-fix errors",
+    "    from an older copy — if it is not in the newest feedback, it is fixed.",
   ].join("\n");
 }
 

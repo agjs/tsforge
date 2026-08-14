@@ -83,8 +83,8 @@ describe("isGateFeedbackInject", () => {
   });
 });
 
-describe("upsertGateFeedback / injectFeedback one live slot", () => {
-  test("two red settles leave at most one gate-feedback user message", async () => {
+describe("gate feedback is append-only, deduped at compaction", () => {
+  test("two red settles append; the newest is last and the prefix is untouched", async () => {
     const messages: IChatMessage[] = [];
     const ctx = makeInjectCtx(messages);
     const state = freshState();
@@ -111,8 +111,15 @@ describe("upsertGateFeedback / injectFeedback one live slot", () => {
 
     const gates = messages.filter((m) => isGateFeedbackInject(m));
 
-    expect(gates).toHaveLength(1);
-    expect(gates[0]?.content).toContain("boom2");
+    // Replacing the older slot IN PLACE rewrote the prompt from that point and
+    // discarded the server's prefix cache: measured at 13 calls of 116-168s in
+    // one 146-turn run. Appending keeps every earlier message byte-identical.
+    expect(gates).toHaveLength(2);
+    expect(gates.at(-1)?.content).toContain("boom2");
+    expect(messages.at(-1)?.content).toContain("boom2");
+    // The first feedback and the assistant turn after it are still where they were.
+    expect(messages[0]?.content).toContain("boom");
+    expect(messages[1]?.content).toBe("trying again");
   });
 
   test("injectFeedback prepends harness attribution from lastFailureClass", async () => {
@@ -139,7 +146,7 @@ describe("upsertGateFeedback / injectFeedback one live slot", () => {
     expect(wall).toContain("do not disable");
   });
 
-  test("upsert replaces earlier slots without appending", () => {
+  test("upsert appends rather than rewriting an earlier slot", () => {
     const messages: IChatMessage[] = [
       {
         role: "user",
@@ -156,9 +163,44 @@ describe("upsertGateFeedback / injectFeedback one live slot", () => {
 
     const gates = messages.filter((m) => isGateFeedbackInject(m));
 
-    expect(gates).toHaveLength(1);
-    expect(gates[0]?.content).toContain("- new");
-    expect(messages.some((m) => m.content.includes("- old"))).toBe(false);
+    expect(gates).toHaveLength(2);
+    expect(gates.at(-1)?.content).toContain("- new");
+    // The old copy SURVIVES until compaction — rewriting it in place is exactly
+    // what cost the prefix cache. Position 0 must be byte-identical.
+    expect(messages[0]?.content).toContain("- old");
+    expect(messages.at(-1)?.content).toContain("- new");
+  });
+
+  test("compaction leaves exactly one gate feedback — the newest", async () => {
+    const provider: IProvider = {
+      async complete() {
+        return { content: "summary", toolCalls: [] };
+      },
+    };
+    const messages: IChatMessage[] = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "U".repeat(50_000) },
+      {
+        role: "user",
+        content:
+          "The acceptance command still fails:\n- old\n\nFix your editable files and run it again.",
+      },
+      { role: "assistant", content: "ok" },
+      {
+        role: "user",
+        content:
+          "The acceptance command still fails:\n- new\n\nFix your editable files and run it again.",
+      },
+    ];
+
+    const result = await compactConversation(messages, provider);
+    const gates = result.messages.filter((m) => isGateFeedbackInject(m));
+
+    expect(gates.length).toBeLessThanOrEqual(1);
+
+    if (gates.length === 1) {
+      expect(gates[0]?.content).toContain("- new");
+    }
   });
 });
 
