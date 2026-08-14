@@ -3,14 +3,23 @@
  * Resume / transcript paint must not label these as USER cards.
  */
 
-/** Per-turn full plan-tree inject (legacy append path — pruned from history). */
-export function isChecklistTreeInject(message: {
+/** Opening line of an appended live-checklist snapshot. */
+export const CHECKLIST_SNAPSHOT_MARKER = "## Active plan checklist";
+
+/**
+ * An appended checklist snapshot. These carry the live plan tree, which used to
+ * live inside the SYSTEM message — where every task status change rewrote byte
+ * one of the prompt and cost a full cold prefill. Appending instead keeps the
+ * prefix stable; only the newest snapshot is authoritative, and the stale ones
+ * are dropped at compaction, where the prefix is being rebuilt anyway.
+ */
+export function isChecklistSnapshot(message: {
   readonly role: string;
   readonly content: string;
 }): boolean {
   return (
     message.role === "user" &&
-    message.content.startsWith("[checklist — session plan ")
+    message.content.startsWith(CHECKLIST_SNAPSHOT_MARKER)
   );
 }
 
@@ -26,7 +35,7 @@ export function isEphemeralUserInject(message: {
   const content = message.content;
 
   return (
-    isChecklistTreeInject(message) ||
+    isChecklistSnapshot(message) ||
     content.startsWith("Gate is GREEN but the approved checklist")
   );
 }

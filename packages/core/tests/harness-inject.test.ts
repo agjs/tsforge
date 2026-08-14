@@ -7,12 +7,11 @@ import {
 import { checklistOpenNudge } from "../src/loop/session";
 
 describe("isEphemeralUserInject", () => {
-  test("filters per-turn checklist inject and Phase B nudge", () => {
+  test("filters checklist snapshots and the Phase B nudge", () => {
     expect(
       isEphemeralUserInject({
         role: "user",
-        content:
-          "[checklist — session plan 31fbd6a0-ad34-4ad8-ad5a-efff0e8e44e5]\ngoal: x",
+        content: "## Active plan checklist (revision 3)\ngoal: x",
       })
     ).toBe(true);
     expect(
@@ -36,7 +35,7 @@ describe("isEphemeralUserInject", () => {
     expect(
       isEphemeralUserInject({
         role: "assistant",
-        content: "[checklist — session plan x]\ngoal: nope",
+        content: "## Active plan checklist (revision 1)\ngoal: nope",
       })
     ).toBe(false);
   });
@@ -114,11 +113,11 @@ describe("isHarnessUserInject", () => {
     ).toBe(false);
   });
 
-  test("checklist injects are harness (and ephemeral)", () => {
+  test("checklist snapshots are harness (and ephemeral)", () => {
     expect(
       isHarnessUserInject({
         role: "user",
-        content: "[checklist — session plan abc]\ngoal: x",
+        content: "## Active plan checklist (revision 3)\ngoal: x",
       })
     ).toBe(true);
   });

@@ -6,6 +6,7 @@ export {
   buildChatSystem,
   buildDriveToGreenSystem,
   buildTddGuidance,
+  buildHistoryFreshnessGuidance,
   buildSystemPrompt,
   seedPrompt,
   type ExecutionMode,

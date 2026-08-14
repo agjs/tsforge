@@ -68,12 +68,14 @@ import {
   sortedPacks,
   summarizeGateCommand,
 } from "./gate-visibility";
-import { isChecklistTreeInject } from "./harness-inject";
+import {
+  isChecklistSnapshot,
+  CHECKLIST_SNAPSHOT_MARKER,
+} from "./harness-inject";
 import {
   autoCompactPct as compactThresholdPct,
   compactConversation,
   compactSummaryLine,
-  pruneEphemeralToolResidue,
   scrubLegacyWriteArgStubs,
 } from "./context-hygiene";
 import {
@@ -123,6 +125,7 @@ import {
   buildChatSystem,
   buildDriveToGreenSystem,
   buildTddGuidance,
+  buildHistoryFreshnessGuidance,
   type ExecutionMode,
 } from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
@@ -485,7 +488,15 @@ export const PLAN_APPROVED_NOTE =
   "(vertical slices in the order approved). Implement now: task_focus the first " +
   "open item, then emit the tool calls. Do not re-explore or restate the plan.";
 
-const CHECKLIST_CONTRACT_MARKER = "## Active plan checklist";
+/** Shared with `isChecklistSnapshot` so the writer and the detector cannot drift. */
+const CHECKLIST_CONTRACT_MARKER = CHECKLIST_SNAPSHOT_MARKER;
+
+/** A snapshot minus its `(revision N)` header — the part that decides "changed". */
+function treeOf(snapshot: string): string {
+  const nl = snapshot.indexOf("\n");
+
+  return nl === -1 ? "" : snapshot.slice(nl + 1);
+}
 
 /** Post-green nudge when the gate is clean but the bound plan still has open nodes. */
 export function checklistOpenNudge(opts: {
@@ -508,7 +519,6 @@ export function checklistOpenNudge(opts: {
 }
 
 export {
-  isChecklistTreeInject,
   isEphemeralUserInject,
   isGateFeedbackInject,
   isHarnessUserInject,
@@ -828,6 +838,13 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
+  // Which copy wins when history holds two. Superseded reads / checklists are no
+  // longer stubbed per turn (that rewrote old messages and cost a cold prefill),
+  // so the ordering rule has to be stated — and this is the one place it can sit
+  // without ever dirtying the prefix. Same gap as the TDD block above: the
+  // interactive path does not go through buildSystemPrompt.
+  const freshness = `${buildHistoryFreshnessGuidance()}\n\n`;
+
   // Short pull-before-first-write contract + topic names only — never full guide bodies.
   // Full text arrives via `pull_conventions` (and optional PUSH after a red).
   const conv = conventionsOffered(cfg)
@@ -840,7 +857,7 @@ function systemPrompt(
     isOfferCheckActive(cfg)
   );
 
-  return `${base}\n\n${tdd}${conv}${decisions}${prefix}${lines.join("\n")}\n\n${contract}`;
+  return `${base}\n\n${freshness}${tdd}${conv}${decisions}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
 /** Build the initial message list. A FRESH session gets one freshly-built system
@@ -1124,6 +1141,10 @@ export class Session {
   private planIntroPending = false;
   /** Session-bound checklist plan id (`.tsforge/worklist/plans/<id>.json`). */
   private activePlanId: string | null = null;
+
+  /** Monotonic stamp on appended checklist snapshots. Superseded copies stay in
+   *  history until compaction, so the live one must be identifiable on sight. */
+  private checklistRevision = 0;
   /** Last present_plan proposal — bound on approve; not on disk until then. */
   private pendingPlan: IPlanDocument | null = null;
   /** Mid-session turn-cap override (setMaxTurns) — a web scaffold raises it. */
@@ -1221,10 +1242,6 @@ export class Session {
     if (this.hasGate) {
       this.ctx.tool.runTaskGate = () => runCheckGate(this.ctx, this.driveTurn);
     }
-
-    // Drop any legacy per-turn checklist copies from resumed history before the
-    // first model call — they must not sit in context forever.
-    this.pruneChecklistTreeInjects();
 
     // `--continue` used to revive contentMeta stubs; scrub before first call.
     scrubLegacyWriteArgStubs(this.ctx.messages);
@@ -1748,45 +1765,75 @@ export class Session {
     return plan;
   }
 
-  /** Drop legacy per-turn `[checklist — session plan …]` user copies from history. */
-  private pruneChecklistTreeInjects(): void {
-    const kept = this.ctx.messages.filter((m) => !isChecklistTreeInject(m));
-
-    if (kept.length !== this.ctx.messages.length) {
-      this.ctx.messages.splice(0, this.ctx.messages.length, ...kept);
-    }
-  }
-
-  /** System block: live plan tree + tools-only status reminder (replace in place). */
+  /**
+   * Append the live plan tree when — and only when — it has changed.
+   *
+   * This block used to be spliced into the SYSTEM message. That put the live
+   * task statuses at byte one of the prompt, so every `task_focus` /
+   * `task_complete` rewrote index 0 and threw away the WHOLE prefix cache:
+   * measured on the Spark box at 130k tokens, an unchanged-prefix turn prefills
+   * in 592ms and a one-checkbox change in 92,787ms. Appending keeps the prefix
+   * byte-identical, so an unchanged turn stays a cache hit and a changed turn
+   * only prefills the new snapshot.
+   *
+   * Unchanged trees append nothing, so history does not fill with one copy per
+   * turn. Superseded snapshots are dropped at compaction, where the prefix is
+   * rebuilt anyway; until then the `revision N` stamp marks the live one.
+   */
   private refreshChecklistContract(): void {
-    this.pruneChecklistTreeInjects();
-
-    const system = this.ctx.messages[0];
-
-    if (system?.role !== "system") {
+    if (this.activePlanId === null) {
       return;
     }
+
+    this.ensureChecklistRulesInSystem();
 
     const block = this.checklistContractText();
-    const idx = system.content.indexOf(CHECKLIST_CONTRACT_MARKER);
-    const previous = idx === -1 ? "" : system.content.slice(idx).trimEnd();
 
     if (block.length === 0) {
-      if (idx !== -1) {
-        system.content = system.content.slice(0, idx).trimEnd();
+      return;
+    }
+
+    for (let i = this.ctx.messages.length - 1; i >= 0; i -= 1) {
+      const m = this.ctx.messages[i];
+
+      if (m !== undefined && isChecklistSnapshot(m)) {
+        // Compare the TREE only: the revision line differs by construction, so
+        // including it would make every check look like a change.
+        if (treeOf(m.content) === treeOf(block)) {
+          return;
+        }
+
+        break;
+      }
+    }
+
+    // Superseded snapshots stay until compaction (removing them here would
+    // rewrite an old message and cost a cold prefill), so the live one has to be
+    // identifiable on sight. The system block tells the model highest wins.
+    this.checklistRevision += 1;
+
+    const stamped = this.checklistContractText();
+
+    // Land the snapshot BEFORE any trailing human turn, so the request stays the
+    // last thing the model reads — appending after it buried the ask under a
+    // checklist and changed how the model answered. Splicing at the tail rewrites
+    // only that final message, which the cache serves for next to nothing; it is
+    // the PREFIX that must not move.
+    let at = this.ctx.messages.length;
+
+    while (at > 0) {
+      const prev = this.ctx.messages[at - 1];
+
+      // Stop at an earlier snapshot: crossing one would place a NEWER revision
+      // before an older one, and "later wins" has to hold by position too.
+      if (prev?.role !== "user" || isChecklistSnapshot(prev)) {
+        break;
       }
 
-      return;
+      at -= 1;
     }
 
-    if (previous === block) {
-      return;
-    }
-
-    system.content =
-      idx === -1
-        ? `${system.content}\n\n${block}`
-        : `${system.content.slice(0, idx).trimEnd()}\n\n${block}`;
+    this.ctx.messages.splice(at, 0, { role: "user", content: stamped });
   }
 
   private checklistContractText(): string {
@@ -1800,15 +1847,44 @@ export class Session {
       return "";
     }
 
+    // ONLY the volatile tree. The rules that govern it are invariant, so they
+    // live in the system block (written once, never rewritten) where they keep
+    // system-level authority — a governance rule demoted to a user turn is a
+    // weaker instruction, and there is no cache reason to move it.
     return [
-      CHECKLIST_CONTRACT_MARKER,
+      `${CHECKLIST_CONTRACT_MARKER} (revision ${String(this.checklistRevision)})`,
       formatPlanTree(plan),
+    ].join("\n");
+  }
+
+  /** The invariant half of the checklist contract — safe to sit in SYSTEM. */
+  private static checklistRulesText(): string {
+    return [
+      "## Active plan rules",
       "Checklist changes ONLY via task_list / task_focus / task_complete / task_uncomplete / task_add / task_update.",
       "Living plan: if you discover missing work (yours or the human's), task_add it — do not leave it only in chat.",
       "If an item's scope/title/detail drifts, task_update; if done work must be redone, task_uncomplete.",
       "task_complete runs the gate — an item can be done only when the gate is green.",
       "Finished requires gate green AND every checklist item done.",
     ].join("\n");
+  }
+
+  /**
+   * Write the invariant checklist rules into SYSTEM once, when a plan binds.
+   * Constant text, so it never dirties the prefix again after this.
+   */
+  private ensureChecklistRulesInSystem(): void {
+    const system = this.ctx.messages[0];
+
+    if (system?.role !== "system") {
+      return;
+    }
+
+    const rules = Session.checklistRulesText();
+
+    if (!system.content.includes(rules)) {
+      system.content = `${system.content}\n\n${rules}`;
+    }
   }
 
   /** Keep the system checklist live; never append another full tree into history. */
@@ -2314,9 +2390,6 @@ export class Session {
     }
 
     ctx.messages.push(assistantMessage(res));
-    // Age prior create/edit bodies once a newer assistant turn exists (must run
-    // after push — start-of-turn prune alone never sees the just-added message).
-    pruneEphemeralToolResidue(ctx.messages);
 
     // Every model call advances TTSR cooldown accounting (including interrupted
     // ones, so repeatGap rules count correctly after a retry).
@@ -3538,11 +3611,14 @@ export class Session {
       // Inject any messages the user typed while the run was in flight, so they
       // steer the next model turn instead of waiting for the run to finish.
       this.injectSteer(opts.steer);
-      // Compact bound-plan tree so every turn sees current checklist status.
+      // Append the bound-plan tree when it changed, so every turn sees current
+      // checklist status without rewriting the prompt prefix.
       this.injectPlanTree();
-      // Mid-drive hygiene: drop stale read dumps / superseded write-guards, then
-      // auto-compact if the last call's prompt tokens crossed the window threshold.
-      pruneEphemeralToolResidue(this.ctx.messages);
+      // History hygiene (stale read dumps, superseded write-guards) is NOT run
+      // per turn: rewriting a message the model already sent invalidates the
+      // server's prefix cache from that point, which costs far more prefill than
+      // the tokens it reclaims. It runs inside compaction instead, where the
+      // prefix is being rebuilt regardless.
       await this.maybeAutoCompact(opts.signal);
 
       report({

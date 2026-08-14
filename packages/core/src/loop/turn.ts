@@ -129,10 +129,7 @@ import {
   type MetaBaseline,
 } from "../meta-rules";
 import { runWriteGuard } from "./write-guard";
-import {
-  pruneEphemeralToolResidue,
-  upsertGateFeedback,
-} from "./context-hygiene";
+import { upsertGateFeedback } from "./context-hygiene";
 
 /**
  * The shared turn primitives — one tool-using-conversation step and the
@@ -2439,8 +2436,6 @@ export async function injectFeedback(
     ctx.messages,
     `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`
   );
-  // A new settle supersedes per-write guard blasts still sitting on create/edit tool results.
-  pruneEphemeralToolResidue(ctx.messages);
 }
 
 /** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :

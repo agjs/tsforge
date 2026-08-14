@@ -148,6 +148,31 @@ export function buildWebResearchGuidance(): string {
   ].join("\n");
 }
 
+/**
+ * Which copy wins when the same thing appears twice in history.
+ *
+ * The harness no longer rewrites older messages to mark them superseded — doing
+ * that per turn invalidated the server's prefix cache and cost a full cold
+ * prefill. Superseded copies are cleaned at compaction instead, so between
+ * compactions history can hold more than one version of a file read or a
+ * checklist. This states the ordering rule ONCE, in the system block, where it
+ * is written at construction and never changes.
+ */
+export function buildHistoryFreshnessGuidance(): string {
+  return [
+    "HISTORY FRESHNESS — later always wins:",
+    "  • The same file may appear more than once as `¶path#HASH`. The LAST block",
+    "    for a path is its current content; earlier ones are stale snapshots from",
+    "    before your edits. Never edit against an earlier copy, and do NOT re-read",
+    "    a file just because an older copy is still visible.",
+    "  • `## Active plan checklist` may appear more than once. Each carries a",
+    "    `revision N` — the HIGHEST revision is the live plan; ignore lower ones.",
+    "  • Per-write guard notes (`⚠ CHECK`, `⚠ BLAST RADIUS`) on older create/edit",
+    "    results describe the file AS IT WAS THEN. The newest gate feedback is the",
+    "    live state — fix what it reports, not what an older note reported.",
+  ].join("\n");
+}
+
 export function buildScriptToolGuidance(): string {
   return [
     "SCRIPT — one program for work where you must READ each file to compute its change:",
@@ -195,7 +220,10 @@ export function buildSystemPrompt(
   _stack: IStackProfile | undefined,
   conventions: IConventions = DEFAULT_CONVENTIONS
 ): string {
-  const blocks: string[] = [buildSystem(conventions)];
+  const blocks: string[] = [
+    buildSystem(conventions),
+    buildHistoryFreshnessGuidance(),
+  ];
 
   if (flags.webTools()) {
     blocks.push(buildWebResearchGuidance());
