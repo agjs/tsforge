@@ -78,10 +78,14 @@ export const HOUSE_TOPIC_RULES: Readonly<
 };
 
 const HOUSE_GUIDES: Readonly<Record<HouseConventionTopic, string>> = {
+  // Says what the LAYOUT is, never what the gate does with it — whether these
+  // rules fail the build depends on the active profile, which only the
+  // enforcement footer knows. Claiming "the gate requires" here made the guide
+  // false on the default profile.
   "component-anatomy":
     "COMPONENT ANATOMY. Put UI under `src/features/<feature>/` or `src/views/<name>/` " +
-    "(pick ONE layout and stick to it — do not mix). A component folder needs the sibling " +
-    "set the gate requires: `<Name>.tsx` (render props only), `<Name>.hooks.ts` (state/" +
+    "(pick ONE layout and stick to it — do not mix). A component gets its own folder with " +
+    "the full sibling set: `<Name>.tsx` (render props only), `<Name>.hooks.ts` (state/" +
     "effects), `<Name>.types.ts`, co-located test, and `index.ts` re-export. ONE component " +
     "per file. Shared primitives under `src/components/ui/` are often exempt from the full " +
     "sibling set — follow existing repo examples.",

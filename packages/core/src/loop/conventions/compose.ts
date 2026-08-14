@@ -24,6 +24,19 @@ export function composeConventionProviders(
   }
 
   return {
+    // First provider that claims the topic owns its rule list, matching how
+    // `guide` resolves — an override must not silently change what backs it.
+    rulesForTopic: (topic) => {
+      for (const p of providers) {
+        const rules = p.rulesForTopic(topic);
+
+        if (rules.length > 0) {
+          return rules;
+        }
+      }
+
+      return [];
+    },
     buildGuides: () => {
       // Prefer the last provider that returns a non-empty contract; fall back to
       // joining topic names if somehow empty.

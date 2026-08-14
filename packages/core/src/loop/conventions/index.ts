@@ -14,3 +14,7 @@ export {
   missingConventionPullReject,
 } from "./path-topics";
 export { makeConventionProvider } from "./make-provider";
+export {
+  withProfileEnforcement,
+  enforcementFooter,
+} from "./profile-enforcement";

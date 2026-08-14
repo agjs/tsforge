@@ -21,4 +21,7 @@ export interface IConventionProvider {
   guide(topic: string): string | null;
   /** The valid topic ids (for the `pull_conventions` tool's help text / enum). */
   topics(): readonly string[];
+  /** Gate rules backing a topic. Lets the session state which of them the ACTIVE
+   *  profile actually fails on, so a guide never promises enforcement it lacks. */
+  rulesForTopic(topic: string): readonly string[];
 }
