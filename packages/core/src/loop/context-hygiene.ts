@@ -157,28 +157,19 @@ export function upsertGateFeedback(
   messages: IChatMessage[],
   content: string
 ): void {
-  const next: IChatMessage = { role: "user", content };
-  let kept = -1;
-
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i];
-
-    if (m === undefined || !isGateFeedbackInject(m)) {
-      continue;
-    }
-
-    if (kept < 0) {
-      messages[i] = next;
-      kept = i;
-    } else {
-      messages.splice(i, 1);
-      kept -= 1;
-    }
-  }
-
-  if (kept < 0) {
-    messages.push(next);
-  }
+  // APPEND. This used to replace the live slot in place and splice out earlier
+  // copies, which kept ONE feedback message in history — but anchored it
+  // wherever the last settle left it, while the conversation grew past it. In a
+  // 146-turn run that anchor ended up ~20k tokens into a 210k prompt, so every
+  // settle rewrote the prompt from 10% in and threw away the rest of the
+  // server's prefix cache. Measured on that run: 13 calls at 116-168s each,
+  // ~1785s of a 3515s session, every one of them 1-3 events after a gate.
+  //
+  // Appending keeps the prefix byte-identical, so a settle now costs the new
+  // message and nothing else. Superseded copies are dropped at compaction, and
+  // the system block's HISTORY FRESHNESS rule tells the model the newest one is
+  // the live state.
+  messages.push({ role: "user", content });
 }
 
 /**
@@ -482,20 +473,23 @@ export function autoCompactPct(
 }
 
 /**
- * Keep only the newest appended checklist snapshot.
+ * Keep only the newest of a repeated harness inject.
  *
- * The live plan tree is appended rather than spliced into the system message,
- * so a long session accumulates superseded copies. Only the newest is
+ * Both the plan tree and the gate feedback are APPENDED rather than rewritten in
+ * place, so a long session accumulates superseded copies. Only the newest is
  * authoritative; the rest are dropped here, at the one point where editing
  * history costs nothing extra.
  */
-function dropSupersededSnapshots(messages: IChatMessage[]): void {
+function dropSuperseded(
+  messages: IChatMessage[],
+  matches: (m: IChatMessage) => boolean
+): void {
   let newest = -1;
 
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
 
-    if (m !== undefined && isChecklistSnapshot(m)) {
+    if (m !== undefined && matches(m)) {
       newest = i;
       break;
     }
@@ -508,7 +502,7 @@ function dropSupersededSnapshots(messages: IChatMessage[]): void {
   for (let i = newest - 1; i >= 0; i -= 1) {
     const m = messages[i];
 
-    if (m !== undefined && isChecklistSnapshot(m)) {
+    if (m !== undefined && matches(m)) {
       messages.splice(i, 1);
     }
   }
@@ -621,7 +615,8 @@ export async function compactConversation(
   // being rebuilt regardless, so the prefix-cache invalidation every one of
   // these edits causes is already paid for. Running them per turn instead costs
   // a full cold prefill to reclaim tokens the cache was serving for ~nothing.
-  dropSupersededSnapshots(messages);
+  dropSuperseded(messages, isChecklistSnapshot);
+  dropSuperseded(messages, isGateFeedbackInject);
   pruneEphemeralToolResidue(messages);
 
   const prunedChars = pruneOversizedToolResults(messages);
