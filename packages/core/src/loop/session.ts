@@ -50,7 +50,7 @@ import {
 } from "../validate";
 import { ruleHelp } from "./feedback";
 import type { IConventionProvider } from "./conventions-provider";
-import { houseConventionProvider } from "./conventions";
+import { houseConventionProvider, withProfileEnforcement } from "./conventions";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -785,16 +785,22 @@ function withDefaultHouseConventions(cfg: ISessionConfig): ISessionConfig {
     return cfg;
   }
 
+  // Every guide is served through the profile wrapper — the house library and an
+  // adapter's injected provider alike — so no guide can promise enforcement the
+  // ACTIVE profile does not deliver. Neither provider knows about profiles; this
+  // is the one place that does.
   if (cfg.conventions !== undefined) {
-    return cfg.pullConventions === true
-      ? cfg
-      : { ...cfg, pullConventions: true };
+    return {
+      ...cfg,
+      pullConventions: true,
+      conventions: withProfileEnforcement(cfg.conventions, cfg.profile),
+    };
   }
 
   return {
     ...cfg,
     pullConventions: true,
-    conventions: houseConventionProvider,
+    conventions: withProfileEnforcement(houseConventionProvider, cfg.profile),
   };
 }
 

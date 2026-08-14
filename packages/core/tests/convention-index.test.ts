@@ -42,6 +42,7 @@ const fakeConventions = (guides: string): IConventionProvider => ({
   unseenForErrors: () => [],
   guide: () => null,
   topics: () => [],
+  rulesForTopic: () => [],
 });
 
 // Pull-before-first-write: system prompt carries the short pull contract (+ topic
@@ -281,6 +282,7 @@ test("Session threads cfg.conventions to the reactive PUSH (real drive loop)", a
     },
     guide: () => null,
     topics: () => [],
+    rulesForTopic: () => [],
   };
 
   try {
@@ -337,6 +339,7 @@ test("Session threads cfg.conventions into the pull_conventions tool (real dispa
     unseenForErrors: () => [],
     guide: () => "TOOL_THREAD_SENTINEL",
     topics: () => ["x"],
+    rulesForTopic: () => [],
   };
 
   try {
@@ -378,6 +381,7 @@ test("Session advertises pull_conventions with the provider's topics as the enum
     buildGuides: () => "",
     unseenForErrors: () => [],
     guide: () => null,
+    rulesForTopic: () => [],
     topics: () => topics,
   };
 
@@ -497,6 +501,7 @@ test("a hallucinated pull_conventions call with pullConventions OFF gets no prov
         unseenForErrors: () => [],
         guide: () => "TOOL_THREAD_SENTINEL",
         topics: () => ["x"],
+        rulesForTopic: () => [],
       },
     });
 

@@ -16,7 +16,6 @@ export function makeConventionProvider<T extends string>(opts: {
   }[];
 }): IConventionProvider {
   const topicSet = new Set<string>(opts.topics);
-
   const isTopic = (s: string): s is T => topicSet.has(s);
 
   const topicForRule = (rule: string): T | null => {
@@ -35,6 +34,7 @@ export function makeConventionProvider<T extends string>(opts: {
     buildGuides: () => buildPullContract(opts.topics),
     guide: (topic) => (isTopic(topic) ? opts.guides[topic] : null),
     topics: () => [...opts.topics],
+    rulesForTopic: (topic) => (isTopic(topic) ? opts.topicRules[topic] : []),
     unseenForErrors: (errors, seen) => {
       const out: string[] = [];
 

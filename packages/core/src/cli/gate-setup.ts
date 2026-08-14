@@ -1,6 +1,7 @@
 /** Gate resolution for a CLI session: a resumed session's gate wins, then an
  *  explicit --accept, then --no-gate, else tsforge's auto strict-TS gate
  *  (with the per-write lint moat). */
+import { join } from "node:path";
 import type { ICliArgs } from "./args";
 import type { ISessionRecord } from "../session-store";
 import {
@@ -68,6 +69,34 @@ export async function resolveGate(
   return baseGate(args, resumed);
 }
 
+/**
+ * `opinionated` when tsforge is about to author the whole tree, else undefined.
+ *
+ * The structure rules (component folder layout, index re-export, hooks out of the
+ * component body) are off in the default profile so tsforge stays adoptable in an
+ * EXISTING repo that already has a valid layout of its own. A greenfield build has
+ * no such layout to respect — tsforge writes every file — so the reason to stay
+ * quiet does not apply, and staying quiet actively hurt: the convention guide
+ * described folder-per-component while the gate accepted flat files, so a real
+ * build produced a layout the guide had just ruled out.
+ *
+ * "Greenfield" is `no package.json`, checked once at capture, before the model
+ * writes anything. An explicit `--profile` or a `profile` in tsforge.config.json
+ * still wins — this only replaces the silent default.
+ */
+async function greenfieldProfile(
+  dir: string,
+  configured: ProfileId | undefined
+): Promise<ProfileId | undefined> {
+  if (configured !== undefined) {
+    return undefined;
+  }
+
+  return (await Bun.file(join(dir, "package.json")).exists())
+    ? undefined
+    : "opinionated";
+}
+
 /** Capture the frozen gate policy for `dir` ONCE: load config (+ CLI/recipe profile
  *  overlay), detect the current stack, and resolve the baseline packs, rule overrides,
  *  profile, and conventions. Everything here is read from the project tree exactly once
@@ -88,9 +117,11 @@ async function captureGatePolicy(
   const { resolveConventions } = await import("../infer-rules/conventions");
   const { resolveCliProfile } = await import("./args");
 
+  const loaded = await loadTsforgeConfig(dir);
   const config = withProfileOverride(
-    await loadTsforgeConfig(dir),
-    resolveCliProfile(profileArg)
+    loaded,
+    resolveCliProfile(profileArg) ??
+      (await greenfieldProfile(dir, loaded.profile))
   );
   const stackProfile = await detectStack(dir);
 

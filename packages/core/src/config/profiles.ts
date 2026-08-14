@@ -113,6 +113,26 @@ export function resolveProfileRuleOverrides(
   return { ...(profile.ruleOverrides ?? {}) };
 }
 
+/**
+ * Rules this profile switches OFF.
+ *
+ * Convention guides consult this so they can never claim the gate requires
+ * something it will not fail on. A guide that says "must" while the gate says
+ * "optional" teaches the model that guides are advisory — and the model then
+ * optimizes for the gate, which is the only thing that actually fails it.
+ */
+export function disabledRulesInProfile(
+  profileId: ProfileId | undefined
+): ReadonlySet<string> {
+  const overrides = resolveProfileRuleOverrides(profileId);
+
+  return new Set(
+    Object.entries(overrides)
+      .filter(([, severity]) => severity === "off")
+      .map(([rule]) => rule)
+  );
+}
+
 export function resolveProfileExtraPacks(
   profileId: ProfileId | undefined
 ): readonly string[] {
