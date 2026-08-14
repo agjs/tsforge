@@ -4,10 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
 import { Session } from "../src/loop";
-import {
-  isChecklistTreeInject,
-  isChecklistSnapshot,
-} from "../src/loop/harness-inject";
+import { isChecklistSnapshot } from "../src/loop/harness-inject";
 import {
   doTaskAdd,
   doTaskFocus,
@@ -34,8 +31,8 @@ function samplePlan(
   };
 }
 
-describe("checklist context (no per-turn append)", () => {
-  test("multi-turn drive keeps zero checklist tree user injects; system has one block", async () => {
+describe("checklist context", () => {
+  test("multi-turn drive appends one snapshot and never touches the system message", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-checklist-ctx-"));
     // Done items: green gate must not spin on checklistOpenNudge.
     const plan = samplePlan("plan-1", "done");
@@ -84,18 +81,14 @@ describe("checklist context (no per-turn append)", () => {
       await session.send("first");
       await session.send("second");
 
-      const treeInjects = session.messages.filter((m) =>
-        isChecklistTreeInject(m)
-      );
-
-      expect(treeInjects).toHaveLength(0);
-
       // The tree is APPENDED, never spliced into the system message: editing
       // index 0 discards the whole server-side prefix cache.
       const system = session.messages[0];
 
       expect(system?.role).toBe("system");
-      expect(system?.content ?? "").not.toContain("## Active plan checklist");
+      // The heading appears in the HISTORY FRESHNESS rule as prose; the TREE
+      // is what must never sit at index 0.
+      expect(system?.content ?? "").not.toMatch(/^goal:/m);
 
       const snapshots = session.messages.filter((m) => isChecklistSnapshot(m));
 
@@ -107,60 +100,6 @@ describe("checklist context (no per-turn append)", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 30_000);
-
-  test("resume prunes legacy checklist tree injects from history", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tsforge-checklist-prune-"));
-    const plan = samplePlan("plan-2");
-
-    savePlan(dir, plan);
-
-    const provider: IProvider = {
-      async complete() {
-        return { content: "ok", toolCalls: [] };
-      },
-    };
-
-    try {
-      const session = await Session.create({
-        provider,
-        cwd: dir,
-        files: ["**/*"],
-        accept: "true",
-        activePlanId: "plan-2",
-        history: [
-          {
-            role: "system",
-            content:
-              "You are tsforge.\n\n## Current task contract\nScope: any.",
-          },
-          {
-            role: "user",
-            content:
-              "[checklist — session plan plan-2]\ngoal: Build notes CLI\nitems:\n  [ ] Create notes.ts (a)",
-          },
-          {
-            role: "user",
-            content:
-              "[checklist — session plan plan-2]\ngoal: Build notes CLI\nitems:\n  [ ] Create notes.ts (a)",
-          },
-          { role: "user", content: "continue" },
-        ],
-      });
-
-      expect(
-        session.messages.filter((m) => isChecklistTreeInject(m))
-      ).toHaveLength(0);
-      expect(session.messages.some((m) => m.content === "continue")).toBe(true);
-      expect(session.messages[0]?.content ?? "").not.toContain(
-        "## Active plan checklist"
-      );
-      expect(
-        session.messages.filter((m) => isChecklistSnapshot(m))
-      ).toHaveLength(1);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 test("task mutate tools return short ack; task_list returns tree", async () => {

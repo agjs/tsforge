@@ -3,17 +3,6 @@
  * Resume / transcript paint must not label these as USER cards.
  */
 
-/** Per-turn full plan-tree inject (legacy append path — pruned from history). */
-export function isChecklistTreeInject(message: {
-  readonly role: string;
-  readonly content: string;
-}): boolean {
-  return (
-    message.role === "user" &&
-    message.content.startsWith("[checklist — session plan ")
-  );
-}
-
 /** Opening line of an appended live-checklist snapshot. */
 export const CHECKLIST_SNAPSHOT_MARKER = "## Active plan checklist";
 
@@ -46,7 +35,6 @@ export function isEphemeralUserInject(message: {
   const content = message.content;
 
   return (
-    isChecklistTreeInject(message) ||
     isChecklistSnapshot(message) ||
     content.startsWith("Gate is GREEN but the approved checklist")
   );

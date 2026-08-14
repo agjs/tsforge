@@ -81,11 +81,11 @@ describe("renderMessage — hybrid bubbles", () => {
     expect(out).not.toContain(" USER ");
   });
 
-  test("checklist injects stay out of the transcript", () => {
+  test("checklist snapshots stay out of the transcript", () => {
     expect(
       renderMessage({
         role: "user",
-        content: "[checklist — session plan abc]\ngoal: x",
+        content: "## Active plan checklist (revision 3)\ngoal: x",
       })
     ).toBe("");
   });
