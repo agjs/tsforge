@@ -13,6 +13,7 @@ import { doPackageInfo, doPackageDocs } from "./package-info";
 import { doScript } from "./script-tool";
 import { doSpawnAgent } from "./spawn-agent";
 import { doReadImage, doGenerateImage } from "./image-tools";
+import { doDeleteFile } from "./delete-file";
 import { doCheck } from "./check-tool";
 import { doAskUser } from "./ask-user-tool";
 import {
@@ -42,6 +43,7 @@ type ToolHandler = (
  *  one body. Keyed by ToolName, so a new tool must register here (exhaustive). */
 const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.read]: readFile,
+  [TOOL_NAME.deleteFile]: doDeleteFile,
   [TOOL_NAME.run]: runShell,
   [TOOL_NAME.edit]: doEdit,
   [TOOL_NAME.editLines]: doHashlineEdit,

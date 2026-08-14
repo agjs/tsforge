@@ -439,6 +439,8 @@ const MUTATING_TOOLS = new Set<string>([
   TOOL_NAME.moveFile,
   TOOL_NAME.organizeImports,
   TOOL_NAME.addDependency,
+  // Removing a file changes what compiles, so it re-gates like any scoped write.
+  TOOL_NAME.deleteFile,
 ]);
 // run = the model's raw shell (writes are its own, not scoped harness edits);
 // script = runs a program whose tool calls (incl. edit/create) re-enter

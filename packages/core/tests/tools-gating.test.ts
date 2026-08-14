@@ -16,8 +16,11 @@ test("scratch (no existing code) gets only the base tools — no LSP nav set", (
   // diluted the create path and stalled money. See lsp-tools-regress-scratch.
   const tools = toolsFor(false);
 
+  // `delete` rides with create/edit: removing a file you superseded is part of
+  // writing, and the shell's `rm` is a critical deny with no alternative.
   expect(names(tools).sort()).toEqual([
     "create",
+    "delete",
     "edit",
     "edit_lines",
     "read",
@@ -48,6 +51,7 @@ test("TSFORGE_NO_LSP_TOOLS=1 forces base-only — but git_context survives", () 
   process.env.TSFORGE_NO_LSP_TOOLS = "1";
   expect(names(toolsFor(true)).sort()).toEqual([
     "create",
+    "delete",
     "edit",
     "edit_lines",
     "git_context",
