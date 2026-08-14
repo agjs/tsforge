@@ -170,6 +170,21 @@ describe("destructive-shell detection", () => {
     expect(isDestructiveShell("FOO=1 shred secret")).toBe(true);
   });
 
+  test("flags rm's peers — denying only `rm` left the ban porous", () => {
+    // A live run watched the model try `rm`, get denied, and reach `unlink` a
+    // few turns later purely by trial and error. `rm` was the only head on the
+    // list, so the file was removed with the deny fully intact.
+    expect(isDestructiveShell("unlink src/old.ts")).toBe(true);
+    expect(isDestructiveShell("truncate -s 0 src/old.ts")).toBe(true);
+    // `find … -delete` destroys without running a command, so the `-exec` lift
+    // never sees it and the head stays a benign `find`.
+    expect(isDestructiveShell("find . -name '*.ts' -delete")).toBe(true);
+    expect(isDestructiveShell("find . -delete")).toBe(true);
+    // …while ordinary `find` usage stays allowed.
+    expect(isDestructiveShell("find . -name '*.ts'")).toBe(false);
+    expect(isDestructiveShell("find src -type f -print")).toBe(false);
+  });
+
   test("sees through env/sudo wrappers and their flags", () => {
     expect(isDestructiveShell("env rm -rf /")).toBe(true);
     expect(isDestructiveShell("env VAR=x rm -rf /")).toBe(true);

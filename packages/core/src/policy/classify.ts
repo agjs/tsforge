@@ -53,6 +53,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // Delegating to a read-only subagent — its own class so a repo can deny/ask it
   // specifically; the child's tool calls are re-classified as they dispatch.
   [TOOL_NAME.spawnAgent]: "spawn_agent",
+  // The `delete_file` ActionKind predates this tool; it is finally emitted.
+  [TOOL_NAME.deleteFile]: "delete_file",
   [TOOL_NAME.packageInfo]: "network",
   [TOOL_NAME.packageDocs]: "network",
   [TOOL_NAME.webFetch]: "network",

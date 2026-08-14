@@ -20,6 +20,7 @@ export const TOOL_NAME = {
   diagnostics: "diagnostics",
   renameSymbol: "rename_symbol",
   moveFile: "move_file",
+  deleteFile: "delete",
   organizeImports: "organize_imports",
   gitContext: "git_context",
   addDependency: "add_dependency",
@@ -77,6 +78,7 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // git_context only inspects history/diffs — no workspace mutation — so it is a
   // plan-mode tool too (scope a review/fix while planning, before any edit).
   [TOOL_NAME.gitContext]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.deleteFile]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.packageDocs]: { readOnly: true, scriptExposable: true },
@@ -337,6 +339,26 @@ export const WEB_BROWSE_TOOL = {
         },
       },
       required: ["url"],
+    },
+  },
+};
+
+export const DELETE_FILE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.deleteFile,
+    description:
+      "Delete ONE file you are allowed to edit. Use it to remove a file you have superseded (e.g. after moving a component into its own folder) so it does not linger as dead code. One path, no globs, no directories. The shell's `rm` is blocked — this is the way to delete.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: {
+          type: "string",
+          description:
+            "workspace-relative path of the single file to delete, e.g. 'src/features/feed/GamerCard.tsx'",
+        },
+      },
+      required: ["file"],
     },
   },
 };

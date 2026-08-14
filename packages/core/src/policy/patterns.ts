@@ -10,6 +10,12 @@
 const DESTRUCTIVE_HEADS: ReadonlySet<string> = new Set([
   "rm",
   "rmdir",
+  // `unlink` and `truncate` are `rm`'s peers, not exotica: `unlink f` removes a
+  // file and `truncate -s 0 f` destroys its contents. Denying only `rm` left the
+  // ban porous — a live run watched the model try `rm`, get denied, and reach
+  // `unlink` a few turns later purely by trial and error.
+  "unlink",
+  "truncate",
   "dd",
   "mkfs",
   "shred",
@@ -276,6 +282,13 @@ function shellSegments(command: string): string[] {
       if (m[1] !== undefined) {
         out.push(m[1]); // the command head `find` runs per match
       }
+    }
+
+    // `find … -delete` removes files without running a command, so the `-exec`
+    // lift never sees it and the head stays a benign `find`. Surface a synthetic
+    // `rm` so the one destructive check covers it too.
+    if (/(?:^|\s)-delete(?:\s|$)/u.test(seg)) {
+      out.push("rm");
     }
 
     // Capture only the `-c` ARGUMENT — the quoted body or the single unquoted

@@ -80,6 +80,7 @@ import {
 } from "./astgrep-fix";
 import {
   EDIT_TOOL,
+  DELETE_FILE_TOOL,
   EDIT_LINES_TOOL,
   CREATE_TOOL,
   RUN_TOOL,
@@ -147,7 +148,13 @@ import { upsertGateFeedback } from "./context-hygiene";
 // ("let me check existing files…") instead of emitting `create`, and stalls.
 // react-board (existing code) used them cleanly. So gate them on whether there
 // is existing code to navigate. TSFORGE_NO_LSP_TOOLS=1 forces them off entirely.
-const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
+const BASE_TOOLS = [
+  READ_TOOL,
+  RUN_TOOL,
+  EDIT_TOOL,
+  CREATE_TOOL,
+  DELETE_FILE_TOOL,
+];
 
 const HASHLINE_TOOLS = [EDIT_LINES_TOOL];
 

@@ -110,7 +110,11 @@ const MODE_MATRIX: Readonly<
     read_file: "allow",
     write_file: "allow",
     edit_file: "allow",
-    delete_file: "deny",
+    // Allowed exactly where writing is: a model that may overwrite a file may
+    // also remove one it superseded. The `delete` tool is the only producer of
+    // this kind, and it is already narrow — one in-scope file, no globs, no
+    // directories. The shell's `rm` stays a critical deny in every mode.
+    delete_file: "allow",
     shell: "allow",
     network: "allow",
     mcp_tool: "allow",
@@ -136,7 +140,11 @@ const MODE_MATRIX: Readonly<
     read_file: "allow",
     write_file: "allow",
     edit_file: "allow",
-    delete_file: "deny",
+    // Allowed exactly where writing is: a model that may overwrite a file may
+    // also remove one it superseded. The `delete` tool is the only producer of
+    // this kind, and it is already narrow — one in-scope file, no globs, no
+    // directories. The shell's `rm` stays a critical deny in every mode.
+    delete_file: "allow",
     shell: "ask",
     network: "deny",
     mcp_tool: "allow",
@@ -148,7 +156,11 @@ const MODE_MATRIX: Readonly<
     read_file: "allow",
     write_file: "allow",
     edit_file: "allow",
-    delete_file: "deny",
+    // Allowed exactly where writing is: a model that may overwrite a file may
+    // also remove one it superseded. The `delete` tool is the only producer of
+    // this kind, and it is already narrow — one in-scope file, no globs, no
+    // directories. The shell's `rm` stays a critical deny in every mode.
+    delete_file: "allow",
     shell: "deny",
     network: "deny",
     mcp_tool: "allow",
@@ -160,7 +172,11 @@ const MODE_MATRIX: Readonly<
     read_file: "allow",
     write_file: "allow",
     edit_file: "allow",
-    delete_file: "deny",
+    // Allowed exactly where writing is: a model that may overwrite a file may
+    // also remove one it superseded. The `delete` tool is the only producer of
+    // this kind, and it is already narrow — one in-scope file, no globs, no
+    // directories. The shell's `rm` stays a critical deny in every mode.
+    delete_file: "allow",
     shell: "deny",
     network: "deny",
     mcp_tool: "allow",
