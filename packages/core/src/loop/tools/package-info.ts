@@ -402,36 +402,151 @@ async function realPackageFetch(url: string): Promise<IPackageFetchResponse> {
 
 const DEFAULT_DEPS: IPackageInfoDeps = { fetchFn: realPackageFetch };
 
+/** Most packages one call may look up. Bounds both the reply and the registry fan-out. */
+export const MAX_PACKAGES_PER_CALL = 30;
+
+/** Registry requests in flight at once — fast without hammering the registry. */
+const FETCH_CONCURRENCY = 8;
+
+/** Read `packages`, tolerating a bare string (a model that ignored the array). */
+function requestedSpecs(args: Record<string, unknown>): string[] {
+  const value = args.packages;
+
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((v): v is string => typeof v === "string");
+}
+
+/** Run `work` over `items` with a bounded number in flight, preserving order. */
+async function mapConcurrent<T, R>(
+  items: readonly T[],
+  limit: number,
+  work: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const out: R[] = new Array<R>(items.length);
+  let next = 0;
+
+  async function runner(): Promise<void> {
+    for (;;) {
+      const i = next;
+
+      next += 1;
+
+      const item = items[i];
+
+      if (i >= items.length || item === undefined) {
+        return;
+      }
+
+      out[i] = await work(item, i);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runner())
+  );
+
+  return out;
+}
+
+/**
+ * One line per package: the version you would pin, plus anything that would stop
+ * you pinning it. A multi-package ask is a "what do I put in package.json"
+ * question, and answering it with a full manifest each would spend far more
+ * context than the answer is worth.
+ */
+function formatDigestLine(
+  spec: string,
+  manifest: Record<string, unknown> | string
+): string {
+  const name = packageNameFromSpec(spec) ?? spec;
+
+  if (typeof manifest === "string") {
+    return `${name}: ERROR ${manifest}`;
+  }
+
+  const version = selectedVersion(manifest, versionFromSpec(spec));
+  const details = versionRecord(manifest, version);
+  const deprecated = stringProp(details ?? manifest, "deprecated");
+  const suffix = deprecated.length > 0 ? `  DEPRECATED: ${deprecated}` : "";
+
+  return `${name}: ${version.length > 0 ? version : "(unknown)"}${suffix}`;
+}
+
 export async function doPackageInfo(
   args: Record<string, unknown>,
   ctx: IToolContext,
   deps: IPackageInfoDeps = DEFAULT_DEPS
 ): Promise<string> {
-  const raw = str(args, "package").trim();
-  const packageName = packageNameFromSpec(raw);
+  const specs = requestedSpecs(args).map((s) => s.trim());
 
-  if (packageName === null) {
+  if (specs.length === 0) {
     return reject(
       ctx,
       "package_info",
-      "package_info: `package` must be one plain npm package name, optionally @versioned."
+      "package_info: `packages` must be a non-empty array of npm package names, each optionally @versioned."
+    );
+  }
+
+  if (specs.length > MAX_PACKAGES_PER_CALL) {
+    return reject(
+      ctx,
+      "package_info",
+      `package_info: at most ${String(MAX_PACKAGES_PER_CALL)} packages per call (got ${String(specs.length)}). Split the list.`
+    );
+  }
+
+  const bad = specs.find((s) => packageNameFromSpec(s) === null);
+
+  if (bad !== undefined) {
+    return reject(
+      ctx,
+      "package_info",
+      `package_info: ${JSON.stringify(bad)} is not a plain npm package name, optionally @versioned.`
     );
   }
 
   ctx.report({
     kind: "tool",
     task: ctx.task,
-    message: `↳ package_info ${packageName}`,
+    message: `↳ package_info ${specs.map((s) => packageNameFromSpec(s) ?? s).join(", ")}`,
   });
 
-  const manifest = await fetchManifest(packageName, deps);
+  const manifests = await mapConcurrent(specs, FETCH_CONCURRENCY, (spec) =>
+    fetchManifest(packageNameFromSpec(spec) ?? spec, deps)
+  );
 
-  if (typeof manifest === "string") {
-    return `package_info: ${manifest}`;
+  // One package is a "tell me about this" question — answer it in full. Several
+  // is a "which versions do I pin" question — answer it as a table.
+  if (specs.length === 1) {
+    const only = manifests[0];
+    const spec = specs[0] ?? "";
+
+    if (only === undefined || typeof only === "string") {
+      return `package_info: ${only ?? "lookup failed"}`;
+    }
+
+    return truncate(
+      formatPackageInfo(only, versionFromSpec(spec)),
+      maxChars(args)
+    );
   }
 
+  const lines = specs.map((spec, i) =>
+    formatDigestLine(spec, manifests[i] ?? "lookup failed")
+  );
+
   return truncate(
-    formatPackageInfo(manifest, versionFromSpec(raw)),
+    [
+      `# ${String(specs.length)} packages · registry: ${registryRoot()}`,
+      ...lines,
+    ].join("\n"),
     maxChars(args)
   );
 }

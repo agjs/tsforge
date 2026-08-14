@@ -137,7 +137,9 @@ export function buildWebResearchGuidance(): string {
   return [
     "WEB RESEARCH — keyless internet/package tools are enabled:",
     "  • Package version/install question? Use `package_info` for npm registry",
-    "    dist-tags, versions, deprecations, peer deps, homepage, and repo.",
+    "    dist-tags, versions, deprecations, peer deps, homepage, and repo. It takes",
+    "    a LIST — pinning a package.json is ONE call with every dependency in it,",
+    "    never one call per package.",
     "  • Package API/docs question? Use `package_docs` first; it reads installed",
     "    node_modules docs/types before falling back to the npm registry README.",
     "  • Unknown public source? Use `web_search`, preferring official hosts with",
