@@ -346,21 +346,22 @@ export const PACKAGE_INFO_TOOL = {
   function: {
     name: TOOL_NAME.packageInfo,
     description:
-      "Read current npm package metadata from the configured npm registry with no API key: latest dist-tag, versions, deprecation, peer deps, homepage, repository, and dependency names. Use before installing or coding against a package API.",
+      "Read current npm package metadata from the configured npm registry with no API key: latest dist-tag, versions, deprecation, peer deps, homepage, repository, and dependency names. Use before installing or coding against a package API. Pass EVERY package you need in ONE call — asking for a whole dependency set at once is one request, while one call per package costs a turn of tool-call generation each.",
     parameters: {
       type: "object",
       properties: {
-        package: {
-          type: "string",
+        packages: {
+          type: "array",
+          items: { type: "string" },
           description:
-            "one npm package name, optionally @versioned, e.g. 'zod', 'react@19', '@tanstack/react-query'",
+            "npm package names, each optionally @versioned, e.g. ['zod', 'react@19', '@tanstack/react-query']. Ask for all of them at once.",
         },
         maxChars: {
           type: "number",
           description: "optional cap on returned characters (default 12000)",
         },
       },
-      required: ["package"],
+      required: ["packages"],
     },
   },
 };

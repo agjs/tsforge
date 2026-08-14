@@ -63,7 +63,7 @@ test("packageNameFromSpec accepts scoped/unscoped optional versions", () => {
 test("doPackageInfo fetches npm metadata and formats latest package details", async () => {
   const requested: string[] = [];
   const out = await doPackageInfo(
-    { package: "zod", maxChars: 5000 },
+    { packages: ["zod"], maxChars: 5000 },
     ctx(),
     deps(MANIFEST, requested)
   );
@@ -77,7 +77,7 @@ test("doPackageInfo fetches npm metadata and formats latest package details", as
 
 test("doPackageInfo honors an explicit version in the package spec", async () => {
   const out = await doPackageInfo(
-    { package: "zod@4.1.0" },
+    { packages: ["zod@4.1.0"] },
     ctx(),
     deps(MANIFEST)
   );
@@ -198,7 +198,7 @@ test("package tools reject invalid args without touching the network", async () 
     },
   };
 
-  const info = await doPackageInfo({ package: "../x" }, ctx(), noNetwork);
+  const info = await doPackageInfo({ packages: ["../x"] }, ctx(), noNetwork);
   const docs = await doPackageDocs(
     { package: "zod", source: "somewhere" },
     ctx(),
@@ -231,12 +231,12 @@ test("a requested major/range resolves to a concrete version with its deps", asy
   };
 
   const major = await doPackageInfo(
-    { package: "react@19" },
+    { packages: ["react@19"] },
     ctx(),
     deps(manifest)
   );
   const range = await doPackageInfo(
-    { package: "react@^19.0.0" },
+    { packages: ["react@^19.0.0"] },
     ctx(),
     deps(manifest)
   );
@@ -263,10 +263,141 @@ test("recent versions and no-dist-tag latest sort by semver, not lexically", asy
     },
   };
 
-  const out = await doPackageInfo({ package: "pkg" }, ctx(), deps(manifest));
+  const out = await doPackageInfo({ packages: ["pkg"] }, ctx(), deps(manifest));
 
   // No dist-tags → fallback latest is the highest stable semver, not "1.9.0".
   expect(out).toContain("selected: 1.10.0");
   // Recent list is semver-ascending and the prerelease sorts below its release.
   expect(out).toContain("recent: 1.2.0, 1.9.0, 1.10.0-rc.1, 1.10.0");
+});
+
+/** A registry stub that answers per package name, and records call order. */
+function multiDeps(
+  seen: string[],
+  overrides: Record<string, unknown> = {}
+): IPackageInfoDeps {
+  return {
+    fetchFn: async (url) => {
+      const name = decodeURIComponent(url.split("/").pop() ?? "");
+
+      seen.push(name);
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () =>
+          overrides[name] ?? {
+            name,
+            "dist-tags": { latest: `1.0.0-${name}` },
+            versions: { [`1.0.0-${name}`]: { version: `1.0.0-${name}` } },
+          },
+      };
+    },
+  };
+}
+
+test("one call resolves a whole dependency set", async () => {
+  const seen: string[] = [];
+  const out = await doPackageInfo(
+    { packages: ["react", "zod", "@tanstack/react-query"] },
+    ctx(),
+    multiDeps(seen)
+  );
+
+  // Every package is fetched, from ONE tool call — 24 separate calls cost the
+  // model ~350ms of tool-call generation each before any network happens.
+  expect(seen.sort()).toEqual(["@tanstack/react-query", "react", "zod"]);
+  expect(out).toContain("react: 1.0.0-react");
+  expect(out).toContain("zod: 1.0.0-zod");
+  expect(out).toContain("@tanstack/react-query: 1.0.0-@tanstack/react-query");
+});
+
+test("a multi-package answer is a version digest, not N full manifests", async () => {
+  const seen: string[] = [];
+  const many = await doPackageInfo(
+    { packages: ["react", "zod"] },
+    ctx(),
+    multiDeps(seen)
+  );
+  const single = await doPackageInfo(
+    { packages: ["react"] },
+    ctx(),
+    multiDeps([])
+  );
+
+  // Pinning a dependency set needs versions, not N repository URLs and
+  // dependency lists — that would spend more context than the answer is worth.
+  expect(many).not.toContain("repository:");
+  expect(many).not.toContain("versions:");
+  // A single package is still the full manifest view.
+  expect(single).toContain("registry:");
+  expect(single).toContain("dist-tags:");
+});
+
+test("a failed lookup marks only its own line", async () => {
+  const out = await doPackageInfo({ packages: ["good", "missing"] }, ctx(), {
+    fetchFn: async (url) => {
+      const name = decodeURIComponent(url.split("/").pop() ?? "");
+
+      if (name === "missing") {
+        return { ok: false, status: 404, json: async () => ({}) };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          name,
+          "dist-tags": { latest: "2.0.0" },
+          versions: { "2.0.0": { version: "2.0.0" } },
+        }),
+      };
+    },
+  });
+
+  expect(out).toContain("good: 2.0.0");
+  expect(out).toContain("missing: ERROR");
+});
+
+test("a deprecated package says so in the digest", async () => {
+  const seen: string[] = [];
+  const out = await doPackageInfo(
+    { packages: ["old", "new"] },
+    ctx(),
+    multiDeps(seen, {
+      old: {
+        name: "old",
+        "dist-tags": { latest: "1.0.0" },
+        versions: { "1.0.0": { version: "1.0.0", deprecated: "use new" } },
+      },
+    })
+  );
+
+  expect(out).toContain("old: 1.0.0  DEPRECATED: use new");
+});
+
+test("rejects an oversized list instead of fanning out at the registry", async () => {
+  let called = false;
+  const out = await doPackageInfo(
+    { packages: Array.from({ length: 31 }, (_, i) => `p${String(i)}`) },
+    ctx(),
+    {
+      fetchFn: async () => {
+        called = true;
+
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }
+  );
+
+  expect(called).toBe(false);
+  expect(out).toContain("at most 30");
+});
+
+test("a bare string still works when the model ignores the array", async () => {
+  const seen: string[] = [];
+  const out = await doPackageInfo({ packages: "zod" }, ctx(), multiDeps(seen));
+
+  expect(seen).toEqual(["zod"]);
+  expect(out).toContain("dist-tags:");
 });
