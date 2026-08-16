@@ -21,11 +21,33 @@ const BANNER =
  * graph; it will be a hairball again.
  */
 
+/**
+ * Line counts to the nearest thousand.
+ *
+ * The map exists to record STRUCTURE — subsystems, edges, fan-in/out — all of
+ * which are stable. Exact line counts are not: they move on every commit that
+ * touches `src`, so the committed file changed on literally every PR and any two
+ * concurrent PRs conflicted on it. That happened on four PRs in a single day,
+ * and each one had to be resolved by regenerating.
+ *
+ * Rounding keeps the signal the number is actually for — relative subsystem size
+ * — while making the file change only when a subsystem moves by ~500 lines, which
+ * is a change worth seeing. It also makes the CI drift check mean something:
+ * it now fires on real structural drift instead of on every edit.
+ */
+function kLines(lines: number): string {
+  if (lines < 1000) {
+    return "<1k";
+  }
+
+  return `${String(Math.round(lines / 1000))}k`;
+}
+
 function subsystemTable(subsystems: readonly ISubsystem[]): string {
   const rows = subsystems.map((s) => {
     const orphan = s.fanIn === 0 && s.fanOut === 0 ? " ⚠️" : "";
 
-    return `| \`${s.id}\`${orphan} | ${s.purpose} | ${s.tier} | ${s.files} | ${s.lines} | ${s.fanIn} | ${s.fanOut} |`;
+    return `| \`${s.id}\`${orphan} | ${s.purpose} | ${s.tier} | ${s.files} | ${kLines(s.lines)} | ${s.fanIn} | ${s.fanOut} |`;
   });
 
   return [
@@ -61,7 +83,7 @@ export function renderArchitectureMd(arch: IArchitecture): string {
     BANNER,
     "",
     `Derived from \`packages/core/src\`: **${arch.subsystems.length} subsystems**, ` +
-      `**${arch.totalFiles} files**, **${arch.totalLines} lines**, ` +
+      `**${arch.totalFiles} files**, **${kLines(arch.totalLines)} lines**, ` +
       `**${arch.edges.length} cross-subsystem edges**.`,
     "",
     "",

@@ -3,7 +3,9 @@ import { Glob } from "bun";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { IArchitecture } from "../src/architecture/architecture.types";
 import {
+  renderArchitectureMd,
   analyzeImports,
   findEntryPoints,
   findMutualCycles,
@@ -352,4 +354,49 @@ test("a seam that loses its declaration fails the build", async () => {
   await expect(
     (async () => findSeams(root, await readSources(root)))()
   ).rejects.toThrow(/IStackAdapter/);
+});
+
+// The map records STRUCTURE. Exact line counts are not structure: they moved on
+// every commit touching `src`, so the committed file changed on every PR and any
+// two concurrent PRs conflicted on it — four PRs in one day, each resolved by
+// regenerating. Rounding keeps the size signal without the churn.
+function archOf(lines: number): IArchitecture {
+  return {
+    subsystems: [
+      {
+        id: "loop",
+        purpose: "p",
+        tier: "core",
+        files: 10,
+        lines,
+        fanIn: 1,
+        fanOut: 2,
+      },
+    ],
+    edges: [],
+    cycles: [],
+    entryPoints: [],
+    seams: [],
+    externals: [],
+    totalFiles: 10,
+    totalLines: lines,
+  };
+}
+
+test("an ordinary edit does not rewrite the map; a real size change does", () => {
+  const before = renderArchitectureMd(archOf(38_200));
+
+  // A normal PR-sized change leaves the rendered map byte-identical, so
+  // concurrent PRs stop conflicting and the CI drift check stops firing on noise.
+  expect(renderArchitectureMd(archOf(38_260))).toBe(before);
+
+  // A change big enough to move the size class still surfaces.
+  expect(renderArchitectureMd(archOf(39_400))).not.toBe(before);
+});
+
+test("a sub-1k subsystem renders a band, not a churning exact count", () => {
+  expect(renderArchitectureMd(archOf(400))).toBe(
+    renderArchitectureMd(archOf(910))
+  );
+  expect(renderArchitectureMd(archOf(400))).toContain("<1k");
 });
