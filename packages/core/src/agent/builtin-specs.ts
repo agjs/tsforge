@@ -64,7 +64,9 @@ export const BUILTIN_SPECS: readonly IAgentSpec[] = [
       TOOL_NAME.packageDocs,
       TOOL_NAME.read,
     ],
-    maxTurns: 10,
+    // 14, matching explore: a search → several fetches → cross-check pattern
+    // burns 10 trivially, so the cap fired routinely rather than exceptionally.
+    maxTurns: 14,
     systemPrompt:
       "You are a RESEARCH subagent inside a coding harness. Your job: answer a " +
       "question about an external library, API, spec, or current best practice " +

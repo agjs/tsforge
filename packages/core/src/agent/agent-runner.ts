@@ -26,8 +26,10 @@ import { DEFAULT_TEMPERATURE } from "../loop/loop.constants";
 import { PROVIDER_LIMITS } from "../inference";
 import { COMPACT_SYSTEM } from "../loop/prompt";
 import { isRecord } from "../lib/guards";
-import { TOOL_SPECS } from "./agent.constants";
+import { trace } from "../lib/trace";
+import { TOOL_SPECS, TOOL_NAME } from "./agent.constants";
 import type { IAgentSpec } from "./agent-spec";
+import { buildSalvageDigest, salvageOrFallback } from "./salvage";
 
 export const AGENT_LIMITS = {
   /** Default turn cap for a subagent — exploration, not an open-ended session. */
@@ -294,14 +296,103 @@ function agentTools(subset: readonly string[] | undefined): unknown[] {
   });
 }
 
+/** Names `agentTools` would advertise for `subset` — used to detect declared
+ *  tools this session gates off (e.g. web tools without TSFORGE_WEB). */
+function agentToolNames(subset: readonly string[] | undefined): Set<string> {
+  return new Set(
+    toolsFor(true)
+      .map((tool) => tool.function.name)
+      .filter(
+        (name) =>
+          isReadOnlyTool(name) &&
+          (subset === undefined || subset.includes(name))
+      )
+  );
+}
+
 export interface IAgentResult {
   status: "done" | "max_turns" | "aborted" | "error";
   /** Final text (or the structured `result` payload). */
   output: string;
+  /** How `output` was produced: "answer" = the model wrote it (done, or the
+   *  cap-hit finalization call succeeded); "salvage" = a mechanical transcript
+   *  digest because no model-written answer exists. Callers use it to label a
+   *  non-done result as usable partial findings vs. best-effort scraps. */
+  outputKind: "answer" | "salvage";
   turns: number;
   durationMs: number;
   /** Every event the agent emitted, agentId-tagged (for replay/tests). */
   events: ILoopEvent[];
+}
+
+/**
+ * Cap-hit wrap-up instructions. Injected by the runner (never spec text, so
+ * they cannot drift from the real budget) right before the single finalization
+ * call that replaces the old behavior of silently discarding the transcript.
+ * Exported for tests.
+ */
+export const AGENT_FINAL_TURN_STRUCTURED =
+  "FINAL TURN — your turn budget is exhausted and your investigation tools " +
+  "have been removed. Call the agent_result tool NOW with everything you have " +
+  "learned so far. Partial findings are fine: report what you verified (with " +
+  "the file:line or URL sources you actually saw) and list what remains " +
+  "unverified as open questions. Do not describe what you would do next; do " +
+  "not ask for more turns.";
+
+export const AGENT_FINAL_TURN_TEXT =
+  "FINAL TURN — your turn budget is exhausted and your investigation tools " +
+  "have been removed. Answer NOW in plain text with everything you have " +
+  "learned so far. Partial findings are fine: report what you verified (with " +
+  "the file:line or URL sources you actually saw) and list what remains " +
+  "unverified as open questions. Do not describe what you would do next.";
+
+/** Tools advertised only under TSFORGE_WEB — named in the fast-fail hint so a
+ *  spawn that lost its whole toolset to the gate says WHY instead of flailing. */
+const WEB_GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TOOL_NAME.webSearch,
+  TOOL_NAME.webFetch,
+  TOOL_NAME.webBrowse,
+  TOOL_NAME.packageInfo,
+  TOOL_NAME.packageDocs,
+]);
+
+/** Opening budget line — the agent must know it is on a clock from turn 1. */
+function budgetLine(maxTurns: number, structured: boolean): string {
+  const finishMove = structured
+    ? "call agent_result with your findings"
+    : "answer in plain text with your findings";
+
+  return (
+    `[budget] You have ${String(maxTurns)} investigation turns. Budget them: ` +
+    `finish investigating with 1-2 turns to spare and use the final turn to ` +
+    `${finishMove}; report unfinished threads as open questions.`
+  );
+}
+
+/** Budget countdown: with two turns left, steer from widening to consolidating
+ *  — the agent must know the clock is running out BEFORE the axe falls, or it
+ *  is mid-investigation on its last turn. Skipped for tiny budgets (<4) where
+ *  there is no room to consolidate anyway. */
+function maybePushCountdown(
+  ctx: ILoopCtx,
+  structured: boolean,
+  turn: number,
+  maxTurns: number
+): void {
+  if (turn !== maxTurns - 2 || maxTurns < 4) {
+    return;
+  }
+
+  const finishMove = structured
+    ? "finish with agent_result on your final turn"
+    : "write your final answer on your final turn";
+
+  ctx.messages.push({
+    role: "user",
+    content:
+      "[budget] 2 turns left — stop opening new threads; consolidate what " +
+      `you have and ${finishMove}.`,
+  });
 }
 
 export interface IAgentRunOptions {
@@ -401,6 +492,7 @@ export class AgentRunner {
       return {
         status: "error",
         output: `agent '${spec.id}': kind "generate" is not implemented yet`,
+        outputKind: "answer",
         turns: 0,
         durationMs: 0,
         events: [],
@@ -426,11 +518,50 @@ export class AgentRunner {
       }
     };
 
-    const taskText = opts.task ?? spec.task ?? "";
     const structured = spec.outputMode === "structured";
+    const maxTurns = spec.maxTurns ?? AGENT_LIMITS.maxTurns;
     const tools = structured
       ? [...agentTools(spec.tools), AGENT_RESULT_TOOL]
       : agentTools(spec.tools);
+
+    // Declared-but-gated-off tools: a spec can name tools this session doesn't
+    // advertise (web tools without TSFORGE_WEB). Zero resolved → fail fast with
+    // the reason instead of burning the whole budget on "call agent_result"
+    // nudges; some resolved → tell the agent up front what it is missing so it
+    // works with what it has instead of flailing after its declared toolset.
+    const declared = spec.tools ?? [];
+    const resolvedNames = agentToolNames(spec.tools);
+    const missing = declared.filter((name) => !resolvedNames.has(name));
+    const webHint =
+      missing.length > 0 && missing.every((n) => WEB_GATED_TOOL_NAMES.has(n))
+        ? " Web tools require TSFORGE_WEB=1 (on by default only in the interactive REPL) — enable it or use a different specialist."
+        : "";
+
+    if (declared.length > 0 && tools.length <= (structured ? 1 : 0)) {
+      const output =
+        `agent '${spec.id}' has no usable tools in this session: none of its ` +
+        `declared tools (${declared.join(", ")}) are available.${webHint}`;
+
+      report({ kind: "tool", task: agentId, message: output });
+
+      return {
+        status: "error",
+        output,
+        outputKind: "answer",
+        turns: 0,
+        durationMs: 0,
+        events,
+      };
+    }
+
+    const availabilityNote =
+      missing.length > 0
+        ? `\n\n[harness note] These declared tools are NOT available in this session: ${missing.join(", ")}.${webHint} Work with the tools you have and state the limitation in your result.`
+        : "";
+    const taskText =
+      `${opts.task ?? spec.task ?? ""}\n\n` +
+      budgetLine(maxTurns, structured) +
+      availabilityNote;
     const ctx: ILoopCtx = {
       // No gate for a read-only agent: accept is empty (never run), and the
       // whole-repo "scope" only matters to write paths executeTool rejects.
@@ -478,15 +609,16 @@ export class AgentRunner {
       ttsrInterrupts: 0,
       steerLevel: 0,
     };
-    const maxTurns = spec.maxTurns ?? AGENT_LIMITS.maxTurns;
     const start = performance.now();
     const finish = (
       status: IAgentResult["status"],
       output: string,
-      turns: number
+      turns: number,
+      outputKind: IAgentResult["outputKind"] = "answer"
     ): IAgentResult => ({
       status,
       output,
+      outputKind,
       turns,
       durationMs: performance.now() - start,
       events,
@@ -495,6 +627,14 @@ export class AgentRunner {
     // Shared progress so an abort/error mid-run reports the TRUE turn count
     // and any partial output, not maxTurns + "".
     const progress = { turns: 0, lastText: "" };
+
+    // A terminal path must NEVER hand back an empty output: prefer the model's
+    // own prose, else digest the transcript — the findings live in ctx.messages
+    // and used to be discarded here (the "subagents fail every time" bug).
+    const partial = (): { output: string; kind: IAgentResult["outputKind"] } =>
+      progress.lastText.length > 0
+        ? { output: progress.lastText, kind: "answer" }
+        : { output: salvageOrFallback(ctx.messages), kind: "salvage" };
 
     try {
       return await this.turnLoop(opts, ctx, state, {
@@ -505,21 +645,35 @@ export class AgentRunner {
         report,
         finish,
         progress,
+        partial,
       });
     } catch (err) {
       // A provider AbortError from a mid-request cancellation is an ABORT,
       // not an agent failure.
       if (opts.signal?.aborted === true) {
-        return finish("aborted", progress.lastText, progress.turns);
+        const p = partial();
+
+        return finish("aborted", p.output, progress.turns, p.kind);
       }
+
+      const reason = err instanceof Error ? err.message : String(err);
 
       report({
         kind: "tool",
         task: agentId,
-        message: `agent ${spec.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        message: `agent ${spec.id} failed: ${reason}`,
       });
 
-      return finish("error", progress.lastText, progress.turns);
+      // The reason goes INTO the output (it used to live only in the event
+      // stream, leaving the orchestrator a bare "[id [error]]").
+      const digest = buildSalvageDigest(ctx.messages);
+
+      return finish(
+        "error",
+        digest.length > 0 ? `${reason}\n\n${digest}` : reason,
+        progress.turns,
+        "salvage"
+      );
     }
   }
 
@@ -537,13 +691,23 @@ export class AgentRunner {
       finish: (
         status: IAgentResult["status"],
         output: string,
-        turns: number
+        turns: number,
+        outputKind?: IAgentResult["outputKind"]
       ) => IAgentResult;
       progress: { turns: number; lastText: string };
+      partial: () => { output: string; kind: IAgentResult["outputKind"] };
     }
   ): Promise<IAgentResult> {
-    const { agentId, structured, tools, maxTurns, report, finish, progress } =
-      loop;
+    const {
+      agentId,
+      structured,
+      tools,
+      maxTurns,
+      report,
+      finish,
+      progress,
+      partial,
+    } = loop;
     let lastText = "";
     // Whether the agent has called ANY investigative tool yet. Until it has, we
     // force a tool call (toolChoice "required") instead of letting the model
@@ -559,7 +723,9 @@ export class AgentRunner {
     {
       for (let turn = 1; turn <= maxTurns; turn += 1) {
         if (opts.signal?.aborted === true) {
-          return finish("aborted", lastText, turn - 1);
+          const p = partial();
+
+          return finish("aborted", p.output, turn - 1, p.kind);
         }
 
         progress.turns = turn;
@@ -648,10 +814,91 @@ export class AgentRunner {
             return done;
           }
         }
+
+        maybePushCountdown(ctx, structured, turn, maxTurns);
       }
 
-      return finish("max_turns", lastText, maxTurns);
+      // Out of turns without a `done`: one finalization call (tools stripped)
+      // so the agent hands over what it learned instead of the old behavior —
+      // discarding the transcript and returning its last stray prose line.
+      const fin = await this.finalizeAfterCap(ctx, opts, {
+        structured,
+        report,
+        agentId,
+        budget,
+        partial,
+      });
+
+      return finish("max_turns", fin.output, maxTurns, fin.kind);
     }
+  }
+
+  /** The cap-hit wrap-up: ONE extra model call with investigation tools
+   *  removed (structured: only agent_result, required; text: no tools), asking
+   *  for everything learned so far. Any failure — prior abort, provider throw,
+   *  or an answerless response — degrades to the mechanical salvage digest;
+   *  this path never raises and never returns empty. */
+  private async finalizeAfterCap(
+    ctx: ILoopCtx,
+    opts: IAgentRunOptions,
+    args: {
+      structured: boolean;
+      report: Reporter;
+      agentId: string;
+      budget: { lastPromptTokens: number };
+      partial: () => { output: string; kind: IAgentResult["outputKind"] };
+    }
+  ): Promise<{ output: string; kind: IAgentResult["outputKind"] }> {
+    const { structured, report, agentId, budget, partial } = args;
+
+    if (opts.signal?.aborted === true) {
+      return partial();
+    }
+
+    report({
+      kind: "tool",
+      task: agentId,
+      message: "⌛ turn budget exhausted — requesting final summary",
+    });
+    ctx.messages.push({
+      role: "user",
+      content: structured ? AGENT_FINAL_TURN_STRUCTURED : AGENT_FINAL_TURN_TEXT,
+    });
+
+    try {
+      const res = await this.completeWithCompaction(
+        ctx,
+        opts,
+        {
+          tools: structured ? [AGENT_RESULT_TOOL] : [],
+          ...(structured ? { toolChoice: "required" as const } : {}),
+          temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
+          ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+          onToken: (text) => {
+            report({ kind: "token", task: agentId, message: text });
+          },
+        },
+        budget,
+        report
+      );
+
+      const resultCall = res.toolCalls.find(
+        (c) => c.name === AGENT_RESULT_TOOL.function.name
+      );
+
+      if (resultCall !== undefined) {
+        return { output: resultPayload(resultCall.arguments), kind: "answer" };
+      }
+
+      if (res.content.trim().length > 0) {
+        return { output: res.content, kind: "answer" };
+      }
+    } catch (err) {
+      // Salvage below — a failed wrap-up must not convert a cap into an error.
+      trace("agentRunner.finalizeAfterCap", err);
+    }
+
+    return { output: salvageOrFallback(ctx.messages), kind: "salvage" };
   }
 
   /** Decide what to do with a no-tool-call response: return a `done` result, or

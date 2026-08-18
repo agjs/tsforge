@@ -25,12 +25,12 @@ import { join } from "node:path";
 import { Session, type Reporter, type ILoopEvent } from "../src/loop";
 import type { SpawnAgentFn } from "../src/loop/tools";
 import { AgentRunner } from "../src/agent";
+import { formatResult, makeLimiter } from "../src/cli/spawn-runner";
 import { findAgentSpec, loadAgentSpecs } from "../src/config/agent-specs";
 import {
   loadTsforgeConfig,
   resolveAgentConcurrency,
 } from "../src/config/tsforge-config";
-import { makeLimiter } from "../src/cli/spawn-runner";
 import { OpenAICompatibleProvider } from "../src/inference";
 import type {
   IProvider,
@@ -130,7 +130,7 @@ function makeCountingSpawnFn(opts: {
         ...(signal === undefined ? {} : { signal }),
       });
 
-      return `[${spec.id}${result.status === "done" ? "" : ` [${result.status}]`}]\n${result.output}`;
+      return formatResult(spec.id, result);
     });
   };
 }
