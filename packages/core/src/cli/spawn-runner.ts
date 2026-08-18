@@ -31,7 +31,10 @@ export function makeLimiter(
   };
 
   return async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (active >= limit) {
+    // Re-check after every wake: a newcomer arriving between release() and the
+    // woken waiter's microtask can take the freed slot first — without the
+    // loop, both would run and the cap would be transiently exceeded.
+    while (active >= limit) {
       await new Promise<void>((resolve) => queue.push(resolve));
     }
 
@@ -46,11 +49,30 @@ export function makeLimiter(
 }
 
 /** Compact the child's outcome into the tool-result string the orchestrator
- *  reads — tagged with the specialist and (only when not clean) its status. */
-function formatResult(id: string, result: IAgentResult): string {
-  const tag = result.status === "done" ? id : `${id} [${result.status}]`;
+ *  reads — tagged with the specialist and (only when not clean) its status.
+ *  A non-done tag says what FOLLOWS (partial findings vs. transcript digest),
+ *  so the orchestrator treats capped-but-productive output as usable data
+ *  instead of a bare failure. The status word stays the first token inside the
+ *  bracket — log tooling keyed on `[max_turns` keeps matching. Exported so the
+ *  eval scripts reuse it instead of drifting on a re-implementation. */
+export function formatResult(id: string, result: IAgentResult): string {
+  if (result.status === "done") {
+    return `[${id}]\n${result.output}`;
+  }
 
-  return `[${tag}]\n${result.output}`;
+  const answer = result.outputKind === "answer";
+  const detail =
+    result.status === "max_turns"
+      ? answer
+        ? "max_turns — partial findings below"
+        : "max_turns — no final answer; transcript digest below"
+      : result.status === "aborted"
+        ? answer
+          ? "aborted — partial output below"
+          : "aborted — transcript digest below"
+        : "error";
+
+  return `[${id} [${detail}]]\n${result.output}`;
 }
 
 export interface ISpawnRunnerOptions {
@@ -131,7 +153,15 @@ export function makeSpawnAgentFn(opts: ISpawnRunnerOptions): SpawnAgentFn {
             : { contextWindow: opts.contextWindow }),
         });
 
-        lifecycle("agent_result", result.status === "done");
+        // ✓ means "findings delivered": done, or a cap-hit whose finalization
+        // produced a real answer. ✗ is reserved for salvage/error/abort — the
+        // tree should answer "did delegation work?", and the [max_turns] tag in
+        // the tool text keeps the budget-health signal visible in logs.
+        lifecycle(
+          "agent_result",
+          result.status === "done" ||
+            (result.status === "max_turns" && result.outputKind === "answer")
+        );
 
         return formatResult(spec.id, result);
       } catch (err) {

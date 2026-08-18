@@ -34,6 +34,31 @@ test("makeLimiter runs up to `cap` bodies at once and no more", async () => {
   expect(active).toBe(0);
 });
 
+test("a newcomer racing a woken waiter cannot exceed the cap", async () => {
+  const limit = makeLimiter(1);
+  let active = 0;
+  let peak = 0;
+
+  const body = async (): Promise<void> => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await tick();
+    active -= 1;
+  };
+
+  const a = limit(body);
+  const b = limit(body); // queued behind a
+
+  // C arrives synchronously with A's release: without the wake re-check loop,
+  // C sees the freed slot while B is still waking, and both run (peak 2).
+  const c = a.then(() => limit(body));
+
+  await Promise.all([a, b, c]);
+
+  expect(peak).toBe(1);
+  expect(active).toBe(0);
+});
+
 test("makeLimiter with cap 1 serializes; a higher cap overlaps", async () => {
   const serialPeak = { value: 0 };
   const parallelPeak = { value: 0 };

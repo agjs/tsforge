@@ -1,20 +1,30 @@
 import { test, expect, describe } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { IProvider, IModelResponse } from "../src/inference";
-import { AgentRunner, AGENT_LIMITS } from "../src/agent/agent-runner";
+import type { IProvider, IModelResponse, IChatMessage } from "../src/inference";
+import {
+  AgentRunner,
+  AGENT_LIMITS,
+  AGENT_FINAL_TURN_STRUCTURED,
+  AGENT_FINAL_TURN_TEXT,
+} from "../src/agent/agent-runner";
+import { NO_SALVAGE_FALLBACK } from "../src/agent/salvage";
 
 /** A provider that replays a fixed queue of responses (repeats the last one). */
 function scripted(queue: IModelResponse[]): {
   provider: IProvider;
   seenTools: () => string[];
+  calls: () => number;
+  lastMessages: () => IChatMessage[];
 } {
   let toolNames: string[] = [];
+  let messages: IChatMessage[] = [];
   let i = 0;
 
   return {
     provider: {
-      complete(_messages, opts) {
+      complete(msgs, opts) {
+        messages = [...msgs];
         const raw = opts?.tools ?? [];
 
         toolNames = raw.flatMap((t) =>
@@ -41,6 +51,8 @@ function scripted(queue: IModelResponse[]): {
       },
     },
     seenTools: () => toolNames,
+    calls: () => i,
+    lastMessages: () => messages,
   };
 }
 
@@ -136,8 +148,11 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     expect(seenTools()).toEqual(["read"]);
   });
 
-  test("maxTurns caps a tool-looping agent", async () => {
-    const { provider } = scripted([
+  test("maxTurns cap SALVAGES the transcript instead of returning empty", async () => {
+    // Repeats a read-call forever — even on the finalization call (a realistic
+    // model-failure shape). The old code returned output "" here; the digest
+    // must carry the tool evidence instead.
+    const { provider, calls } = scripted([
       {
         content: "",
         toolCalls: [
@@ -155,7 +170,129 @@ describe("AgentRunner (read-only loop against this repo)", () => {
 
     expect(result.status).toBe("max_turns");
     expect(result.turns).toBe(3);
+    expect(result.outputKind).toBe("salvage");
+    expect(result.output).toContain("Transcript digest");
+    expect(result.output).toContain("[read]");
+    // 3 loop turns + 1 finalization attempt.
+    expect(calls()).toBe(4);
     expect(AGENT_LIMITS.maxTurns).toBeGreaterThan(0);
+  });
+
+  test("cap-hit finalization: tools stripped, FINAL TURN injected, partial findings returned", async () => {
+    const readCall: IModelResponse = {
+      content: "",
+      toolCalls: [
+        { id: "1", name: "read", arguments: { file: "package.json" } },
+      ],
+    };
+    let finalRequestMessages: IChatMessage[] = [];
+    let finalRequestTools: string[] = [];
+    // Investigates every loop turn; answers ONLY when the toolset has been
+    // stripped to agent_result alone (the finalization call).
+    const provider: IProvider = {
+      complete(msgs, opts) {
+        const names = (opts?.tools ?? []).flatMap((t) =>
+          typeof t === "object" &&
+          t !== null &&
+          "function" in t &&
+          typeof t.function === "object" &&
+          t.function !== null &&
+          "name" in t.function &&
+          typeof t.function.name === "string"
+            ? [t.function.name]
+            : []
+        );
+
+        if (names.length === 1 && names[0] === "agent_result") {
+          finalRequestMessages = [...msgs];
+          finalRequestTools = names;
+
+          return Promise.resolve({
+            content: "",
+            toolCalls: [
+              {
+                id: "f",
+                name: "agent_result",
+                arguments: { summary: "partial: X confirmed", findings: [] },
+              },
+            ],
+          });
+        }
+
+        return Promise.resolve(readCall);
+      },
+    };
+    const result = await new AgentRunner({
+      id: "capped",
+      outputMode: "structured",
+      maxTurns: 4,
+    }).run({
+      provider,
+      cwd: REPO,
+      tsService: null,
+      parentTaskId: "r",
+      task: "investigate",
+    });
+
+    expect(result.status).toBe("max_turns");
+    expect(result.outputKind).toBe("answer");
+    expect(result.turns).toBe(4);
+    expect(result.output).toContain("partial: X confirmed");
+    expect(finalRequestTools).toEqual(["agent_result"]);
+    // The wrap-up instruction is the last user message of the final request…
+    expect(finalRequestMessages.at(-1)?.content).toBe(
+      AGENT_FINAL_TURN_STRUCTURED
+    );
+    // …the opening budget line and the countdown nudge were both injected…
+    expect(
+      finalRequestMessages.some((m) =>
+        m.content.includes("[budget] You have 4 investigation turns")
+      )
+    ).toBe(true);
+    expect(
+      finalRequestMessages.some((m) =>
+        m.content.includes("[budget] 2 turns left")
+      )
+    ).toBe(true);
+  });
+
+  test("text-mode finalization accepts prose with zero tools offered", async () => {
+    const readCall: IModelResponse = {
+      content: "",
+      toolCalls: [
+        { id: "1", name: "read", arguments: { file: "package.json" } },
+      ],
+    };
+    let finalToolCount = -1;
+    let sawFinalTurnText = false;
+    const provider: IProvider = {
+      complete(msgs, opts) {
+        if (msgs.at(-1)?.content === AGENT_FINAL_TURN_TEXT) {
+          sawFinalTurnText = true;
+          finalToolCount = (opts?.tools ?? []).length;
+
+          return Promise.resolve({
+            content: "Findings so far: the package is @agjs/tsforge.",
+            toolCalls: [],
+          });
+        }
+
+        return Promise.resolve(readCall);
+      },
+    };
+    const result = await new AgentRunner({ id: "texty", maxTurns: 2 }).run({
+      provider,
+      cwd: REPO,
+      tsService: null,
+      parentTaskId: "r",
+      task: "investigate",
+    });
+
+    expect(result.status).toBe("max_turns");
+    expect(result.outputKind).toBe("answer");
+    expect(result.output).toContain("@agjs/tsforge");
+    expect(sawFinalTurnText).toBe(true);
+    expect(finalToolCount).toBe(0);
   });
 
   test("structured mode: agent_result before investigating is rejected, accepted after a real tool call", async () => {
@@ -297,6 +434,114 @@ describe("review-round regressions", () => {
 
     expect(result.status).toBe("aborted");
     expect(result.turns).toBe(1); // not maxTurns
+    // Abort skips finalization but still never returns empty.
+    expect(result.output).toBe(NO_SALVAGE_FALLBACK);
+    expect(result.outputKind).toBe("salvage");
+  });
+
+  test("error path carries the exception message AND the transcript digest", async () => {
+    let call = 0;
+    const provider: IProvider = {
+      complete() {
+        call += 1;
+
+        if (call === 1) {
+          return Promise.resolve({
+            content: "",
+            toolCalls: [
+              { id: "1", name: "read", arguments: { file: "package.json" } },
+            ],
+          });
+        }
+
+        return Promise.reject(new Error("boom 503"));
+      },
+    };
+    const result = await new AgentRunner({ id: "explode" }).run({
+      provider,
+      cwd: REPO,
+      tsService: null,
+      parentTaskId: "r",
+      task: "t",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.outputKind).toBe("salvage");
+    // The reason used to live only in the event stream — now it is the output…
+    expect(result.output).toContain("boom 503");
+    // …together with the evidence gathered before the crash.
+    expect(result.output).toContain("[read]");
+  });
+
+  test("declared-but-gated-off toolset fails fast with the reason (no turn burn)", async () => {
+    const prevWeb = process.env.TSFORGE_WEB;
+
+    delete process.env.TSFORGE_WEB;
+
+    try {
+      const { provider, calls } = scripted([{ content: "", toolCalls: [] }]);
+      const result = await new AgentRunner({
+        id: "webby",
+        outputMode: "structured",
+        tools: ["web_search", "web_fetch"],
+      }).run({
+        provider,
+        cwd: REPO,
+        tsService: null,
+        parentTaskId: "r",
+        task: "t",
+      });
+
+      expect(result.status).toBe("error");
+      expect(result.turns).toBe(0);
+      expect(result.output).toContain("TSFORGE_WEB");
+      expect(result.output).toContain("web_search");
+      // No model calls were burned discovering the toolset is empty.
+      expect(calls()).toBe(0);
+    } finally {
+      if (prevWeb === undefined) {
+        delete process.env.TSFORGE_WEB;
+      } else {
+        process.env.TSFORGE_WEB = prevWeb;
+      }
+    }
+  });
+
+  test("partially gated toolset injects a harness availability note up front", async () => {
+    const prevWeb = process.env.TSFORGE_WEB;
+
+    delete process.env.TSFORGE_WEB;
+
+    try {
+      const { provider, lastMessages } = scripted([
+        { content: "ok", toolCalls: [] },
+      ]);
+      const result = await new AgentRunner({
+        id: "degraded",
+        tools: ["web_search", "read"],
+      }).run({
+        provider,
+        cwd: REPO,
+        tsService: null,
+        parentTaskId: "r",
+        task: "t",
+      });
+
+      expect(result.status).toBe("done");
+
+      const task = lastMessages().find((m) => m.role === "user")?.content ?? "";
+
+      expect(task).toContain("[harness note]");
+      expect(task).toContain("web_search");
+      // The opening budget line rides the same task message.
+      expect(task).toContain("[budget] You have");
+    } finally {
+      if (prevWeb === undefined) {
+        delete process.env.TSFORGE_WEB;
+      } else {
+        process.env.TSFORGE_WEB = prevWeb;
+      }
+    }
   });
 
   test("tools: [] means NO tools, not the full read-only set", async () => {

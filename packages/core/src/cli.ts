@@ -450,6 +450,7 @@ async function agentsMode(args: ICliArgs): Promise<number> {
           results.set(id, {
             status: "error",
             output: err instanceof Error ? err.message : String(err),
+            outputKind: "answer",
             turns: 0,
             durationMs: 0,
             events: [],
