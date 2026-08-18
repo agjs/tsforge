@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import type { IConventionProvider } from "../conventions-provider";
 
 /**
  * Paths that may be written without a prior `pull_conventions` — bootstrap /
@@ -77,6 +78,10 @@ export function pathToConventionTopics(
 
   if (base.endsWith(".hooks.ts")) {
     add("state");
+    // Hooks files are exactly where casts, floating promises and logging land;
+    // the early return used to starve them of both topics (self-eval seed-3).
+    add("no-casts");
+    add("lint-gotchas");
 
     if (looksFormish(norm)) {
       add("forms");
@@ -90,6 +95,10 @@ export function pathToConventionTopics(
     add("file-layout");
     add("state");
     add("jsx");
+    // Components cast too — without this the type-guard pattern only arrived
+    // via reactive PUSH, after the bad `as` was already written (seed-3).
+    // lint-gotchas stays off .tsx to bound the up-front token cost.
+    add("no-casts");
 
     if (looksFormish(norm)) {
       add("forms");
@@ -103,10 +112,35 @@ export function pathToConventionTopics(
 }
 
 /**
- * If this is a first write to `file` under an active convention library, return
- * a rejection message naming missing topic ids; otherwise null (allow write).
+ * Human-readable path→topics table for the pull contract, derived by PROBING
+ * `pathToConventionTopics` with canonical sample paths so it can never drift
+ * from the enforcement logic. Rows whose sample maps to nothing are omitted
+ * (topic not in `available`).
  */
-export function missingConventionPullReject(
+export function renderPathTopicMap(available: readonly string[]): string {
+  const probe = (sample: string): string =>
+    pathToConventionTopics(sample, available).join(", ");
+  const rows: [label: string, topics: string][] = [
+    ["*.test.*", probe("x.test.ts")],
+    ["*.hooks.ts", probe("X.hooks.ts")],
+    ["*.tsx", probe("X.tsx")],
+    ["formish *.tsx (name has form/schema)", probe("XForm.tsx")],
+    ["other *.ts", probe("x.ts")],
+  ];
+  const rendered = rows
+    .filter(([, topics]) => topics.length > 0)
+    .map(([label, topics]) => `${label} → ${topics}`)
+    .join("; ");
+
+  return rendered.length > 0 ? `Path→topics: ${rendered}.` : "";
+}
+
+/**
+ * Topic ids a first write to `file` requires but the session has not pulled;
+ * empty means the write may proceed. Pure — the shared decision both write
+ * tools gate on.
+ */
+export function missingConventionTopics(
   file: string,
   opts: {
     readonly conventionsActive: boolean;
@@ -114,37 +148,83 @@ export function missingConventionPullReject(
     readonly pulledTopics: ReadonlySet<string> | undefined;
     readonly availableTopics: readonly string[];
   }
-): string | null {
+): string[] {
   if (!opts.conventionsActive) {
-    return null;
+    return [];
   }
 
   const norm = file.replaceAll("\\", "/");
 
   if (isConventionExemptPath(norm)) {
-    return null;
+    return [];
   }
 
   if (opts.touched?.has(norm) === true) {
-    return null;
+    return [];
   }
 
   const needed = pathToConventionTopics(norm, opts.availableTopics);
+  const pulled = opts.pulledTopics ?? new Set<string>();
 
-  if (needed.length === 0) {
+  return needed.filter((t) => !pulled.has(t));
+}
+
+/**
+ * The write-tool convention gate. First write to a path with unpulled topics is
+ * still REJECTED (pull-before-write stands: the attempt was authored without
+ * having read the pattern), but the reject EMBEDS the missing guides and marks
+ * them pulled — one reject + retry, instead of the old reject → one
+ * `pull_conventions` call per topic → retry loop (2N+1 turns; self-eval seed-4).
+ * Returns the reject message, or null to allow the write.
+ */
+export function conventionPullGate(
+  file: string,
+  ctx: {
+    readonly conventions?: IConventionProvider | undefined;
+    readonly touched?: ReadonlySet<string> | undefined;
+    pulledTopics?: Set<string> | undefined;
+  }
+): string | null {
+  const provider = ctx.conventions;
+
+  if (provider === undefined) {
     return null;
   }
 
-  const pulled = opts.pulledTopics ?? new Set<string>();
-  const missing = needed.filter((t) => !pulled.has(t));
+  const missing = missingConventionTopics(file, {
+    conventionsActive: true,
+    touched: ctx.touched,
+    pulledTopics: ctx.pulledTopics,
+    availableTopics: provider.topics(),
+  });
 
   if (missing.length === 0) {
     return null;
   }
 
+  const pulled = (ctx.pulledTopics ??= new Set<string>());
+  const guides: string[] = [];
+
+  for (const topic of missing) {
+    const guide = provider.guide(topic);
+
+    // Marked pulled even when a guide body is missing (defensive): the retry
+    // must not re-reject on a topic the provider can't teach.
+    pulled.add(topic);
+
+    if (guide !== null) {
+      guides.push(`=== CONVENTION: ${topic} ===\n${guide}`);
+    }
+  }
+
+  const norm = file.replaceAll("\\", "/");
+
   return (
-    `REJECTED: pull_conventions before first write to ${norm}. ` +
-    `Missing topics: ${missing.join(", ")}. ` +
-    `Call pull_conventions for each, then retry.`
+    `REJECTED: first write to ${norm} requires conventions you have not read: ` +
+    `${missing.join(", ")}.\n` +
+    "The guides are included below and now count as PULLED — read them, then " +
+    "RETRY this write corrected to match. Do NOT call pull_conventions for " +
+    "these topics.\n\n" +
+    guides.join("\n\n")
   );
 }

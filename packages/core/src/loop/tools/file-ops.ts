@@ -37,17 +37,7 @@ import {
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
 import { trace } from "../../lib/trace";
-import { missingConventionPullReject } from "../conventions";
-
-/** Refuse first writes until mapped convention topics were pulled this session. */
-function conventionPullGate(file: string, ctx: IToolContext): string | null {
-  return missingConventionPullReject(file, {
-    conventionsActive: ctx.conventions !== undefined,
-    touched: ctx.touched,
-    pulledTopics: ctx.pulledTopics,
-    availableTopics: ctx.conventions?.topics() ?? [],
-  });
-}
+import { conventionPullGate } from "../conventions";
 
 /** Refuse writes that paste harness history markers onto disk (seen live). */
 const HARNESS_MARKER_REJECT =
