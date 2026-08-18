@@ -112,7 +112,9 @@ export async function doCheck(
   // them before editing again (their on-disk content + anchors changed). Surfaced
   // on BOTH pass and fail, mirroring settleGate's autofix notice.
   const autoFixed =
-    result.autoFixed.length > 0 ? { autoFixed: result.autoFixed } : {};
+    result.autoFixed.length > 0
+      ? { autoFixed: result.autoFixed, autoFixSummary: result.autoFixSummary }
+      : {};
 
   if (result.passed) {
     return JSON.stringify({ passed: true, errors: [], ...autoFixed });

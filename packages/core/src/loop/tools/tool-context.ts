@@ -16,6 +16,9 @@ import type { IPlanDocument } from "../worklist/checklist.types";
  *  warns via its autofix notice. */
 export interface ICheckOutcome extends IValidateResult {
   autoFixed: string[];
+  /** Per-file annotated one-liners ("src/a.ts (formatting, 4 lines)"), same
+   *  order as `autoFixed` — what the autofix actually changed and why. */
+  autoFixSummary: string[];
   /** Live gate command that produced this outcome (empty when none). */
   command: string;
   /** Pack ids the live gate / stack profile used. */
