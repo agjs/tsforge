@@ -5,6 +5,7 @@ import type { IMetaRuleViolation } from "../../meta-rules";
 import { isInScope } from "../../lib/scope";
 import { readFiles } from "../../lib/fs";
 import { ruleHelp, idiomHints } from "../feedback/rule-docs";
+import { resolveExemplars } from "../feedback/exemplar";
 import {
   metaRuleHelp,
   renderMetaViolations,
@@ -91,7 +92,8 @@ export async function gateFeedback(
         `PRODUCER. Do NOT edit the files below.\n${await renderErrors(shownOut, cwd)}`
       : "";
 
-  const help = ruleHelp([...focusedOwn, ...focusedOut]);
+  const exemplars = await resolveExemplars([...focusedOwn, ...focusedOut], cwd);
+  const help = ruleHelp([...focusedOwn, ...focusedOut], exemplars);
   const helpBlock =
     help.length > 0 ? `\n\nHow to satisfy the gate:\n${help}` : "";
 
