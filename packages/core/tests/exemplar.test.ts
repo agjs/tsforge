@@ -39,7 +39,11 @@ async function write(dir: string, rel: string, text: string): Promise<void> {
 
 test("glob scan finds the conforming file and names the proving export", async () => {
   await withDir(async (dir) => {
-    await write(dir, "src/lib/time.ts", "export function now(): number {\n  return Date.now();\n}\n");
+    await write(
+      dir,
+      "src/lib/time.ts",
+      "export function now(): number {\n  return Date.now();\n}\n"
+    );
 
     const out = await resolveExemplars(CLOCK_ERROR, dir);
 
@@ -51,7 +55,11 @@ test("glob scan finds the conforming file and names the proving export", async (
 
 test("workspace map is preferred over scanning", async () => {
   await withDir(async (dir) => {
-    await write(dir, "src/core/clock.ts", "export const getNow = (): number => 0;\n");
+    await write(
+      dir,
+      "src/core/clock.ts",
+      "export const getNow = (): number => 0;\n"
+    );
     await write(
       dir,
       ".tsforge/workspace-map.json",
@@ -140,7 +148,11 @@ test("rules without an exemplar spec are absent", async () => {
 
 test("positive cache pins the path across settles, and drops it when the file is deleted", async () => {
   await withDir(async (dir) => {
-    await write(dir, "src/time.ts", "export function now(): number {\n  return 0;\n}\n");
+    await write(
+      dir,
+      "src/time.ts",
+      "export function now(): number {\n  return 0;\n}\n"
+    );
 
     const first = await resolveExemplars(CLOCK_ERROR, dir);
 

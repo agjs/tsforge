@@ -166,9 +166,7 @@ async function resolveOne(
 
   // A map hit can name a since-deleted file; only an existing path may render.
   const verified =
-    hit !== null && (await Bun.file(join(cwd, hit.path)).exists())
-      ? hit
-      : null;
+    hit !== null && (await Bun.file(join(cwd, hit.path)).exists()) ? hit : null;
 
   cache.set(key, verified);
 
@@ -196,6 +194,7 @@ export async function resolveExemplars(
 
     if (hit !== null) {
       const rel = relative(cwd, join(cwd, hit.path)).replaceAll("\\", "/");
+
       out.set(e.rule, `${rel} (exports ${hit.symbol}())`);
     }
   }

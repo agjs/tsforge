@@ -263,11 +263,9 @@ test("gateFeedback always states the remaining total, even without a banner", as
 
 test("gateFeedback points a blocked clock pattern at the project's own exemplar", async () => {
   await withDir(async (dir) => {
-    await Bun.write(
-      join(dir, "money.ts"),
-      "export const at = Date.now();\n"
-    );
+    await Bun.write(join(dir, "money.ts"), "export const at = Date.now();\n");
     const timePath = join(dir, "src", "lib", "time.ts");
+
     await Bun.write(
       timePath,
       "export function now(): number {\n  return Date.now();\n}\n"
