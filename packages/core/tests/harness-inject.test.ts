@@ -78,6 +78,17 @@ describe("isHarnessUserInject", () => {
     ).toBe(true);
   });
 
+  test("flags the anti-patch PATCH-UNTIL-GREEN lead", () => {
+    expect(
+      isHarnessUserInject({
+        role: "user",
+        content:
+          "⚠ PATCH-UNTIL-GREEN — the same error keeps surviving under a near-green count. " +
+          "Your approach is wrong, not just one character off.",
+      })
+    ).toBe(true);
+  });
+
   test("flags resteers and plan-approved notes", () => {
     expect(
       isHarnessUserInject({

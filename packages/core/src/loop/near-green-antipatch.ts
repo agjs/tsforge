@@ -15,6 +15,8 @@ export const ANTI_PATCH_NEAR_GREEN_MAX = 3;
  */
 export const ANTI_PATCH_MIN_AGE = 3;
 
+// The lead string must stay listed in HARNESS_USER_PREFIXES (harness-inject.ts)
+// or transcript classification misses this inject.
 export const ANTI_PATCH_NEAR_GREEN_STEER =
   "⚠ PATCH-UNTIL-GREEN — the same error keeps surviving under a near-green count. " +
   "Your approach is wrong, not just one character off. REWRITE the failing unit " +
