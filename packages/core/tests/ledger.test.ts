@@ -53,6 +53,7 @@ describe("ledgerTypeFor — kind → typed event", () => {
       ["create", "tool_call_finished"],
       ["run", "tool_call_finished"],
       ["policy", "policy_decision"],
+      ["inject", "model_inject"],
       ["agent_spawned", "agent_spawned"],
       ["agent_started", "agent_started"],
       ["agent_result", "agent_result"],
@@ -140,6 +141,23 @@ describe("LedgerWriter", () => {
 
       expect(output.length).toBeLessThan(10_000);
       expect(output).toContain("chars]");
+    });
+  });
+
+  test("model_inject keeps the full text under its wider cap", async () => {
+    await withLog(async (file, read) => {
+      const w = new LedgerWriter(file, "r");
+      // A realistic settle wall: >4KB (the generic cap) but under the 32KB
+      // inject cap — the whole point of the event is the FULL injected text.
+      const wall = "3 error(s) remaining.\n" + "e".repeat(8_000);
+
+      w.record("model_inject", { kind: "inject", message: wall });
+
+      const [event] = await read();
+      const message = String(event?.payload.message ?? "");
+
+      expect(message).toBe(wall);
+      expect(message).not.toContain("chars]");
     });
   });
 

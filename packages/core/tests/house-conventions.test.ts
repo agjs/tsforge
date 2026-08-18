@@ -6,7 +6,8 @@ import {
   composeConventionProviders,
   houseConventionProvider,
   pathToConventionTopics,
-  missingConventionPullReject,
+  missingConventionTopics,
+  conventionPullGate,
   isConventionExemptPath,
 } from "../src/loop/conventions";
 import { boringstackConventionProvider } from "../src/loop/boringstack/conventions";
@@ -50,7 +51,10 @@ describe("house + boringstack compose", () => {
 
     expect(contract).toContain("pull-before-first-write");
     expect(contract).toContain("component-anatomy");
-    expect(contract).toContain("THAT path only");
+    // The path→topic map is finally SHOWN to the model (it used to be referenced
+    // but never rendered), while guide bodies stay out of the prompt.
+    expect(contract).toContain("Path→topics:");
+    expect(contract).toContain("*.tsx →");
     expect(contract).toContain("do NOT pull every topic");
     expect(contract).not.toContain("FILE PURITY");
     expect(boringstackConventionProvider.buildGuides()).not.toContain(
@@ -100,10 +104,10 @@ describe("house + boringstack compose", () => {
 describe("pathToConventionTopics + exempt", () => {
   const houseTopics = houseConventionProvider.topics();
 
-  test("tsx maps to anatomy + layout + state + jsx", () => {
+  test("tsx maps to anatomy + layout + state + jsx + no-casts", () => {
     expect(
       pathToConventionTopics("src/features/x/Foo.tsx", houseTopics)
-    ).toEqual(["component-anatomy", "file-layout", "state", "jsx"]);
+    ).toEqual(["component-anatomy", "file-layout", "state", "jsx", "no-casts"]);
   });
 
   test("form-ish tsx also requires forms", () => {
@@ -112,10 +116,10 @@ describe("pathToConventionTopics + exempt", () => {
     ).toContain("forms");
   });
 
-  test("hooks file maps to state", () => {
+  test("hooks file maps to state + no-casts + lint-gotchas", () => {
     expect(
       pathToConventionTopics("src/features/x/Foo.hooks.ts", houseTopics)
-    ).toEqual(["state"]);
+    ).toEqual(["state", "no-casts", "lint-gotchas"]);
   });
 
   test("test file maps to testing", () => {
@@ -137,58 +141,63 @@ describe("pathToConventionTopics + exempt", () => {
 });
 
 describe("pull-before-first-write enforcement", () => {
-  test("missingConventionPullReject names topics only", () => {
-    const msg = missingConventionPullReject("src/Foo.tsx", {
-      conventionsActive: true,
-      touched: new Set(),
-      pulledTopics: new Set(),
-      availableTopics: houseConventionProvider.topics(),
-    });
+  test("conventionPullGate rejects ONCE with the guides embedded and marks them pulled", () => {
+    const ctx = {
+      conventions: houseConventionProvider,
+      touched: new Set<string>(),
+      pulledTopics: new Set<string>(),
+    };
+    const msg = conventionPullGate("src/Foo.tsx", ctx);
 
-    expect(msg).toContain("Missing topics:");
+    expect(msg).toContain("requires conventions you have not read");
     expect(msg).toContain("component-anatomy");
-    expect(msg).not.toContain("FILE PURITY");
+    // The guides ride the reject, so the retry needs no pull round-trips…
+    expect(msg).toContain("=== CONVENTION: component-anatomy ===");
+    expect(msg).toContain("=== CONVENTION: no-casts ===");
+    // …and the topics count as pulled.
+    expect(ctx.pulledTopics.has("component-anatomy")).toBe(true);
+    expect(ctx.pulledTopics.has("no-casts")).toBe(true);
+    expect(conventionPullGate("src/Foo.tsx", ctx)).toBeNull();
   });
 
   test("after pull + touch, re-edit is allowed", () => {
-    const pulled = new Set([
-      "component-anatomy",
-      "file-layout",
-      "state",
-      "jsx",
-    ]);
-
     expect(
-      missingConventionPullReject("src/Foo.tsx", {
+      missingConventionTopics("src/Foo.tsx", {
         conventionsActive: true,
         touched: new Set(),
-        pulledTopics: pulled,
+        pulledTopics: new Set([
+          "component-anatomy",
+          "file-layout",
+          "state",
+          "jsx",
+          "no-casts",
+        ]),
         availableTopics: houseConventionProvider.topics(),
       })
-    ).toBeNull();
+    ).toEqual([]);
 
     expect(
-      missingConventionPullReject("src/Foo.tsx", {
+      missingConventionTopics("src/Foo.tsx", {
         conventionsActive: true,
         touched: new Set(["src/Foo.tsx"]),
         pulledTopics: new Set(),
         availableTopics: houseConventionProvider.topics(),
       })
-    ).toBeNull();
+    ).toEqual([]);
   });
 
   test("package.json is exempt", () => {
     expect(
-      missingConventionPullReject("package.json", {
+      missingConventionTopics("package.json", {
         conventionsActive: true,
         touched: new Set(),
         pulledTopics: new Set(),
         availableTopics: houseConventionProvider.topics(),
       })
-    ).toBeNull();
+    ).toEqual([]);
   });
 
-  test("doCreate rejects until topics are pulled; succeeds after", async () => {
+  test("doCreate rejects once WITH guides; the immediate retry succeeds with zero pull calls", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-write-"));
     const pulledTopics = new Set<string>();
     const touched = new Set<string>();
@@ -212,17 +221,12 @@ describe("pull-before-first-write enforcement", () => {
         ctx
       );
 
-      expect(blocked).toContain("Missing topics:");
-      expect(blocked).toContain("component-anatomy");
+      expect(blocked).toContain("requires conventions you have not read");
+      expect(blocked).toContain("=== CONVENTION: component-anatomy ===");
       expect(await Bun.file(join(dir, "src/Widget.tsx")).exists()).toBe(false);
 
-      for (const t of pathToConventionTopics(
-        "src/Widget.tsx",
-        houseConventionProvider.topics()
-      )) {
-        doPullConventions({ topic: t }, ctx);
-      }
-
+      // No pull_conventions round-trips: the reject embedded the guides and
+      // marked them pulled, so the immediate retry lands.
       const ok = await doCreate(
         {
           file: "src/Widget.tsx",

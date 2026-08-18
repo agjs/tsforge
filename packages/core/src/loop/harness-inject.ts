@@ -47,6 +47,7 @@ export function isEphemeralUserInject(message: {
  */
 const HARNESS_USER_PREFIXES: readonly string[] = [
   "⚠ NEAR-GREEN",
+  "⚠ PATCH-UNTIL-GREEN",
   "⚠ REGRESSION",
   "⚠ generation interrupted",
   "Harness attribution:",

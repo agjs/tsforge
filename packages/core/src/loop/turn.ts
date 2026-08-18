@@ -15,6 +15,12 @@ import { isInScope } from "../lib/scope";
 import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
+import {
+  snapshotFixState,
+  buildAutoFixSummary,
+  type IFixCounts,
+  type IAutoFixSummary,
+} from "./autofix-summary";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type {
   IRunResult,
@@ -912,55 +918,112 @@ function stubUnrunCalls(
  * unused) + ast-grep SAFE idiom rewrites (`new Array(n).fill` → `Array.from`).
  * The `tsc -p` gate re-validates, so a bad fix can't ship; never throws.
  */
-async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
-  const { task, cwd, tsService, report } = ctx;
-  // Resolve globs to concrete files — iterating task.files literally would skip a
-  // glob scope like `["**/*"]` (the common interactive default), so the fixes
-  // never ran there. See P1 review.
-  const files = await resolveScopeFiles(cwd, task.files);
+/** Lazily-initialized per-file fixer counters over a shared map. */
+function fixCountsFor(counts: Map<string, IFixCounts>, f: string): IFixCounts {
+  let c = counts.get(f);
 
-  if (tsService !== null) {
-    let tsFixed = 0;
+  if (c === undefined) {
+    c = { tsQuickFixes: 0, importsOrganized: 0, idiomRewrites: 0 };
+    counts.set(f, c);
+  }
 
-    for (const f of files) {
-      try {
-        if (await fileExists(cwd, f)) {
-          tsService.refresh(f);
-          tsFixed += tsService.fixAll(f);
-          // Dedupe/sort imports + drop unused ones the model left behind — free
-          // mechanical cleanup so it never spends a repair turn on import hygiene.
-          tsFixed += tsService.organizeImports(f);
+  return c;
+}
+
+/** TS quick-fixes + import hygiene over `files`; returns the total applied. */
+async function applyTsQuickFixes(
+  ctx: ILoopCtx,
+  files: readonly string[],
+  counts: Map<string, IFixCounts>
+): Promise<number> {
+  const { cwd, tsService } = ctx;
+  let tsFixed = 0;
+
+  if (tsService === null) {
+    return 0;
+  }
+
+  for (const f of files) {
+    try {
+      if (await fileExists(cwd, f)) {
+        tsService.refresh(f);
+        const quick = tsService.fixAll(f);
+        // Dedupe/sort imports + drop unused ones the model left behind — free
+        // mechanical cleanup so it never spends a repair turn on import hygiene.
+        const imports = tsService.organizeImports(f);
+
+        tsFixed += quick + imports;
+
+        if (quick > 0) {
+          fixCountsFor(counts, f).tsQuickFixes += quick;
         }
-      } catch (err) {
-        // degrade silently — the gate still runs below
-        trace("applyDeterministicFixes.quickFix", err);
-      }
-    }
 
-    if (tsFixed > 0) {
-      report({
-        kind: "tool",
-        task: task.id,
-        message: `tsFixAll: applied ${tsFixed} TypeScript quick-fix(es)`,
-      });
+        if (imports > 0) {
+          fixCountsFor(counts, f).importsOrganized += imports;
+        }
+      }
+    } catch (err) {
+      // degrade silently — the gate still runs below
+      trace("applyDeterministicFixes.quickFix", err);
     }
   }
 
+  return tsFixed;
+}
+
+/** ast-grep idiom rewrites + literal-cast strips; returns the total applied. */
+async function applyIdiomRewrites(
+  ctx: ILoopCtx,
+  files: readonly string[],
+  counts: Map<string, IFixCounts>
+): Promise<number> {
+  const { cwd } = ctx;
   let astFixed = 0;
 
   for (const f of files) {
     try {
       if (await fileExists(cwd, f)) {
-        astFixed += await astGrepFix(join(cwd, f));
+        let idioms = await astGrepFix(join(cwd, f));
+
         // Backstop the write-time strip (covers files changed via rename/organize
         // or any path that skipped the write-guard).
-        astFixed += await stripLiteralCasts(join(cwd, f));
+        idioms += await stripLiteralCasts(join(cwd, f));
+        astFixed += idioms;
+
+        if (idioms > 0) {
+          fixCountsFor(counts, f).idiomRewrites += idioms;
+        }
       }
     } catch (err) {
       // degrade silently — gate is the authority
       trace("applyDeterministicFixes.astGrep", err);
     }
   }
+
+  return astFixed;
+}
+
+async function applyDeterministicFixes(
+  ctx: ILoopCtx
+): Promise<Map<string, IFixCounts>> {
+  const { task, cwd, report } = ctx;
+  // Resolve globs to concrete files — iterating task.files literally would skip a
+  // glob scope like `["**/*"]` (the common interactive default), so the fixes
+  // never ran there. See P1 review.
+  const files = await resolveScopeFiles(cwd, task.files);
+  const counts = new Map<string, IFixCounts>();
+
+  const tsFixed = await applyTsQuickFixes(ctx, files, counts);
+
+  if (tsFixed > 0) {
+    report({
+      kind: "tool",
+      task: task.id,
+      message: `tsFixAll: applied ${tsFixed} TypeScript quick-fix(es)`,
+    });
+  }
+
+  const astFixed = await applyIdiomRewrites(ctx, files, counts);
 
   if (astFixed > 0) {
     report({
@@ -969,6 +1032,8 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
       message: `astGrepFix: applied ${astFixed} idiom rewrite(s)`,
     });
   }
+
+  return counts;
 }
 
 /** Drop redundant annotations across `files`, degrading silently per-file. */
@@ -1128,57 +1193,21 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 }
 
-/** Snapshot the editable files' mtimes (ms) — cheap stat, used to detect which
- *  files the deterministic fixers + fix command rewrote. */
-async function snapshotMtimes(
-  cwd: string,
-  files: string[]
-): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-
-  for (const f of await resolveScopeFiles(cwd, files)) {
-    try {
-      out.set(f, Bun.file(join(cwd, f)).lastModified);
-    } catch (err) {
-      // ignore — a file that can't be stat'd just isn't tracked
-      trace("snapshotMtimes", err);
-    }
-  }
-
-  return out;
-}
-
-/** Files whose mtime advanced between two snapshots — i.e. a fixer rewrote them. */
-function changedSince(
-  before: Map<string, number>,
-  after: Map<string, number>
-): string[] {
-  const changed: string[] = [];
-
-  for (const [f, mtime] of after) {
-    const prev = before.get(f);
-
-    if (prev === undefined || mtime > prev) {
-      changed.push(f);
-    }
-  }
-
-  return changed;
-}
-
 /** Max auto-fixed files to name in the notice before eliding. */
 const MAX_AUTOFIX_NAMED = 20;
 
-/** Tell the model which files the janitor reformatted so the next edit anchors
- *  on disk, not pre-format text. */
-function autoFixNotice(files: string[]): string {
-  const shown = files.slice(0, MAX_AUTOFIX_NAMED).join(", ");
+/** Tell the model which files the janitor reformatted — and WHAT changed in
+ *  each (fixer kind + changed-line count) — so the next edit anchors on disk,
+ *  not pre-format text, without re-reading files to discover the new state.
+ *  Keep the exact `NOTE: auto-fixed` lead: HARNESS_USER_PREFIXES matches it. */
+function autoFixNotice(summary: string[]): string {
+  const shown = summary.slice(0, MAX_AUTOFIX_NAMED).join(", ");
   const more =
-    files.length > MAX_AUTOFIX_NAMED
-      ? ` (+${String(files.length - MAX_AUTOFIX_NAMED)} more)`
+    summary.length > MAX_AUTOFIX_NAMED
+      ? ` (+${String(summary.length - MAX_AUTOFIX_NAMED)} more)`
       : "";
 
-  return `NOTE: auto-fixed ${shown}${more} — re-read before edit; fix only errors below.`;
+  return `NOTE: auto-fixed — ${shown}${more} — the harness rewrote these on disk; re-read before editing; fix only the errors below.`;
 }
 
 /**
@@ -1384,11 +1413,11 @@ function touchedInScope(ctx: ILoopCtx): string[] {
  *  and return which files they changed, so the model is told exactly what moved under
  *  it (else it re-fixes already-fixed style and edits now-stale text → rejects).
  *  Exported for unit tests. */
-export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
+export async function autoFixStep(ctx: ILoopCtx): Promise<IAutoFixSummary> {
   const { task, cwd, report } = ctx;
-  const beforeFix = await snapshotMtimes(cwd, task.files);
+  const beforeFix = await snapshotFixState(cwd, task.files);
 
-  await applyDeterministicFixes(ctx);
+  const fixCounts = await applyDeterministicFixes(ctx);
 
   if (task.fix !== undefined && task.fix.length > 0) {
     await runAccept(
@@ -1413,20 +1442,24 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
     });
   }
 
-  const autoFixed = changedSince(
+  // Content-verified change set: a touched-but-identical file is NOT reported
+  // (the mtime-only detector sent the model re-reading files that never changed).
+  const autoFix = buildAutoFixSummary(
     beforeFix,
-    await snapshotMtimes(cwd, task.files)
+    await snapshotFixState(cwd, task.files),
+    fixCounts,
+    task.fix !== undefined && task.fix.length > 0
   );
 
-  if (autoFixed.length > 0) {
+  if (autoFix.files.length > 0) {
     report({
       kind: "tool",
       task: task.id,
-      message: `auto-fixed ${String(autoFixed.length)} file(s) (prettier/eslint/imports) — noted to the model`,
+      message: `auto-fixed ${String(autoFix.files.length)} file(s) (prettier/eslint/imports) — noted to the model`,
     });
   }
 
-  return autoFixed;
+  return autoFix;
 }
 
 /** STEP 2 — run the gate command (tsc/eslint/tests/…): announce it on live
@@ -1558,8 +1591,10 @@ export async function evaluateGate(
   output: string;
   metaViolations: IMetaRuleViolation[];
   autoFixed: string[];
+  /** Per-file annotated one-liners, same order as `autoFixed`. */
+  autoFixSummary: string[];
 }> {
-  const autoFixed = await autoFixStep(ctx);
+  const autoFix = await autoFixStep(ctx);
   const gate = await runGateStep(ctx, turn);
   const metaViolations = await runMetaRulesStep(ctx);
 
@@ -1583,7 +1618,8 @@ export async function evaluateGate(
     errors,
     output: gate.output,
     metaViolations,
-    autoFixed,
+    autoFixed: autoFix.files,
+    autoFixSummary: autoFix.summary,
   };
 }
 
@@ -1599,13 +1635,15 @@ export async function runCheckGate(
   ctx: ILoopCtx,
   turn: number
 ): Promise<ICheckOutcome> {
-  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, turn);
+  const { passed, errors, output, autoFixed, autoFixSummary } =
+    await evaluateGate(ctx, turn);
 
   return {
     passed,
     errors,
     output,
     autoFixed,
+    autoFixSummary,
     command: ctx.task.accept,
     packs: ctx.gate.stackProfile?.packs ?? [],
   };
@@ -2348,7 +2386,7 @@ export async function injectFeedback(
   state: ILoopState,
   gateErrors: IErrorItem[],
   metaViolations: IMetaRuleViolation[],
-  autoFixed: string[]
+  autoFixSummary: string[]
 ): Promise<void> {
   const feedback = await gateFeedback(
     gateErrors,
@@ -2366,7 +2404,8 @@ export async function injectFeedback(
         })
       : "";
   const attributionBlock = attribution.length > 0 ? `${attribution}\n\n` : "";
-  const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
+  const notice =
+    autoFixSummary.length > 0 ? `${autoFixNotice(autoFixSummary)}\n\n` : "";
   // A pending steer (the model stalled) leads the feedback so it can't be missed.
   // R1 Phase A's diagnosis-only instruction takes precedence when set, and is NOT
   // cleared here: the next (no-tools) call reads `pendingDiagnosisSteer` to hide tools
@@ -2438,11 +2477,15 @@ export async function injectFeedback(
   const antiPatch = antiPatchNearGreenLead(state.errorAge, gateErrors);
   const banner = antiPatch.length > 0 ? antiPatch : baseBanner;
 
+  const injected = `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`;
+
+  // Ledger the FULL injected text (`model_inject`): the `--log` stream recorded
+  // gate verdicts but never what the model was TOLD, so a run log couldn't
+  // verify the feedback the model acted on. Renders to nothing on screen.
+  ctx.report({ kind: "inject", task: ctx.task.id, message: injected });
+
   // One live gate-feedback user slot (replace prior settle walls — do not append forever).
-  upsertGateFeedback(
-    ctx.messages,
-    `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`
-  );
+  upsertGateFeedback(ctx.messages, injected);
 }
 
 /** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :
@@ -2850,7 +2893,7 @@ export async function settleGate(
     passed: gatePassed,
     errors: gateErrors,
     metaViolations,
-    autoFixed,
+    autoFixSummary,
   } = await evaluateGate(ctx, turn);
 
   const curr = gateErrors.length;
@@ -2968,7 +3011,7 @@ export async function settleGate(
     return stuck;
   }
 
-  await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
+  await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixSummary);
 
   await nearGreenCheckpointStep(ctx, state, curr, gateErrors);
 

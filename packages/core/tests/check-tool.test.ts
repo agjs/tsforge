@@ -32,6 +32,7 @@ function result(
     errors,
     output: "",
     autoFixed: [],
+    autoFixSummary: [],
     command: "eslint .",
     packs: ["generic-ts", "code-flow"],
     ...extra,
@@ -158,13 +159,25 @@ test("doCheck caps the list at 200 and records how many were omitted", async () 
 test("doCheck surfaces autoFixed files so the model re-reads after a mid-turn rewrite", async () => {
   const out = await doCheck(
     {},
-    ctxWith(async () => result([], { autoFixed: ["src/a.ts", "src/b.ts"] }))
+    ctxWith(async () =>
+      result([], {
+        autoFixed: ["src/a.ts", "src/b.ts"],
+        autoFixSummary: [
+          "src/a.ts (formatting, 4 lines)",
+          "src/b.ts (2 TS quick-fixes, 7 lines)",
+        ],
+      })
+    )
   );
 
   expect(JSON.parse(out)).toEqual({
     passed: true,
     errors: [],
     autoFixed: ["src/a.ts", "src/b.ts"],
+    autoFixSummary: [
+      "src/a.ts (formatting, 4 lines)",
+      "src/b.ts (2 TS quick-fixes, 7 lines)",
+    ],
   });
 });
 

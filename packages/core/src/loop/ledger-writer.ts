@@ -30,6 +30,8 @@ export function ledgerTypeFor(event: ILoopEvent): LedgerEventType {
       return "edit_reverted";
     case "policy":
       return "policy_decision";
+    case "inject":
+      return "model_inject";
     case "agent_spawned":
       return "agent_spawned";
     case "agent_started":
@@ -48,27 +50,32 @@ export function ledgerTypeFor(event: ILoopEvent): LedgerEventType {
 /** Per-string payload cap — previews, not full file dumps or command output. */
 const MAX_VALUE_CHARS = 4096;
 
+/** Wider cap for `model_inject`: its whole point is the FULL text the model was
+ *  shown, and a settle wall (errors + rule help + pushed guides) regularly
+ *  passes 4KB. Still bounded so a pathological inject can't bloat the ledger. */
+const MAX_INJECT_CHARS = 32_768;
+
 function newEventId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** Redact secrets and truncate an over-long string to a capped preview. */
-function capString(value: string): string {
+function capString(value: string, maxChars: number = MAX_VALUE_CHARS): string {
   const redacted = redactText(value);
 
-  return redacted.length > MAX_VALUE_CHARS
-    ? `${redacted.slice(0, MAX_VALUE_CHARS)}…[+${redacted.length - MAX_VALUE_CHARS} chars]`
+  return redacted.length > maxChars
+    ? `${redacted.slice(0, maxChars)}…[+${redacted.length - maxChars} chars]`
     : redacted;
 }
 
 /** Redact + cap every value in a payload (one level into arrays/objects). */
-function capValue(value: unknown): unknown {
+function capValue(value: unknown, maxChars?: number): unknown {
   if (typeof value === "string") {
-    return capString(value);
+    return capString(value, maxChars);
   }
 
   if (Array.isArray(value)) {
-    return value.map(capValue);
+    return value.map((v) => capValue(v, maxChars));
   }
 
   if (value !== null && typeof value === "object") {
@@ -79,18 +86,21 @@ function capValue(value: unknown): unknown {
     const proto: unknown = Object.getPrototypeOf(value);
 
     return proto === Object.prototype || proto === null
-      ? capPayload(value)
+      ? capPayload(value, maxChars)
       : value;
   }
 
   return value;
 }
 
-function capPayload(payload: object): Record<string, unknown> {
+function capPayload(
+  payload: object,
+  maxChars?: number
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(payload)) {
-    out[key] = capValue(value);
+    out[key] = capValue(value, maxChars);
   }
 
   return out;
@@ -125,7 +135,10 @@ export class LedgerWriter {
       ...(agentId === undefined ? {} : { agentId }),
       timestamp: new Date().toISOString(),
       type,
-      payload: capPayload(payload),
+      payload: capPayload(
+        payload,
+        type === "model_inject" ? MAX_INJECT_CHARS : undefined
+      ),
     };
 
     try {

@@ -5,6 +5,7 @@ import type { IMetaRuleViolation } from "../../meta-rules";
 import { isInScope } from "../../lib/scope";
 import { readFiles } from "../../lib/fs";
 import { ruleHelp, idiomHints } from "../feedback/rule-docs";
+import { resolveExemplars } from "../feedback/exemplar";
 import {
   metaRuleHelp,
   renderMetaViolations,
@@ -91,7 +92,8 @@ export async function gateFeedback(
         `PRODUCER. Do NOT edit the files below.\n${await renderErrors(shownOut, cwd)}`
       : "";
 
-  const help = ruleHelp([...focusedOwn, ...focusedOut]);
+  const exemplars = await resolveExemplars([...focusedOwn, ...focusedOut], cwd);
+  const help = ruleHelp([...focusedOwn, ...focusedOut], exemplars);
   const helpBlock =
     help.length > 0 ? `\n\nHow to satisfy the gate:\n${help}` : "";
 
@@ -142,7 +144,23 @@ export async function gateFeedback(
 
   const identity = formatGateIdentity(task.accept, packs);
 
-  return `The acceptance command still fails:\n${identity}\n\n${list}${capped}${outOfScopeBlock}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+  // Always-present remaining count, computed from the UNFILTERED sets (before
+  // focus). Every lead-in that wraps this body (near-green banner, anti-patch,
+  // rotation steer) may omit the total, and focus mode hides all but one error —
+  // this line is the one place the model can always read how many remain.
+  const totalErrors = errors.length;
+  const metaPart =
+    metaViolations.length > 0
+      ? ` + ${metaViolations.length} project-structure violation(s)`
+      : "";
+  const focusShown = focusedOwn.length + focusedOut.length;
+  const countLine =
+    focusError !== null && focusShown > 0
+      ? `${totalErrors} error(s) remaining — showing ${focusShown} of ` +
+        `${totalErrors} (focused on the most persistent error; fix it first).`
+      : `${totalErrors} error(s)${metaPart} remaining.`;
+
+  return `The acceptance command still fails:\n${identity}\n\n${countLine}\n${list}${capped}${outOfScopeBlock}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
 }
 
 /**

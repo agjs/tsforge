@@ -14,7 +14,7 @@ import {
   resolveWritable,
 } from "./tool-context";
 import { toHashlineEdit } from "../../agent";
-import { missingConventionPullReject } from "../conventions";
+import { conventionPullGate } from "../conventions";
 
 /**
  * Hashline edit handler: content-hash-anchored line edits with stale-anchor recovery.
@@ -55,12 +55,7 @@ export async function doHashlineEdit(
     );
   }
 
-  const pullBlock = missingConventionPullReject(edit.file, {
-    conventionsActive: ctx.conventions !== undefined,
-    touched: ctx.touched,
-    pulledTopics: ctx.pulledTopics,
-    availableTopics: ctx.conventions?.topics() ?? [],
-  });
+  const pullBlock = conventionPullGate(edit.file, ctx);
 
   if (pullBlock !== null) {
     return reject(ctx, "edit_lines:conventions", pullBlock);

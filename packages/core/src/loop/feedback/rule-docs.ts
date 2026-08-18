@@ -43,6 +43,18 @@ export interface IRuleDoc {
    *  runs in the user's project where the path dangles. Anything the model
    *  needs at repair time belongs in `procedure`, which is always inlined. */
   reference?: string;
+  /** Spec for finding an EXISTING in-project example of the pattern this rule
+   *  wants — the emit-safe counterpart to `reference`: it is resolved against
+   *  the USER'S project at feedback time (see `exemplar.ts`) and renders a
+   *  concrete "→ existing example" pointer, or nothing when no file matches.
+   *  Never seed it on a shared rule id (`no-restricted-syntax`): one id serves
+   *  many selectors, and a wrong pointer is worse than none. */
+  exemplar?: {
+    /** Any-of exported symbol names that mark a file as the exemplar. */
+    symbols: readonly string[];
+    /** Project-relative globs to search (node_modules always excluded). */
+    fileGlobs: readonly string[];
+  };
 }
 
 /**
@@ -479,8 +491,29 @@ function indentExample(code: string): string {
   return code.trim().split("\n").join("\n    ");
 }
 
-/** Format the rule docs for whichever rules appear in the current error set. */
-export function ruleHelp(errors: ErrorSet): string {
+/**
+ * The doc that would render for `rule` — curated (hand-written, richest) →
+ * verified pack examples → generated description-only, first hit wins, with any
+ * self-harness procedure-card overlay merged field-wise on top. An overlay edit
+ * with no base doc still needs a `what` to render a coherent block.
+ */
+export function ruleDoc(rule: string): IRuleDoc | undefined {
+  return applyCardOverlay(
+    rule,
+    RULE_DOCS[rule] ?? PACK_RULE_DOCS[rule] ?? GENERATED[rule]
+  );
+}
+
+/**
+ * Format the rule docs for whichever rules appear in the current error set.
+ * `exemplars` (rule → "src/lib/time.ts (exports now())", from
+ * `resolveExemplars`) points at the in-project file that already satisfies the
+ * rule; omitted rules simply render without the pointer line.
+ */
+export function ruleHelp(
+  errors: ErrorSet,
+  exemplars?: ReadonlyMap<string, string>
+): string {
   const seen = new Set<string>();
   const blocks: string[] = [];
 
@@ -489,14 +522,7 @@ export function ruleHelp(errors: ErrorSet): string {
       continue;
     }
 
-    // Curated (hand-written, richest) -> verified pack examples -> generated
-    // description-only. First hit wins.
-    let doc = RULE_DOCS[e.rule] ?? PACK_RULE_DOCS[e.rule] ?? GENERATED[e.rule];
-
-    // A self-harness procedure-card edit merges over the base doc field-wise;
-    // with no overlay the base doc passes through untouched. An edit with no
-    // base doc still needs a `what` to render a coherent block.
-    doc = applyCardOverlay(e.rule, doc);
+    const doc = ruleDoc(e.rule);
 
     if (doc === undefined) {
       continue;
@@ -515,6 +541,14 @@ export function ruleHelp(errors: ErrorSet): string {
 
     if (doc.procedure !== undefined && doc.procedure.length > 0) {
       block += `\n  procedure: ${doc.procedure}`;
+    }
+
+    const exemplar = exemplars?.get(e.rule);
+
+    if (exemplar !== undefined) {
+      block +=
+        `\n  → existing example in this project: ${exemplar} — ` +
+        "import and reuse it; do not create a new one.";
     }
 
     // `reference` is deliberately NOT emitted: its paths are tsforge-repo-relative,

@@ -18,19 +18,34 @@ export function doPullConventions(
     return "pull_conventions: no convention library is configured for this build.";
   }
 
-  const topic = str(args, "topic");
-  const guide = provider.guide(topic);
+  // Comma-list tolerance: one call may fetch several topics ("state, jsx").
+  // The schema enums single topics for structured guidance, but dispatch does
+  // not strictly validate — batching saves a round-trip per topic.
+  const topics = str(args, "topic")
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  const pulled = (ctx.pulledTopics ??= new Set<string>());
+  const blocks: string[] = [];
 
-  if (guide === null) {
-    return (
-      `pull_conventions: unknown topic "${topic}". ` +
-      `Valid topics: ${provider.topics().join(", ")}.`
+  for (const topic of topics) {
+    const guide = provider.guide(topic);
+
+    if (guide === null) {
+      blocks.push(
+        `pull_conventions: unknown topic "${topic}". ` +
+          `Valid topics: ${provider.topics().join(", ")}.`
+      );
+      continue;
+    }
+
+    pulled.add(topic);
+    blocks.push(
+      topics.length === 1 ? guide : `=== CONVENTION: ${topic} ===\n${guide}`
     );
   }
 
-  const pulled = (ctx.pulledTopics ??= new Set<string>());
-
-  pulled.add(topic);
-
-  return guide;
+  return blocks.length > 0
+    ? blocks.join("\n\n")
+    : `pull_conventions: no topic given. Valid topics: ${provider.topics().join(", ")}.`;
 }

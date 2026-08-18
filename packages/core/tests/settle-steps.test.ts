@@ -222,7 +222,7 @@ describe("autoFixStep", () => {
     // No tsService, no task.fix, file lists empty → the janitor is a no-op.
     const autoFixed = await autoFixStep(ctx);
 
-    expect(autoFixed).toEqual([]);
+    expect(autoFixed).toEqual({ files: [], summary: [] });
     expect(events.filter((e) => e.kind === "tool")).toHaveLength(0);
   });
 
@@ -245,7 +245,10 @@ describe("autoFixStep", () => {
 
     const autoFixed = await autoFixStep(fixCtx);
 
-    expect(autoFixed).toEqual(["a.ts"]);
+    expect(autoFixed.files).toEqual(["a.ts"]);
+    // The fix command rewrote content with no fixer counts → attributed to it,
+    // with the changed-line count from the content snapshot.
+    expect(autoFixed.summary).toEqual(["a.ts (formatting/fix, 2 lines)"]);
     // The step reported the auto-fix so the model gets the notice.
     const tool = events.filter((e) => e.kind === "tool");
 

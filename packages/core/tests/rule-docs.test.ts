@@ -50,6 +50,28 @@ test("parseRuleMdx returns null when the sections aren't present", () => {
   expect(parseRuleMdx("just some prose, no examples")).toBeNull();
 });
 
+test("ruleHelp renders the exemplar pointer when given one, omits it otherwise", () => {
+  const errors = [
+    {
+      key: "a.ts:1:tsforge/no-bare-date-now",
+      file: "a.ts",
+      line: 1,
+      rule: "tsforge/no-bare-date-now",
+      message: "Direct `new Date()` (no args) is non-deterministic.",
+    },
+  ];
+  const withPointer = ruleHelp(
+    errors,
+    new Map([["tsforge/no-bare-date-now", "src/lib/time.ts (exports now())"]])
+  );
+
+  expect(withPointer).toContain(
+    "→ existing example in this project: src/lib/time.ts (exports now())"
+  );
+
+  expect(ruleHelp(errors)).not.toContain("existing example");
+});
+
 test("ruleHelpFromOutput pulls guidance from raw tsc + eslint-json output", () => {
   const tsc = ruleHelpFromOutput("money.ts(57,7): error TS2532: Object …");
 

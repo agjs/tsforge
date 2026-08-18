@@ -143,6 +143,11 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     what: "Time and randomness must come from an injectable util, or snapshots, replays and time-travel tests cannot be deterministic. Bare Date/Math.random belong only in a clock file named time.ts / clock.ts / now.ts (auto-allowlisted).",
     bad: "export function stamp() {\n  return { at: Date.now(), id: Math.random() };\n}",
     good: 'import { now, randomId } from "./time";\n\nexport function stamp() {\n  return { at: now(), id: randomId() };\n}',
+    // Globs mirror the rule's own allowlist (rule-packs/code-flow/no-bare-date-now).
+    exemplar: {
+      symbols: ["now", "getNow", "clock", "randomId"],
+      fileGlobs: ["**/time.ts", "**/clock.ts", "**/now.ts"],
+    },
   },
   "tsforge/no-blocking-concurrency-zero": {
     what: "A non-positive `concurrency` stops the worker processing anything. Set it to a positive integer sized to the job's cost \u2014 start at 1 and raise it.",

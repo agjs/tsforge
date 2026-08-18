@@ -27,6 +27,17 @@ describe("pull_conventions tool", () => {
     expect(r).toContain("no-casts");
   });
 
+  test("a comma list pulls several topics in ONE call, each under its header", () => {
+    const pulledTopics = new Set<string>();
+    const batchCtx = { ...ctx, pulledTopics };
+    const r = doPullConventions({ topic: "no-casts, lint-gotchas" }, batchCtx);
+
+    expect(r).toContain("=== CONVENTION: no-casts ===");
+    expect(r).toContain("=== CONVENTION: lint-gotchas ===");
+    expect(pulledTopics.has("no-casts")).toBe(true);
+    expect(pulledTopics.has("lint-gotchas")).toBe(true);
+  });
+
   test("no provider ⇒ a clear 'not configured' message, never a crash", () => {
     const r = doPullConventions(
       { topic: "no-casts" },

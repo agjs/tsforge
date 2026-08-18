@@ -238,6 +238,84 @@ test("gateFeedback R3 focus on an out-of-scope error shows only that one (narrow
 
     expect(fb).toContain("focused locked error");
     expect(fb).not.toContain("other locked error");
+    // Focus hides errors, but never the total: the model must know it sees 1 of 2.
+    expect(fb).toContain("2 error(s) remaining — showing 1 of 2");
+  });
+});
+
+test("gateFeedback always states the remaining total, even without a banner", async () => {
+  await withDir(async (dir) => {
+    await Bun.write(join(dir, "money.ts"), "export const x = 1;\n");
+
+    const errors: ErrorSet = Array.from({ length: 5 }, (_, i) => ({
+      key: `money.ts:${i + 1}:R${i}`,
+      file: "money.ts",
+      line: i + 1,
+      rule: `R${i}`,
+      message: `error ${i}`,
+    }));
+
+    const fb = await gateFeedback(errors, TASK, dir);
+
+    expect(fb).toContain("5 error(s) remaining.");
+  });
+});
+
+test("gateFeedback points a blocked clock pattern at the project's own exemplar", async () => {
+  await withDir(async (dir) => {
+    await Bun.write(join(dir, "money.ts"), "export const at = Date.now();\n");
+    const timePath = join(dir, "src", "lib", "time.ts");
+
+    await Bun.write(
+      timePath,
+      "export function now(): number {\n  return Date.now();\n}\n"
+    );
+
+    const errors: ErrorSet = [
+      {
+        key: "money.ts:1:tsforge/no-bare-date-now",
+        file: "money.ts",
+        line: 1,
+        rule: "tsforge/no-bare-date-now",
+        message: "Direct `Date.now()` is non-deterministic.",
+      },
+    ];
+
+    const fb = await gateFeedback(errors, TASK, dir);
+
+    expect(fb).toContain(
+      "→ existing example in this project: src/lib/time.ts (exports now())"
+    );
+  });
+});
+
+test("gateFeedback counts meta violations beside errors", async () => {
+  await withDir(async (dir) => {
+    await Bun.write(join(dir, "money.ts"), "export const x = 1;\n");
+
+    const errors: ErrorSet = [
+      {
+        key: "money.ts:1:R1",
+        file: "money.ts",
+        line: 1,
+        rule: "R1",
+        message: "an error",
+      },
+    ];
+    const meta: IMetaRuleViolation[] = [
+      {
+        ruleId: "meta-1",
+        file: "money.ts",
+        message: "structure violation",
+        severity: "error",
+      },
+    ];
+
+    const fb = await gateFeedback(errors, TASK, dir, meta);
+
+    expect(fb).toContain(
+      "1 error(s) + 1 project-structure violation(s) remaining."
+    );
   });
 });
 

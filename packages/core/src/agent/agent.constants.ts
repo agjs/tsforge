@@ -428,7 +428,7 @@ export function buildPullConventionsTool(topics: readonly string[]): {
       : {
           type: "string" as const,
           description:
-            "which convention guide to fetch — one of the topics listed in the front-loaded guides in your system prompt. An unknown topic returns the list of valid ones.",
+            "which convention guide to fetch. An unknown topic returns the list of valid ones.",
         };
 
   return {
@@ -436,7 +436,7 @@ export function buildPullConventionsTool(topics: readonly string[]): {
     function: {
       name: TOOL_NAME.pullConventions,
       description:
-        "Re-fetch the stack's HOW-TO guide for a convention topic on demand. The guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
+        "Fetch the stack's HOW-TO guide for a convention topic. Required before your FIRST write to a matching path (the CONVENTIONS section in your system prompt maps paths to topics); also use it to re-read a guide or when unsure how to satisfy a rule. Accepts several topics comma-separated. Returns the exact pattern the gate enforces.",
       parameters: {
         type: "object",
         properties: { topic },
@@ -764,7 +764,7 @@ export const CHECK_TOOL = {
   function: {
     name: TOOL_NAME.check,
     description:
-      "Run the fast acceptance gate NOW and get back ALL current errors as structured JSON ({file, line, rule, message}). Call it before you stop — see and fix your whole error set in ONE pass instead of discovering errors one at a time on later turns. Takes no arguments. Returns {passed:true} when clean. If the result has an `autoFixed` list, the gate reformatted those files on disk this run — RE-READ them before your next edit (their content and line anchors changed); do NOT redo that formatting by hand.",
+      "Run the fast acceptance gate NOW and get back ALL current errors as structured JSON ({file, line, rule, message}). Call it before you stop — see and fix your whole error set in ONE pass instead of discovering errors one at a time on later turns. Takes no arguments. Returns {passed:true} when clean. If the result has an `autoFixed` list, the gate reformatted those files on disk this run — RE-READ them before your next edit (their content and line anchors changed); do NOT redo that formatting by hand. `autoFixSummary` says what changed per file (formatting/quick-fixes, changed-line counts).",
     parameters: {
       type: "object",
       properties: {},
@@ -1040,7 +1040,7 @@ export function buildSpawnAgentTool(specs: readonly IAgentSpec[]): {
     function: {
       name: TOOL_NAME.spawnAgent,
       description:
-        "Delegate a focused, READ-ONLY investigation to a specialist subagent and get its findings back as the tool result. Spawn one per independent line of inquiry — several in the same turn run in PARALLEL, each with its own fresh context, and only YOU (the orchestrator) edit files. Use it to explore an unfamiliar subsystem, research external docs/APIs, or verify a claim, without spending your own context on the digging. The subagent does NOT see this conversation, so put everything it needs in `prompt`. " +
+        "Delegate a focused, READ-ONLY investigation to a specialist subagent and get its findings back as the tool result. Spawn one per independent line of inquiry — several in the same turn run in PARALLEL, each with its own fresh context, and only YOU (the orchestrator) edit files. Use it to explore an unfamiliar subsystem, research external docs/APIs, or verify a claim, without spending your own context on the digging. Skip it for small tasks touching a file or two you already know; reach for it when digging would burn several turns of your own context. The subagent does NOT see this conversation, so put everything it needs in `prompt`. " +
         `Available specialists: ${roster}.`,
       parameters: {
         type: "object",

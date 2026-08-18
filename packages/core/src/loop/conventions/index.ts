@@ -11,7 +11,9 @@ export {
 export {
   isConventionExemptPath,
   pathToConventionTopics,
-  missingConventionPullReject,
+  renderPathTopicMap,
+  missingConventionTopics,
+  conventionPullGate,
 } from "./path-topics";
 export { makeConventionProvider } from "./make-provider";
 export {

@@ -4,8 +4,9 @@ import { resolveScopeFilesForRollback, isBinaryPath } from "../lib/fs";
 
 /** Per-file size cap on snapshot CONTENT (matches readFiles' MAX_FILE_BYTES): a
  *  source file we'd ever edit is well under this. Oversize files are still
- *  recorded as pre-existing (so they aren't tombstoned), just not content-backed. */
-const MAX_SNAPSHOT_BYTES = 131_072;
+ *  recorded as pre-existing (so they aren't tombstoned), just not content-backed.
+ *  Shared with the auto-fix summary's content snapshots (autofix-summary.ts). */
+export const MAX_SNAPSHOT_BYTES = 131_072;
 
 /**
  * A rollback point for an "try an edit, keep only if it helps" loop: the contents
