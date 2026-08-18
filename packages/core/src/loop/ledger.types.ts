@@ -27,6 +27,10 @@ export type LedgerEventType =
   | "agent_started"
   /** A subagent finished (payload carries its status and output preview). */
   | "agent_result"
+  /** A harness→model injected user message (gate feedback, steers, autofix
+   *  notices) — the FULL text the model was shown, so a run log can verify what
+   *  the model actually received, not just the gate verdicts around it. */
+  | "model_inject"
   /** Catch-all for reporter events without a dedicated ledger type yet. */
   | "log";
 

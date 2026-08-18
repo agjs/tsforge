@@ -63,6 +63,13 @@ export interface ILoopEvent {
     // A unified-policy verdict for one proposed action (ledger-only; renders to
     // nothing on the terminal — a deny is already surfaced via its `tool` event).
     | "policy"
+    // A harness→model injected user message (settle gate feedback with its
+    // banners/steers/autofix notice). Ledger-only: `message` carries the FULL
+    // injected text so a `--log` run records what the model was actually told —
+    // before this, the injected prose had no channel and eval greps could only
+    // see gate verdicts. Renders to nothing (the terminal already shows the
+    // distilled red/steer lines).
+    | "inject"
     // A subagent was ANNOUNCED under this task (queued; message: agent id). All
     // of a fan-out's units spawn up-front so progress denominators are stable
     // and the agent tree can render pending rows before work begins.

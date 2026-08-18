@@ -680,6 +680,11 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
       // Ledger-only signal; a denial is already shown via its `tool` event.
       return "";
 
+    case "inject":
+      // Ledger-only: the full harness→model inject text. On screen the red
+      // summary + steer lines already tell the human; the wall would be noise.
+      return "";
+
     case "timing":
       // Noise on screen (the status line shows turns + elapsed); log only.
       return color ? "" : `  ${event.message}\n`;

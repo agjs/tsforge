@@ -122,6 +122,34 @@ describe("gate feedback is append-only, deduped at compaction", () => {
     expect(messages[1]?.content).toBe("trying again");
   });
 
+  test("injectFeedback ledgers the FULL injected text as an inject event", async () => {
+    const messages: IChatMessage[] = [];
+    const events: Parameters<ILoopCtx["report"]>[0][] = [];
+    const ctx: ILoopCtx = {
+      ...makeInjectCtx(messages),
+      report: (e) => {
+        events.push(e);
+      },
+    };
+    const state = freshState();
+
+    const err: IErrorItem = {
+      key: "a.ts:1:x",
+      file: "a.ts",
+      message: "L1: boom",
+    };
+
+    await injectFeedback(ctx, state, [err], [], []);
+
+    const inject = events.find((e) => e.kind === "inject");
+    const wall = messages.find((m) => m.role === "user")?.content ?? "";
+
+    // The event carries exactly what the model was shown — the --log stream is
+    // the eval record, and before this the injected prose had no channel.
+    expect(inject?.message).toBe(wall);
+    expect(inject?.message).toContain("1 error(s) remaining.");
+  });
+
   test("injectFeedback prepends harness attribution from lastFailureClass", async () => {
     const messages: IChatMessage[] = [];
     const ctx = makeInjectCtx(messages);

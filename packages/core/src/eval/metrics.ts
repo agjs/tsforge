@@ -64,6 +64,9 @@ export interface IRunMetrics {
   /** Denials bucketed by risk (e.g. {"high":1,"critical":1}); empty when none —
    *  so a run shows not just how often the policy fired but how dangerous it was. */
   denialsByRisk: Record<string, number>;
+  /** Harness→model injected user messages (settle feedback walls) — how many
+   *  times the harness re-steered; the full text rides each `inject` event. */
+  harnessInjects: number;
 }
 
 function emptyMetrics(): IRunMetrics {
@@ -89,6 +92,7 @@ function emptyMetrics(): IRunMetrics {
     policyDenies: 0,
     policyAsks: 0,
     denialsByRisk: {},
+    harnessInjects: 0,
   };
 }
 
@@ -215,6 +219,9 @@ function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
       break;
     case "policy":
       countPolicy(m, event);
+      break;
+    case "inject":
+      m.harnessInjects += 1;
       break;
     default:
       break;

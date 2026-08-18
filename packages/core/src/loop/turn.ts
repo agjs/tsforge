@@ -2477,11 +2477,15 @@ export async function injectFeedback(
   const antiPatch = antiPatchNearGreenLead(state.errorAge, gateErrors);
   const banner = antiPatch.length > 0 ? antiPatch : baseBanner;
 
+  const injected = `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`;
+
+  // Ledger the FULL injected text (`model_inject`): the `--log` stream recorded
+  // gate verdicts but never what the model was TOLD, so a run log couldn't
+  // verify the feedback the model acted on. Renders to nothing on screen.
+  ctx.report({ kind: "inject", task: ctx.task.id, message: injected });
+
   // One live gate-feedback user slot (replace prior settle walls — do not append forever).
-  upsertGateFeedback(
-    ctx.messages,
-    `${rotation}${banner}${steer}${notice}${attributionBlock}${feedback}${how}`
-  );
+  upsertGateFeedback(ctx.messages, injected);
 }
 
 /** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :

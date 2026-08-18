@@ -23,6 +23,7 @@ const KNOWN_KINDS = new Set<string>([
   "ttsr",
   "reverted",
   "policy",
+  "inject",
   "agent_spawned",
   "agent_started",
   "agent_result",

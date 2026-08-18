@@ -86,6 +86,7 @@ export function formatTrace(events: readonly ILoopEvent[]): string {
       m.costPerAcceptedChange > 0 ? `${m.costPerAcceptedChange} tok` : "—",
     ],
     ["gate runs", String(m.gateRuns)],
+    ["harness injects", String(m.harnessInjects)],
     [
       "policy denials",
       denials.length > 0
