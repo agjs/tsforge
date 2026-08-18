@@ -911,7 +911,7 @@ function delegationGuidance(specs: readonly IAgentSpec[]): string {
     .join("\n");
 
   return [
-    `${DELEGATION_MARKER} you can hand focused, read-only investigation to specialist subagents with the \`spawn_agent\` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps.`,
+    `${DELEGATION_MARKER} you can hand focused, read-only investigation to specialist subagents with the \`spawn_agent\` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps. Rule of thumb: skip delegation for a task you can finish inline by reading one or two files you already know — the round-trip costs more than it saves; delegate when the investigation spans an unfamiliar subsystem, needs external docs, or would burn 3+ turns of your own reading.`,
     `Specialists available:\n${roster}`,
   ].join("\n\n");
 }

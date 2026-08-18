@@ -4,6 +4,7 @@ import {
   parseAgentSpec,
   unrecognizedAgentKeys,
 } from "../src/config/agent-specs";
+import { buildSpawnAgentTool } from "../src/agent/agent.constants";
 
 // Pure agent-SPEC config tests (parse + load). Split out of agent-runner.test.ts (#63): those tests
 // construct AgentRunner against the real repo (slow whole-repo TS-service build, since fixed by
@@ -86,5 +87,18 @@ describe("loadAgentSpecs", () => {
       await rm(home, { recursive: true, force: true });
       await rm(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildSpawnAgentTool description", () => {
+  test("carries the delegation-worth-it rule of thumb", () => {
+    const tool = buildSpawnAgentTool([
+      { id: "explore", description: "map a subsystem" },
+    ]);
+
+    expect(tool?.function.description).toContain(
+      "Skip it for small tasks touching a file or two you already know"
+    );
+    expect(tool?.function.description).toContain("explore");
   });
 });
