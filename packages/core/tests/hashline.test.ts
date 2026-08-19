@@ -539,9 +539,13 @@ describe("syntaxErrorCount", () => {
     expect(
       syntaxErrorCount("a.tsx", "export const C = () => <div>hi</div>;\n")
     ).toBe(0);
-    // Non-TS/JS files are never syntax-checked.
+    // Non-TS/JS/JSON files are never syntax-checked.
     expect(syntaxErrorCount("a.md", "# not ( valid ts")).toBe(0);
-    expect(syntaxErrorCount("a.json", "{ broken")).toBe(0);
+    expect(syntaxErrorCount("a.css", ".x { color: red")).toBe(0);
+    // JSON validity IS checked (S3): valid → 0, broken → 1.
+    expect(syntaxErrorCount("a.json", '{"a": 1}')).toBe(0);
+    expect(syntaxErrorCount("a.json", "{ broken")).toBe(1);
+    expect(syntaxErrorCount("a.json", "  ")).toBe(0); // empty/blank → not an error
   });
 });
 
@@ -782,5 +786,56 @@ describe("computeFileHash width (S2)", () => {
     // 500 distinct inputs → 500 distinct 32-bit tags (a 16-bit space would
     // start colliding well before this).
     expect(seen.size).toBe(500);
+  });
+});
+
+// ── S3: a mis-addressed edit that breaks JSON validity is reverted ───────────
+describe("edit_lines JSON-validity guard (S3)", () => {
+  test("reverts an edit that makes package.json invalid JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-json-"));
+
+    try {
+      const file = "package.json";
+      const original = '{\n  "name": "x",\n  "version": "1.0.0"\n}\n';
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      // Replace the version line with a dangling value → invalid JSON. Before
+      // S3 this committed unguarded (before=0, after=0 for a .json file).
+      const input = `¶${file}#${hash}\nreplace 3..3:\n+  "version":`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("REVERTED");
+      expect(await Bun.file(join(dir, file)).text()).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("commits a clean edit that keeps package.json valid JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-json-ok-"));
+
+    try {
+      const file = "package.json";
+      const original = '{\n  "name": "x",\n  "version": "1.0.0"\n}\n';
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      const input = `¶${file}#${hash}\nreplace 3..3:\n+  "version": "2.0.0"`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("edited");
+      expect(await Bun.file(join(dir, file)).text()).toContain('"2.0.0"');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
