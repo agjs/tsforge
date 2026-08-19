@@ -151,7 +151,10 @@ const MODE_MATRIX: Readonly<
     delete_file: "allow",
     shell: "ask",
     network: "deny",
-    mcp_tool: "allow",
+    // An MCP call is arbitrary remote code/egress — a SUPERSET of web_fetch,
+    // which this mode denies. Ask (→ deny when non-interactive); a per-server
+    // allow rule ({kind:"mcp_tool",mcpServer:"…"}) is the escape hatch.
+    mcp_tool: "ask",
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
@@ -168,7 +171,10 @@ const MODE_MATRIX: Readonly<
     delete_file: "allow",
     shell: "deny",
     network: "deny",
-    mcp_tool: "allow",
+    // Denied to match `network` (web_fetch): an MCP call is arbitrary remote
+    // code/egress and this mode is non-interactive. Per-server allow rules are
+    // the escape hatch.
+    mcp_tool: "deny",
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
@@ -185,7 +191,10 @@ const MODE_MATRIX: Readonly<
     delete_file: "allow",
     shell: "deny",
     network: "deny",
-    mcp_tool: "allow",
+    // Denied to match `network` (web_fetch): an MCP call is arbitrary remote
+    // code/egress and this mode is non-interactive. Per-server allow rules are
+    // the escape hatch.
+    mcp_tool: "deny",
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",

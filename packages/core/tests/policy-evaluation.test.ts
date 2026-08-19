@@ -810,3 +810,35 @@ describe("check tool policy (F2)", () => {
     expect(evaluatePolicy(checkAction, ctx("plan")).decision).toBe("deny");
   });
 });
+
+// ── B8: MCP tightened to match `network` in the non-interactive modes ────────
+describe("mcp_tool in tightened modes (B8)", () => {
+  const mcp = classifyAction(
+    { id: "1", name: "mcp__srv__do", arguments: {} },
+    CWD
+  );
+  const withSrv = (mode: PolicyMode): IPolicyContext =>
+    ctx(mode, { mcpServers: ["srv"] });
+
+  test("ci and dontAsk deny mcp_tool (a superset of denied web_fetch)", () => {
+    expect(evaluatePolicy(mcp, withSrv("ci")).decision).toBe("deny");
+    expect(evaluatePolicy(mcp, withSrv("dontAsk")).decision).toBe("deny");
+  });
+
+  test("acceptEdits asks (→ deny non-interactive); a per-server allow rule wins", () => {
+    expect(evaluatePolicy(mcp, withSrv("acceptEdits")).decision).toBe("deny");
+    expect(
+      evaluatePolicy(
+        mcp,
+        ctx("dontAsk", {
+          mcpServers: ["srv"],
+          rules: { allow: [{ kind: "mcp_tool", mcpServer: "srv" }] },
+        })
+      ).decision
+    ).toBe("allow");
+  });
+
+  test("default/bypass still allow mcp_tool", () => {
+    expect(evaluatePolicy(mcp, withSrv("default")).decision).toBe("allow");
+  });
+});

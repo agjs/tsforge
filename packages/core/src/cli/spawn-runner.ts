@@ -80,6 +80,11 @@ export interface ISpawnRunnerOptions {
   readonly cwd: string;
   readonly concurrency: number;
   readonly policyMode: PolicyMode;
+  /** The parent's CURRENT policy mode, read at spawn time (a getter, not the
+   *  startup value) so a mid-session mode change — Shift+Tab cycling, entering
+   *  plan mode — flows to the child instead of the child running under the mode
+   *  captured at REPL start. Absent ⇒ the static `policyMode`. */
+  readonly getPolicyMode?: () => PolicyMode;
   readonly policyRules?: IPolicyRules;
   /** Model for agents whose spec doesn't pin one; undefined ⇒ the active model
    *  (so every agent uses the session's model unless a spec overrides it). */
@@ -141,7 +146,7 @@ export function makeSpawnAgentFn(opts: ISpawnRunnerOptions): SpawnAgentFn {
           task: req.prompt,
           report,
           ...(signal === undefined ? {} : { signal }),
-          policyMode: opts.policyMode,
+          policyMode: opts.getPolicyMode?.() ?? opts.policyMode,
           ...(opts.policyRules === undefined
             ? {}
             : { policyRules: opts.policyRules }),
