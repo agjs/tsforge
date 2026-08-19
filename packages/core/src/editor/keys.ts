@@ -1,4 +1,4 @@
-import { graphemes } from "./segments";
+import { firstGrapheme } from "./segments";
 
 export interface IKeyEvent {
   name: string;
@@ -73,11 +73,13 @@ function tryParseCsiU(
   chunk: string,
   idx: number
 ): { event: IKeyEvent; len: number } | null {
-  if (!chunk.slice(idx).startsWith(ESC + "[")) {
+  if (!chunk.startsWith(ESC + "[", idx)) {
     return null;
   }
 
-  const regexResult = CSI_U_PATTERN.exec(chunk.slice(idx + 2));
+  // Bounded slice: these sequences are short; slicing the whole remainder per
+  // key made large pastes O(n²).
+  const regexResult = CSI_U_PATTERN.exec(chunk.slice(idx + 2, idx + 34));
 
   if (!regexResult) {
     return null;
@@ -106,11 +108,11 @@ function tryParseXterm(
   chunk: string,
   idx: number
 ): { event: IKeyEvent; len: number } | null {
-  if (!chunk.slice(idx).startsWith(ESC + "[")) {
+  if (!chunk.startsWith(ESC + "[", idx)) {
     return null;
   }
 
-  const regexResult = XTERM_PATTERN.exec(chunk.slice(idx + 2));
+  const regexResult = XTERM_PATTERN.exec(chunk.slice(idx + 2, idx + 34));
 
   if (!regexResult) {
     return null;
@@ -139,11 +141,11 @@ function tryParseLegacy(
   chunk: string,
   idx: number
 ): { event: IKeyEvent; len: number } | null {
-  if (!chunk.slice(idx).startsWith(ESC + "[")) {
+  if (!chunk.startsWith(ESC + "[", idx)) {
     return null;
   }
 
-  const regexResult = LEGACY_PATTERN.exec(chunk.slice(idx + 2));
+  const regexResult = LEGACY_PATTERN.exec(chunk.slice(idx + 2, idx + 4));
 
   if (!regexResult) {
     return null;
@@ -179,8 +181,9 @@ function tryParsePrintable(
     return null;
   }
 
-  const graphemeList = graphemes(chunk.slice(idx));
-  const grapheme = graphemeList[0];
+  // Bounded first-cluster peel: segmenting the whole remainder per character
+  // made a large paste O(n²).
+  const grapheme = firstGrapheme(chunk.slice(idx, idx + 32));
 
   if (grapheme === undefined) {
     return null;
@@ -199,7 +202,6 @@ interface IParseResult {
 
 function parseOneKey(chunk: string, idx: number): IParseResult | null {
   const ch = chunk.charCodeAt(idx);
-  const remaining = chunk.slice(idx);
 
   // Kitty CSI-u
   const csiU = tryParseCsiU(chunk, idx);
@@ -222,7 +224,7 @@ function parseOneKey(chunk: string, idx: number): IParseResult | null {
     return legacy;
   }
 
-  if (remaining.startsWith(BACKTAB)) {
+  if (chunk.startsWith(BACKTAB, idx)) {
     const shiftMods: IModifiers = { shift: true, alt: false, ctrl: false };
 
     return {
@@ -231,18 +233,18 @@ function parseOneKey(chunk: string, idx: number): IParseResult | null {
     };
   }
 
-  if (remaining.startsWith(DELETE_SEQ)) {
+  if (chunk.startsWith(DELETE_SEQ, idx)) {
     return { event: createKeyEvent("delete"), len: 4 };
   }
 
   // Alt+Return
   const altMods: IModifiers = { shift: false, alt: true, ctrl: false };
 
-  if (remaining.startsWith(ALT_CR)) {
+  if (chunk.startsWith(ALT_CR, idx)) {
     return { event: createKeyEvent("return", "", altMods), len: 2 };
   }
 
-  if (remaining.startsWith(ALT_LF)) {
+  if (chunk.startsWith(ALT_LF, idx)) {
     return { event: createKeyEvent("return", "", altMods), len: 2 };
   }
 

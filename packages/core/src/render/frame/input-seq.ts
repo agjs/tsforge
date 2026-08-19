@@ -1,4 +1,4 @@
-import { graphemes } from "../../editor/segments";
+import { firstGrapheme } from "../../editor/segments";
 
 const ESC = String.fromCharCode(27);
 
@@ -28,7 +28,7 @@ export function takeOneInputSequence(input: string): {
     return peelEscapeSequence(input);
   }
 
-  const cluster = graphemes(input)[0];
+  const cluster = firstGrapheme(input);
 
   if (cluster === undefined) {
     return { seq: "", rest: "" };
@@ -68,7 +68,7 @@ function peelEscapeSequence(input: string): {
 
   // Alt+key (ESC + next grapheme), including Alt+Enter (`\x1b\r`).
   if (input.length >= 2) {
-    const cluster = graphemes(input.slice(1))[0];
+    const cluster = firstGrapheme(input.slice(1, 1 + 32));
 
     if (cluster !== undefined) {
       return {
