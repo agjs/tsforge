@@ -979,15 +979,15 @@ export class PaneScreen {
       return "dump";
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-this-alias -- object-literal getter below rebinds `this`
-    const self = this;
+    // Lazy: computing the panel body (stripSgr + copies) per keystroke paid
+    // for a value most keys never read. Arrow captures lexical `this` (an
+    // object-literal getter would rebind it to the deps object).
+    const lazyPanelLen = (): number => this.panelSourceLen();
     const deps = {
       focus: this.focus,
       scrollback: this.scrollback,
-      // Lazy: computing the panel body (stripSgr + copies) per keystroke paid
-      // for a value most keys never read.
       get panelLen(): number {
-        return self.panelSourceLen();
+        return lazyPanelLen();
       },
       onWheel: (delta: number, col: number, _row: number): void => {
         this.queueWheel(delta, col);
