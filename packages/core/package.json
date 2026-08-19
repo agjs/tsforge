@@ -50,7 +50,7 @@
     "typescript-eslint": "8.66.0"
   },
   "devDependencies": {
-    "@types/jsdom": "^28.0.3",
+    "@types/jsdom": "^30.0.0",
     "@types/turndown": "^5.0.6"
   }
 }
