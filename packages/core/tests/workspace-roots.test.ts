@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -283,6 +283,47 @@ describe("confinement — quote-aware segmentation + word scan (F1/B2/B3/B4)", (
       "rg secret src/lib",
     ]) {
       expect(outsideWorkspacePaths(CWD, cmd)).toEqual([]);
+    }
+  });
+});
+
+describe("symlink confinement (B6)", () => {
+  test("reading a workspace symlink that points OUT of the tree is rejected", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tsforge-sym-cwd-"));
+    const foreign = await mkdtemp(join(tmpdir(), "tsforge-sym-foreign-"));
+
+    try {
+      await writeFile(join(foreign, "secret.txt"), "SECRET");
+      await symlink(join(foreign, "secret.txt"), join(cwd, "link.txt"));
+      await writeFile(join(cwd, "ok.ts"), "export const x = 1;\n");
+
+      const viaLink = await readFile({ file: "link.txt" }, toolCtx(cwd));
+      const viaReal = await readFile({ file: "ok.ts" }, toolCtx(cwd));
+
+      // The lexical check passed link.txt (under cwd); the realpath re-check
+      // catches that it resolves outside.
+      expect(viaLink).toContain("REJECTED");
+      expect(viaLink).not.toContain("SECRET");
+      // A real in-tree file still reads.
+      expect(viaReal).toContain("export const x");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(foreign, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlink pointing INSIDE the tree still reads (not over-blocked)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tsforge-sym-in-"));
+
+    try {
+      await writeFile(join(cwd, "real.ts"), "export const y = 2;\n");
+      await symlink(join(cwd, "real.ts"), join(cwd, "alias.ts"));
+
+      const out = await readFile({ file: "alias.ts" }, toolCtx(cwd));
+
+      expect(out).toContain("export const y");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
     }
   });
 });

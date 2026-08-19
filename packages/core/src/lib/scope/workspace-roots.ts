@@ -448,6 +448,30 @@ function tokenEscapes(
   return !(isTmpScratchPath(abs) && isShellRedirectTarget(segment, token));
 }
 
+/** Re-check containment AFTER resolving symlinks — the lexical
+ *  `resolveProjectPath` passes a workspace path that is (or traverses) a
+ *  symlink pointing OUT of the tree, a read/search tunnel to any file. A
+ *  MISSING target resolves to `true` (the caller's own read then fails
+ *  cleanly, and a not-yet-created write target must not be pre-rejected).
+ *  Mirrors image-tools' realpathWithinCwd, generalized to the root set. */
+export async function realpathWithinRoots(
+  roots: readonly string[],
+  abs: string
+): Promise<boolean> {
+  const { realpath } = await import("node:fs/promises");
+  const real = await realpath(abs).catch(() => null);
+
+  if (real === null) {
+    return true;
+  }
+
+  const realRoots = await Promise.all(
+    roots.map((r) => realpath(r).catch(() => r))
+  );
+
+  return isPathUnderRoots(realRoots, real);
+}
+
 /**
  * Resolve a model-supplied file path against cwd/extraRoots.
  * Rejects escapes and absolute paths outside allowed roots.
