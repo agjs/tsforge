@@ -15,7 +15,7 @@ inventory, see the hand-drawn map on [Internals](/internals/).
 | --- | --- | --- | --- | --- | --- | --- |
 | `loop` | The drive-to-green engine: turns, tools, gate settling, steering, adapters | core | 144 | 40k | 8 | 22 |
 | `rule-packs` | The ESLint rule packs the gate enforces, grouped by stack | core | 166 | 20k | 3 | 3 |
-| `render` | Terminal UI — status bar, menus, wizards, markdown, diffs, spinners | core | 43 | 10k | 7 | 5 |
+| `render` | Terminal UI — status bar, menus, wizards, markdown, diffs, spinners | core | 43 | 11k | 7 | 5 |
 | `cli` | Argument parsing, the interactive REPL, and per-mode wiring | core | 22 | 8k | 2 | 18 |
 | `agent` | Tool schemas, the model-as-agent wrapper, and the malformed-tool-call repair ladder | core | 11 | 4k | 8 | 9 |
 | `meta-rules` | Gate rules that need no AST — config shape, CI wiring, supply chain | core | 42 | 3k | 1 | 2 |
