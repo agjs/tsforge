@@ -1577,3 +1577,53 @@ describe("paint coalescing (streaming)", () => {
     expect(term.writes.length).toBe(before + 1);
   });
 });
+
+describe("cursor blink hygiene", () => {
+  class CursorTerm {
+    writes: string[] = [];
+    isTTY = true;
+    rows = 40;
+    columns = 120;
+
+    write(data: string): boolean {
+      this.writes.push(data);
+
+      return true;
+    }
+  }
+
+  test("an unchanged input repaint emits NO bytes (no blink reset)", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.setInput({ lines: ["draft"], cursorRow: 0, cursorCol: 5 });
+
+    const before = term.writes.length;
+
+    // Same input, same cursor — the physical cursor never moved, so a forced
+    // SHOW+CUP here reset the terminal's blink timer on every event and made
+    // the caret blink erratically in step with rendering.
+    panes.setInput({ lines: ["draft"], cursorRow: 0, cursorCol: 5 });
+    expect(term.writes.length).toBe(before);
+  });
+
+  test("row-painting frames hide the caret while rows write, then re-show", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.appendMain("streamed line\n");
+    panes.flushPendingPaint();
+
+    const frame = term.writes.at(-1) ?? "";
+    const hide = frame.indexOf("\x1b[?25l");
+    const show = frame.lastIndexOf("\x1b[?25h");
+
+    // Hidden before the row writes, shown after the final re-home — so a
+    // terminal without synchronized-output support never renders the caret
+    // teleporting through the painted rows.
+    expect(hide).toBeGreaterThan(-1);
+    expect(show).toBeGreaterThan(hide);
+  });
+});

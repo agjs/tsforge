@@ -13,6 +13,7 @@ import {
   ENTER_ALT,
   EXIT_ALT,
   EL_EOL,
+  HIDE_CURSOR,
   SHOW_CURSOR,
   cup,
 } from "./codes";
@@ -628,7 +629,11 @@ export class PaneScreen {
 
     this.cursor.reset();
     const frame =
-      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC;
+      BEGIN_SYNC +
+      HIDE_CURSOR +
+      dirty +
+      this.cursor.move(cursorRow, cursorCol) +
+      END_SYNC;
 
     if (PERF_ENABLED) {
       countBytes(frame.length);
@@ -820,12 +825,29 @@ export class PaneScreen {
     const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
-    this.cursor.reset();
+    if (dirty.length > 0) {
+      // Row writes physically moved the cursor — force the re-home CUP, and
+      // hide the caret while rows paint so terminals without synchronized-
+      // output support never show it teleporting through the band.
+      this.cursor.reset();
+      this.out.write(
+        BEGIN_SYNC +
+          HIDE_CURSOR +
+          dirty +
+          this.cursor.move(cursorRow, cursorCol) +
+          END_SYNC
+      );
+
+      return;
+    }
+
+    // Nothing painted → nothing moved the physical cursor. Let CursorState
+    // dedupe suppress the CUP when the target is unchanged — every forced
+    // SHOW+CUP resets the terminal's blink timer, which made the caret blink
+    // erratically in step with rendering.
     const cursorBytes = this.cursor.move(cursorRow, cursorCol);
 
-    if (dirty.length > 0) {
-      this.out.write(BEGIN_SYNC + dirty + cursorBytes + END_SYNC);
-    } else {
+    if (cursorBytes.length > 0) {
       this.out.write(BEGIN_SYNC + cursorBytes + END_SYNC);
     }
   }
@@ -898,7 +920,11 @@ export class PaneScreen {
 
     this.cursor.reset();
     const frame =
-      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC;
+      BEGIN_SYNC +
+      HIDE_CURSOR +
+      dirty +
+      this.cursor.move(cursorRow, cursorCol) +
+      END_SYNC;
 
     if (PERF_ENABLED) {
       countBytes(frame.length);
@@ -1470,7 +1496,7 @@ export class PaneScreen {
     if (dirty.length > 0) {
       this.cursor.reset();
       const cursorBytes = this.cursor.move(cursorRow, cursorCol);
-      const frame = BEGIN_SYNC + dirty + cursorBytes + END_SYNC;
+      const frame = BEGIN_SYNC + HIDE_CURSOR + dirty + cursorBytes + END_SYNC;
 
       if (PERF_ENABLED) {
         countBytes(frame.length);
