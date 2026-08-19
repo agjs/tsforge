@@ -23,18 +23,56 @@ async function loadChromium(): Promise<typeof Chromium | null> {
   }
 }
 
-/** Run axe against a page and return its raw result; null when @axe-core/
- *  playwright isn't installed (a11y is an optional enhancement, like the browser
- *  itself). Kept untyped at the boundary — extractAxeViolations narrows it. */
-async function runAxe(page: Page): Promise<unknown> {
+/** Outcome of an axe run, so the caller can tell three cases apart:
+ *  - `unavailable`: @axe-core/playwright isn't installed → skip (optional dep).
+ *  - `ok`: axe ran → narrow `result` for violations.
+ *  - `error`: axe was PRESENT but `analyze()` threw (CSP blocked the inject,
+ *    version drift, navigation mid-scan). This MUST surface, not be swallowed as
+ *    "clean" — a crashed a11y check reporting zero violations is a false green. */
+type IAxeOutcome =
+  | { kind: "unavailable" }
+  | { kind: "ok"; result: unknown }
+  | { kind: "error"; message: string };
+
+/** Run axe against a page. The dep-absent case (import throws) is a graceful
+ *  skip; a throw from `analyze()` is a real failure the caller reports. */
+async function runAxe(page: Page): Promise<IAxeOutcome> {
+  const mod = await import("@axe-core/playwright").catch(() => null);
+
+  // Import failed → the optional dep isn't installed → skip gracefully.
+  if (mod === null) {
+    return { kind: "unavailable" };
+  }
+
   try {
-    const mod = await import("@axe-core/playwright");
     const builder = new mod.AxeBuilder({ page });
 
-    return await builder.analyze();
-  } catch {
-    return null;
+    return { kind: "ok", result: await builder.analyze() };
+  } catch (error) {
+    return {
+      kind: "error",
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+/** Map an axe outcome + the page location to gate errors. Pure — the a11y
+ *  green/red decision, unit-testable without a browser. `unavailable` → no
+ *  errors (skip); `error` → one "failed to run" error (never silently clean);
+ *  `ok` → the serious/critical violations. */
+export function axeOutcomeToErrors(
+  outcome: IAxeOutcome,
+  where: string
+): string[] {
+  if (outcome.kind === "unavailable") {
+    return [];
+  }
+
+  if (outcome.kind === "error") {
+    return [`a11y check failed to run at ${where}: ${outcome.message}`];
+  }
+
+  return summarizeAxeViolations(extractAxeViolations(outcome.result), where);
 }
 
 /**
@@ -89,6 +127,11 @@ export interface IRenderOptions {
   perfBudget?: IPerfBudget;
   /** Navigation timeout (default 15s). */
   timeoutMs?: number;
+  /** How long the smoke/crawl mount check polls for first paint before declaring
+   *  a page blank (default 5s). A genuinely-blank page ALWAYS costs this full
+   *  budget (the poll can only resolve early on success), so keep it modest;
+   *  tests set it low to stay under the runner timeout. */
+  mountTimeoutMs?: number;
 }
 
 /** Screenshot viewports — a desktop and a mobile pass per page. */
@@ -188,6 +231,58 @@ export function checkPerfBudget(
   return errors;
 }
 
+/** Max time to wait for chromium to launch before treating it as unavailable —
+ *  a hung launch (WSL2 missing libs, zombie process) must not stall the gate. */
+const LAUNCH_TIMEOUT_MS = 30_000;
+
+/** Launch chromium bounded by a timeout; null (with a stderr notice) when it
+ *  fails or stalls, so `renderCheck` can skip cleanly like the no-playwright path. */
+async function launchBrowser(
+  chromium: typeof Chromium
+): Promise<Awaited<ReturnType<typeof Chromium.launch>> | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const launched = chromium.launch({ args: ["--no-sandbox"] });
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        resolve(null);
+      }, LAUNCH_TIMEOUT_MS);
+    });
+    const browser = await Promise.race([launched, timeout]);
+
+    if (browser === null) {
+      // Timed out. Reap the eventual browser so a slow-but-successful launch
+      // doesn't leak an orphaned process after we've moved on.
+      void launched
+        .then(async (b) => {
+          await b.close();
+        })
+        .catch(() => undefined);
+      process.stderr.write(
+        `browser render-check skipped: chromium did not launch within ${String(
+          LAUNCH_TIMEOUT_MS
+        )}ms\n`
+      );
+
+      return null;
+    }
+
+    return browser;
+  } catch (error) {
+    process.stderr.write(
+      "browser render-check skipped: chromium failed to launch " +
+        `(${error instanceof Error ? error.message : String(error)})\n`
+    );
+
+    return null;
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export async function renderCheck(
   opts: IRenderOptions
 ): Promise<IRenderResult> {
@@ -206,7 +301,17 @@ export async function renderCheck(
     return { ok: true, errors: [], skipped: true };
   }
 
-  const browser = await chromium.launch({ args: ["--no-sandbox"] });
+  // Launch is bounded and guarded: a browser binary that's missing (`bunx
+  // playwright install` never ran, version drift) THROWS, and on WSL2/containers
+  // launch can HANG on missing shared libs. Either way the render check is an
+  // enhancement over an already-passing build (tsc/eslint/build ran), so a launch
+  // that fails or stalls degrades to a skip with a notice — never an unhandled
+  // throw or an unbounded hang that blocks the whole gate.
+  const browser = await launchBrowser(chromium);
+
+  if (browser === null) {
+    return { ok: true, errors: [], skipped: true };
+  }
 
   try {
     // Page via an explicit context (not browser.newPage()) — axe-core/playwright
@@ -279,7 +384,7 @@ async function runChecks(
   }
 
   if (opts.smoke === true) {
-    await runSmoke(page, errors);
+    await runSmoke(page, errors, opts.mountTimeoutMs);
   }
 
   await runQualityOracles(page, opts, "index", errors, screenshots);
@@ -295,9 +400,7 @@ async function runQualityOracles(
   screenshots: string[]
 ): Promise<void> {
   if (opts.a11y === true) {
-    const violations = extractAxeViolations(await runAxe(page));
-
-    errors.push(...summarizeAxeViolations(violations, where));
+    errors.push(...axeOutcomeToErrors(await runAxe(page), where));
   }
 
   if (opts.perfBudget !== undefined) {
@@ -364,8 +467,18 @@ export function startStaticServer(
   return serveEphemeral({
     fetch: async (req): Promise<Response> => {
       const path = new URL(req.url).pathname;
-      const rel =
-        path === "/" ? "index.html" : decodeURIComponent(path.slice(1));
+
+      // `decodeURIComponent` throws URIError on malformed %-encoding (`/%`,
+      // `/%E0%A4`). Un-guarded that surfaced as a 500 from the handler; a bad
+      // asset path is a miss, not a server error — treat it as a clean 404.
+      let rel: string;
+
+      try {
+        rel = path === "/" ? "index.html" : decodeURIComponent(path.slice(1));
+      } catch {
+        return new Response("not found", { status: 404 });
+      }
+
       const base = resolve(root);
       const full = resolve(base, rel);
 
@@ -422,7 +535,7 @@ async function crawlRoutes(
       // Poll for first paint before the blank check, so a route that mounts
       // ASYNCHRONOUSLY (after MSW's worker.start() resolves, or any await-before-
       // render bootstrap) isn't misjudged dead. Only a genuinely empty root fails.
-      if (!(await waitForMount(page))) {
+      if (!(await waitForMount(page, quality.opts.mountTimeoutMs))) {
         errors.push(`route ${route} rendered blank`);
         continue;
       }
@@ -466,7 +579,23 @@ async function waitForMount(page: Page, timeoutMs = 5000): Promise<boolean> {
           document.querySelector("#app") ??
           document.body;
 
-        return root.children.length > 0 && root.textContent.trim() !== "";
+        // A blank white screen is the failure we're catching, so "mounted" must
+        // mean VISIBLE content — not just any node with any text. `textContent`
+        // concatenates <script>/<style> SOURCE and hidden text, so a body holding
+        // only a bootstrap `<script>` (children.length>0, textContent=the script's
+        // code) satisfied the old check and greened a page that rendered nothing.
+        // Require (a) a non-script/style/template element child AND (b) non-empty
+        // `innerText` (rendered, visible text — excludes script/style and
+        // display:none). document.body is an HTMLElement; a queried #root/#app is
+        // an Element, so narrow before reading innerText.
+        const NON_VISUAL = new Set(["SCRIPT", "STYLE", "TEMPLATE", "LINK"]);
+        const hasVisibleChild = Array.from(root.children).some(
+          (child) => !NON_VISUAL.has(child.tagName)
+        );
+        const visibleText =
+          root instanceof HTMLElement ? root.innerText : root.textContent;
+
+        return hasVisibleChild && visibleText.trim() !== "";
       },
       undefined,
       { timeout: timeoutMs, polling: 100 }
@@ -475,8 +604,12 @@ async function waitForMount(page: Page, timeoutMs = 5000): Promise<boolean> {
     .catch(() => false);
 }
 
-async function runSmoke(page: Page, errors: string[]): Promise<void> {
-  const mounted = await waitForMount(page);
+async function runSmoke(
+  page: Page,
+  errors: string[],
+  mountTimeoutMs?: number
+): Promise<void> {
+  const mounted = await waitForMount(page, mountTimeoutMs);
 
   if (!mounted) {
     errors.push("app did not mount: root is blank after load");
@@ -540,10 +673,13 @@ async function checkExpectations(
     return;
   }
 
-  // No selector → an optional whole-page text check.
+  // No selector → an optional whole-page text check. Use `innerText` (RENDERED,
+  // visible text), never `textContent`: textContent concatenates <script>/<style>
+  // source and display:none content, so an assertion for "Saved!" passed when the
+  // string lived only in inline script source and the user never saw it rendered.
   if (expect.selector === undefined) {
     if (expect.text !== undefined) {
-      const body = (await page.textContent("body")) ?? "";
+      const body = await page.innerText("body").catch(() => "");
 
       if (!body.includes(expect.text)) {
         errors.push(`page is missing expected text: "${expect.text}"`);
@@ -562,7 +698,8 @@ async function checkExpectations(
   }
 
   if (expect.text !== undefined) {
-    const text = (await element.textContent()) ?? "";
+    // innerText, not textContent — same reason: match only what actually renders.
+    const text = await element.innerText().catch(() => "");
 
     if (!text.includes(expect.text)) {
       errors.push(
