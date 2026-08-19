@@ -674,3 +674,64 @@ test("an SSE error event still surfaces as ModelRequestError (reader released vi
     "unknown parameter"
   );
 });
+
+// ── I4: duplicate-token guard on the unsupported-field retry ────────────────
+
+test("a mid-stream error AFTER tokens does NOT auto-retry (no duplicated output)", async () => {
+  // vLLM answers a rejected parameter as the FIRST SSE event; if a backend ever
+  // errors AFTER streaming tokens, the old retry re-sent with the same onToken
+  // sink and the transcript showed the whole prefix twice.
+  let requests = 0;
+  const tokens: string[] = [];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => {
+      requests += 1;
+
+      return sseResponse([
+        `data: {"choices":[{"delta":{"content":"prefix"}}]}\n`,
+        `data: {"error":{"message":"response_format is not supported","code":400}}\n`,
+      ]);
+    }),
+  });
+
+  await expect(
+    p.complete([{ role: "user", content: "hi" }], {
+      onToken: (t) => tokens.push(t),
+      responseFormat: { type: "json_object" },
+    })
+  ).rejects.toThrow("not supported");
+
+  expect(requests).toBe(1);
+  expect(tokens.filter((t) => t === "prefix")).toHaveLength(1);
+});
+
+test("an unsupported-field rejection with ZERO tokens still auto-retries (behavior pinned)", async () => {
+  let requests = 0;
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => {
+      requests += 1;
+
+      if (requests === 1) {
+        return sseResponse([
+          `data: {"error":{"message":"response_format is not supported","code":400}}\n`,
+        ]);
+      }
+
+      return sseResponse([
+        `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+        `data: [DONE]\n`,
+      ]);
+    }),
+  });
+  const res = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+    responseFormat: { type: "json_object" },
+  });
+
+  expect(requests).toBe(2);
+  expect(res.content).toBe("ok");
+});

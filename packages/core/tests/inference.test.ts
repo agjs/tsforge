@@ -673,3 +673,34 @@ test("a reported zero cache hit is preserved as zero", async () => {
 
   expect(r.usage?.cachedPromptTokens).toBe(0);
 });
+
+test("reconfigure() resets the thinking latch (a /model switch starts fresh)", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const capture = (async (_url: string, init: { body: string }) => {
+    bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+
+    return okResponse();
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-pro",
+    reasoning: "deepseek",
+    fetch: capture,
+  });
+
+  await p.complete([{ role: "user", content: "a" }], { enableThinking: false });
+
+  // /model switch to another DeepSeek endpoint: the OLD session's pin must not
+  // carry over — the new conversation's first mode sets a fresh latch.
+  p.reconfigure({
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-pro",
+    reasoning: "deepseek",
+    fetch: capture,
+  });
+  await p.complete([{ role: "user", content: "b" }], { enableThinking: true });
+
+  expect(bodies[0]?.thinking).toEqual({ type: "disabled" });
+  expect(bodies[1]?.thinking).toEqual({ type: "enabled" });
+});

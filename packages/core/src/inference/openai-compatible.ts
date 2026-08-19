@@ -82,6 +82,10 @@ export class OpenAICompatibleProvider implements IProvider {
     this.cfg = cfg;
     // What one endpoint refuses says nothing about the next one.
     this.unsupported.clear();
+    // …and neither does its thinking latch: a /model switch from DeepSeek used
+    // to carry the old session's pinned thinking mode to the new endpoint.
+    this.thinkingPinned = false;
+    this.pinnedThinking = undefined;
   }
 
   /** The current config — read by the CLI for the model/endpoint status line. */
@@ -93,7 +97,25 @@ export class OpenAICompatibleProvider implements IProvider {
     messages: IChatMessage[],
     opts: ICompleteOptions = {}
   ): Promise<IModelResponse> {
-    const known = this.withoutKnownUnsupported(opts);
+    // Count tokens already forwarded to the caller's onToken: the unsupported-
+    // field retry below RE-SENDS the whole request with the SAME sink, so if
+    // the first attempt had already streamed output, the retry would emit
+    // every token twice (duplicated answer in the transcript). In every
+    // observed shape the rejection is an HTTP 400 or the FIRST SSE event —
+    // zero tokens forwarded — so gating the retry on that loses nothing real
+    // while making duplication impossible.
+    let forwarded = 0;
+    const counted: ICompleteOptions =
+      opts.onToken === undefined
+        ? opts
+        : {
+            ...opts,
+            onToken: (text, channel) => {
+              forwarded += 1;
+              opts.onToken?.(text, channel);
+            },
+          };
+    const known = this.withoutKnownUnsupported(counted);
 
     try {
       return await this.send(messages, known);
@@ -103,7 +125,7 @@ export class OpenAICompatibleProvider implements IProvider {
       // this with `thinking_token_budget`, which the scratch path sets by
       // default — so every from-scratch build 400s, and (before this) each
       // failure looked like the model simply saying nothing.
-      const offending = unsupportedField(known, err);
+      const offending = forwarded === 0 ? unsupportedField(known, err) : null;
 
       if (offending === null) {
         throw err;
