@@ -22,7 +22,7 @@
   "dependencies": {
     "@astrojs/react": "6.0.2",
     "@astrojs/sitemap": "3.7.3",
-    "@astrojs/starlight": "0.41.6",
+    "@astrojs/starlight": "0.41.7",
     "@tailwindcss/vite": "4.3.3",
     "astro": "7.1.6",
     "astro-mermaid": "2.1.0",
