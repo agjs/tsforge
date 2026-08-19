@@ -513,15 +513,42 @@ function applyOpsToContent(
   ops: IEditOp[],
   _filePath: string
 ): { ok: boolean; text?: string; reason?: string; suggestions?: string[] } {
-  const lines = content.split("\n");
+  // Preserve the file's native line ending. Splitting on /\r?\n/ strips any \r
+  // from existing lines, and rebuilding with the detected EOL gives uniform
+  // endings — the model's payload lines have no \r, so a bare split("\n") +
+  // join("\n") spliced `\n`-only lines into a `\r\n` file (mixed endings on
+  // disk = whole-file corruption). This is issue #24, fixed for the
+  // str_replace path (fuzzyLineReplace) but never ported to the hashline
+  // engine — the PRIMARY line-edit path.
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
 
-  // Sort ops by line number descending (bottom-up) to preserve line numbers
+  // Sort ops by line number descending (bottom-up) to preserve line numbers.
+  // A stable insert-vs-replace tiebreak (insert after N sorts before replace
+  // at N so co-anchored ops are deterministic).
   const sortedOps = [...ops].sort((a, b) => {
     const aLine = a.startLine ?? a.insertAnchor ?? 0;
     const bLine = b.startLine ?? b.insertAnchor ?? 0;
 
-    return bLine - aLine;
+    if (aLine !== bLine) {
+      return bLine - aLine;
+    }
+
+    return opRank(a) - opRank(b);
   });
+
+  // Overlap guard: bottom-up splicing assumes disjoint ranges — two ops whose
+  // target line ranges overlap would splice against each other's fresh payload
+  // and silently produce wrong content, reported as a clean edit. threeWayMerge
+  // already guards this; the hash-matches-live path did not.
+  const overlap = firstOverlap(sortedOps);
+
+  if (overlap !== null) {
+    return {
+      ok: false,
+      reason: `edit_lines: operations target overlapping line ranges (${overlap}) — split them into separate, non-overlapping edits`,
+    };
+  }
 
   for (const op of sortedOps) {
     const result = applyOp(lines, op, _filePath);
@@ -531,7 +558,45 @@ function applyOpsToContent(
     }
   }
 
-  return { ok: true, text: lines.join("\n") };
+  return { ok: true, text: lines.join(eol) };
+}
+
+/** Sort tiebreak for co-anchored ops: an insert-after-N runs before a
+ *  replace/delete at N so the order is deterministic. */
+function opRank(op: IEditOp): number {
+  return op.kind === "insert" ? 0 : 1;
+}
+
+/** The 1-indexed inclusive line range an op occupies (for overlap detection);
+ *  an insert occupies no existing lines (zero-width at its anchor). */
+function opRange(op: IEditOp): { start: number; end: number } | null {
+  if (op.kind === "insert") {
+    return null;
+  }
+
+  const start = op.startLine ?? 0;
+  const end = op.endLine ?? start;
+
+  return start > 0 ? { start, end } : null;
+}
+
+/** The first overlapping range-op pair, described for the error, or null. */
+function firstOverlap(sortedOps: IEditOp[]): string | null {
+  const ranges = sortedOps
+    .map(opRange)
+    .filter((r): r is { start: number; end: number } => r !== null)
+    .sort((a, b) => a.start - b.start);
+
+  for (let i = 1; i < ranges.length; i += 1) {
+    const prev = ranges[i - 1];
+    const cur = ranges[i];
+
+    if (prev !== undefined && cur !== undefined && cur.start <= prev.end) {
+      return `${String(prev.start)}..${String(prev.end)} and ${String(cur.start)}..${String(cur.end)}`;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -633,8 +698,12 @@ function threeWayMerge(
   ops: IEditOp[],
   _filePath: string
 ): { ok: boolean; text?: string; cleanMerge: boolean } {
-  const baseLines = base.split("\n");
-  const theirLines = theirs.split("\n");
+  // Preserve the LIVE file's line ending on the merged output (issue #24; see
+  // applyOpsToContent). Base is only used to locate anchors, so its EOL is
+  // split away too — comparison is EOL-agnostic.
+  const eol = theirs.includes("\r\n") ? "\r\n" : "\n";
+  const baseLines = base.split(/\r?\n/);
+  const theirLines = theirs.split(/\r?\n/);
   const located: { op: IEditOp; index: number; length: number }[] = [];
 
   // Re-anchor each op: take the base lines it targets and find that exact
@@ -685,7 +754,7 @@ function threeWayMerge(
     }
   }
 
-  return { ok: true, text: theirLines.join("\n"), cleanMerge: true };
+  return { ok: true, text: theirLines.join(eol), cleanMerge: true };
 }
 
 /** The 1-based inclusive base-line range an op is anchored to. */

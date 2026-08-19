@@ -624,3 +624,138 @@ describe("edit_lines syntax-regression guard", () => {
     }
   });
 });
+
+// ── D1: a CRLF file keeps CRLF after an edit_lines edit (issue #24, hashline) ──
+describe("hashline line-ending preservation (D1)", () => {
+  test("editing a CRLF file does not introduce mixed \\n endings", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-crlf-"));
+
+    try {
+      const filePath = "crlf.ts";
+      const content = "const a = 1;\r\nconst b = 2;\r\nconst c = 3;\r\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 2..2:\n+const b = 22;`
+      );
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result.ok).toBe(true);
+
+      const after = await Bun.file(join(dir, filePath)).text();
+
+      // Byte-level: every line ending stays CRLF, none downgraded to bare \n.
+      expect(after).toBe("const a = 1;\r\nconst b = 22;\r\nconst c = 3;\r\n");
+      expect(after.match(/(?<!\r)\n/g)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an LF file stays LF (no spurious \\r introduced)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-lf-"));
+
+    try {
+      const filePath = "lf.ts";
+      const content = "const a = 1;\nconst b = 2;\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 1..1:\n+const a = 11;`
+      );
+
+      await applyHashlineEdit(store, dir, filePath, hash, parsed.ops);
+
+      const after = await Bun.file(join(dir, filePath)).text();
+
+      expect(after).toBe("const a = 11;\nconst b = 2;\n");
+      expect(after).not.toContain("\r");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── S1: overlapping edit_lines ops are rejected, not silently mis-applied ──────
+describe("hashline overlap guard (S1)", () => {
+  test("two ops with overlapping line ranges are refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-overlap-"));
+
+    try {
+      const filePath = "ov.ts";
+      const content = Array.from(
+        { length: 12 },
+        (_, i) => `line ${String(i + 1)}`
+      ).join("\n");
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      // replace 5..10 AND replace 8..12 — overlapping.
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 5..10:\n+A\nreplace 8..12:\n+B`
+      );
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.reason ?? "").toContain("overlapping");
+      // The file was NOT partially mutated.
+      expect(await Bun.file(join(dir, filePath)).text()).toBe(content);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("adjacent (non-overlapping) ops still apply", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-adj-"));
+
+    try {
+      const filePath = "adj.ts";
+      const content = "l1\nl2\nl3\nl4\nl5\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 1..1:\n+L1\nreplace 4..4:\n+L4`
+      );
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result.ok).toBe(true);
+      expect(await Bun.file(join(dir, filePath)).text()).toBe(
+        "L1\nl2\nl3\nL4\nl5\n"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
