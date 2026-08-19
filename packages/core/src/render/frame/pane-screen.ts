@@ -85,6 +85,8 @@ export const FORGE_EDITOR_GUTTER = INPUT_EDITOR_GUTTER;
 const FORGE_PLACEHOLDER = "describe a task, or /help";
 
 const GUTTER = "│";
+/** Paint rate cap while streaming (~60fps) — see queueMainPaint. */
+const MAIN_PAINT_MIN_INTERVAL_MS = 16;
 /** Fallback when no worklist lines are set — mirrors formatWorklistLines empty. */
 const EMPTY_PANEL_LINES = ["approve a plan", "to fill this list"] as const;
 
@@ -118,6 +120,11 @@ export class PaneScreen {
   private wheelAccum = 0;
   private wheelCol = 1;
   private wheelPaintQueued = false;
+  /** Appended-but-unpainted transcript text is pending (paint coalescing).
+   *  Scrollback state itself is NEVER stale — only the paint is deferred. */
+  private pendingMainPaint = false;
+  private mainPaintTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastMainPaintAt = 0;
   private bodyViewportRows = 1;
   private entered = false;
   /** True after a successful enter — resize may re-enter after a shrink-leave. */
@@ -200,6 +207,13 @@ export class PaneScreen {
     }
 
     this.stopBusyTimer();
+
+    if (this.mainPaintTimer !== null) {
+      clearTimeout(this.mainPaintTimer);
+      this.mainPaintTimer = null;
+      this.pendingMainPaint = false;
+    }
+
     this.out.write(
       DISABLE_MOUSE +
         CURSOR_COLOR_DEFAULT +
@@ -290,13 +304,65 @@ export class PaneScreen {
       return;
     }
 
-    // Streaming hot path: following + no overlay — patch main viewport only.
+    this.queueMainPaint();
+  }
+
+  /**
+   * Coalesce streamed-token paints (same idea as queueWheel): a burst of
+   * appends in one event-loop turn paints once, and paints are rate-limited to
+   * ~60fps during a fast stream. Uncoalesced, EVERY SSE delta recomputed the
+   * whole visible viewport (bench: 5000 appends = 5000 paints, 14s of CPU).
+   */
+  private queueMainPaint(): void {
+    this.pendingMainPaint = true;
+
+    if (this.mainPaintTimer !== null) {
+      return;
+    }
+
+    const since = performance.now() - this.lastMainPaintAt;
+    const delay =
+      since >= MAIN_PAINT_MIN_INTERVAL_MS
+        ? 0
+        : Math.ceil(MAIN_PAINT_MIN_INTERVAL_MS - since);
+
+    this.mainPaintTimer = setTimeout(() => {
+      this.mainPaintTimer = null;
+      this.flushPendingPaint();
+    }, delay);
+  }
+
+  /**
+   * Render any coalesced appended text NOW. Called by the timer, by every
+   * full-paint entry (which renders scrollback anyway), and by the REPL at
+   * turn end — the flush guarantee that the final token is never left waiting
+   * on a timer when the loop goes quiet.
+   */
+  flushPendingPaint(): void {
+    if (this.mainPaintTimer !== null) {
+      clearTimeout(this.mainPaintTimer);
+      this.mainPaintTimer = null;
+    }
+
+    if (!this.pendingMainPaint || !this.entered) {
+      this.pendingMainPaint = false;
+
+      return;
+    }
+
+    this.pendingMainPaint = false;
+    this.lastMainPaintAt = performance.now();
+
+    // Streaming hot path: following, no menu overlay — patch main rows only.
+    // A STATIC agent-tree band is fine: chrome rows sit BELOW the main
+    // viewport (composeScreen fills them at bodyStart + mainRows), so patching
+    // main rows leaves them untouched; paintMainFollowOnly subtracts the same
+    // chrome budget paint() does.
     if (
       this.prevLines !== null &&
       !this.geometryDirty &&
       this.scrollback.following &&
       this.overlayLines.length === 0 &&
-      this.agentTreeLines.length === 0 &&
       this.lastWrapCols > 0
     ) {
       this.paintMainFollowOnly();
@@ -527,6 +593,16 @@ export class PaneScreen {
       countSetAgentTree();
     }
 
+    // Dedupe: identical tree frames used to force a FULL compose per subagent
+    // token (the delegation repaint storm — bench: 2201 full paints for 2000
+    // streamed tokens).
+    if (
+      lines.length === this.agentTreeLines.length &&
+      lines.every((l, i) => l === this.agentTreeLines[i])
+    ) {
+      return;
+    }
+
     this.agentTreeLines = lines;
 
     if (this.entered) {
@@ -703,7 +779,13 @@ export class PaneScreen {
     const insets = outerInsets(this.rows, this.cols);
     const layout = computeLayout(this.layoutOpts());
     const bodyGap = layout.main.rows >= BODY_GAP_ROWS + 2 ? BODY_GAP_ROWS : 0;
-    const mainRows = Math.max(0, layout.main.rows - bodyGap);
+    // Mirror paint()'s chrome budget: tree/overlay rows sit below the main
+    // viewport, so the patched band must shrink by the same amount or it would
+    // overwrite them.
+    const scrollBudget = Math.max(0, layout.main.rows - bodyGap);
+    const chromeCount = this.agentTreeLines.length + this.overlayLines.length;
+    const chromeRows = Math.min(chromeCount, Math.max(0, scrollBudget - 1));
+    const mainRows = scrollBudget - chromeRows;
     const wrapCols = insetInnerCols(layout.main.cols);
 
     if (wrapCols !== this.lastWrapCols || mainRows !== this.bodyViewportRows) {
@@ -1002,6 +1084,10 @@ export class PaneScreen {
   }
 
   private paintInner(): void {
+    // A full compose renders the whole scrollback viewport — any coalesced
+    // append is thereby painted; the queued timer becomes a no-op.
+    this.pendingMainPaint = false;
+
     const layout = computeLayout(this.layoutOpts());
     const inputBand = this.paintInputBand(layout);
     const topLines = this.composeTop(layout);

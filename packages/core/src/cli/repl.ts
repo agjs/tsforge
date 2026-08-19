@@ -1090,6 +1090,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       // inside it — which would break the rail. Idempotent.
       closeAgentTurn();
       resetTree(); // clear the live agent tree once the turn's delegation is done
+      // Coalescing flush guarantee: the turn's final streamed text must render
+      // now, not whenever the deferred paint timer would have fired.
+      paneScreen.flushPendingPaint();
     }
 
     await persist();
@@ -1851,11 +1854,14 @@ export async function repl(args: ICliArgs): Promise<number> {
       buf.push(segments[k] ?? "");
     }
 
-    agentOutput.set(agentId, buf.slice(-200));
+    // Amortized trim: slicing to 200 on EVERY chunk allocated a fresh array
+    // per token; trim only when the buffer doubles.
+    agentOutput.set(agentId, buf.length > 400 ? buf.slice(-200) : buf);
 
-    if (agentId === focusedAgentId) {
-      repaintTree();
-    }
+    // No repaint here: a full-screen tree repaint per streamed subagent token
+    // was the delegation repaint storm (2201 full paints / 2000 tokens in the
+    // bench). The 120ms spinner tick repaints the live tree, and agent_result /
+    // focus changes repaint immediately, so the final state is never stale.
   };
 
   const feedTree = (event: ILoopEvent): void => {
