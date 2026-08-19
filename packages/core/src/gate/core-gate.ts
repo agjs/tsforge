@@ -11,6 +11,7 @@ import {
   PROPTEST_CHECK,
 } from "./tool-paths";
 import { packEnvPrefix } from "./shell";
+import { shellQuote } from "../lib/fs";
 import { tscPart, PROJECT_TSCONFIG } from "./tsconfig";
 import { discoverTestCommand } from "./test-discovery";
 import { isWorkspaceContainer } from "./workspace-root";
@@ -135,17 +136,17 @@ function appendOptInOracles(
   env: Record<string, string | undefined>
 ): void {
   if (env.TSFORGE_COVERAGE !== undefined && env.TSFORGE_COVERAGE.length > 0) {
-    parts.push(`bun "${TEST_COVERAGE_CHECK}"`);
+    parts.push(`bun ${shellQuote(TEST_COVERAGE_CHECK)}`);
     labels.push("test coverage");
   }
 
   if (env.TSFORGE_BOOT !== undefined && env.TSFORGE_BOOT.trim().length > 0) {
-    parts.push(`bun "${BOOT_CHECK}"`);
+    parts.push(`bun ${shellQuote(BOOT_CHECK)}`);
     labels.push("boot smoke");
   }
 
   if (env.TSFORGE_PROPTEST === "1") {
-    parts.push(`bun "${PROPTEST_CHECK}"`);
+    parts.push(`bun ${shellQuote(PROPTEST_CHECK)}`);
     labels.push("property tests");
   }
 }
@@ -157,11 +158,11 @@ function appendOptInOracles(
  */
 export function buildCoreFix(): string {
   const lintFix =
-    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --fix .`.replace(
+    `${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(STRICT_CONFIG)} --fix .`.replace(
       /\s+/g,
       " "
     );
-  const format = `"${PRETTIER_BIN}" --write .`;
+  const format = `${shellQuote(PRETTIER_BIN)} --write .`;
 
   return `${lintFix} ; ${format}`;
 }
@@ -188,7 +189,7 @@ function lintPart(
   const envPrefix = packEnvPrefix(packs, ruleOverrides, conventions);
 
   return {
-    command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location "${eslintCachePath(envPrefix)}" --format json .`,
+    command: `${envPrefix}bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(STRICT_CONFIG)} --cache --cache-location ${shellQuote(eslintCachePath(envPrefix))} --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }
@@ -202,7 +203,7 @@ async function typeAwareLintPart(cwd: string): Promise<IGateSpec | null> {
   }
 
   return {
-    command: `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" --format json .`,
+    command: `bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(TYPE_AWARE_CONFIG)} --format json .`,
     label: "type-aware async (tsforge)",
   };
 }

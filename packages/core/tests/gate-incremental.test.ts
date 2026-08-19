@@ -67,7 +67,7 @@ test("buildGate caches the syntactic eslint pass, dir made in-process + git-igno
     // KEYED by the active ruleset (eslint-gate-<hash>.cache) so a mid-session pack change
     // invalidates it instead of reusing entries linted under a weaker ruleset.
     expect(gate.command).toMatch(
-      /--cache --cache-location "\.tsforge\/eslint-gate-[a-z0-9]+\.cache"/
+      /--cache --cache-location '\.tsforge\/eslint-gate-[a-z0-9]+\.cache'/
     );
     // …the type-aware pass must NOT (editing one file changes another's errors).
     expect(gate.command).not.toContain("type-aware");
@@ -158,7 +158,7 @@ test("buildGate keys the eslint cache path by the active ruleset", async () => {
   const dir = project();
 
   const cacheOf = (command: string): string => {
-    const m = /--cache-location "([^"]+)"/.exec(command);
+    const m = /--cache-location '([^']+)'/.exec(command);
 
     return m?.[1] ?? "";
   };

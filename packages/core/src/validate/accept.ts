@@ -9,10 +9,22 @@ import type { IAcceptResult } from "./validate.types";
  *  override (0 = no timeout). */
 const DEFAULT_GATE_TIMEOUT_MS = 600_000;
 
-function gateTimeoutMs(): number {
-  const env = Number(process.env.TSFORGE_GATE_TIMEOUT_MS);
+/** Parse a TSFORGE_GATE_TIMEOUT_MS value. Absent OR blank ⇒ the default —
+ *  `Number("") === 0`, so without the blank guard an empty-but-present env var
+ *  (`export TSFORGE_GATE_TIMEOUT_MS=`, a CI matrix hole) would silently DISABLE
+ *  the only bound on a hung gate. Only an explicit `"0"` means "no timeout". */
+export function parseGateTimeout(raw: string | undefined): number {
+  if (raw === undefined || raw.trim().length === 0) {
+    return DEFAULT_GATE_TIMEOUT_MS;
+  }
+
+  const env = Number(raw);
 
   return Number.isFinite(env) && env >= 0 ? env : DEFAULT_GATE_TIMEOUT_MS;
+}
+
+function gateTimeoutMs(): number {
+  return parseGateTimeout(process.env.TSFORGE_GATE_TIMEOUT_MS);
 }
 
 /** Optional knobs for `runAccept`: stream the output live (`onChunk`) and/or

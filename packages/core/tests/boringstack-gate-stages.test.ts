@@ -886,10 +886,13 @@ describe("reachabilityStage", () => {
 
   test("when feature directory doesn't exist → skips gracefully (no reachability errors)", async () => {
     let probes = 0;
+
     const spy: SpecFetcher = async () => {
       probes += 1;
+
       throw new Error("no server");
     };
+
     const stage = reachabilityStage("/nonexistent", "note", spy);
     const r = await stage.run("/nonexistent");
 
@@ -912,8 +915,10 @@ describe("reachabilityStage", () => {
     );
 
     let probes = 0;
+
     const spy: SpecFetcher = async () => {
       probes += 1;
+
       throw new Error("no server");
     };
 
