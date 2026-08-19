@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { currentVersion } from "../update-check";
 import type { IGateSpec } from "./types";
 import {
   ESLINT_BIN,
@@ -21,15 +22,42 @@ import type { IConventions } from "../infer-rules/conventions.types";
  *  buildinfo). The syntactic-lint result cache lives here. */
 const GATE_CACHE_DIR = ".tsforge";
 
-/** The eslint result cache path, KEYED BY the active ruleset. eslint caches on file
- *  content + the static config PATH — NOT the packs/overrides/conventions we inject via
- *  env (TSFORGE_PACKS, …). The auto gate can change packs mid-session (a greenfield project
- *  gains `react`), so a single fixed cache path would let files cached under the weaker
- *  ruleset keep passing without the newly activated rules. Hashing the env prefix (the
- *  exact ruleset) into the filename means a ruleset change → a fresh cache → a real re-lint,
- *  while an unchanged ruleset still hits the cache. */
+/** Content hash of the bundled strict config, read once per process. Folded into
+ *  the cache key so editing/upgrading the shipped config file invalidates caches
+ *  even when the tsforge version is unchanged (a dev iterating on the config). */
+let strictConfigHash: string | null = null;
+
+function configIdentity(): string {
+  if (strictConfigHash === null) {
+    let text = "missing";
+
+    try {
+      text = readFileSync(STRICT_CONFIG, "utf8");
+    } catch {
+      // Unresolvable config → the gate command will fail loudly on its own;
+      // the sentinel just keeps the cache key stable and distinct.
+    }
+
+    strictConfigHash = Bun.hash(text).toString(36);
+  }
+
+  return strictConfigHash;
+}
+
+/** The eslint result cache path, KEYED BY the active ruleset + the toolchain
+ *  identity. eslint caches on file content + the static config PATH — NOT the
+ *  packs/overrides/conventions we inject via env (TSFORGE_PACKS, …), and not the
+ *  rule IMPLEMENTATIONS. The auto gate can change packs mid-session (a greenfield
+ *  project gains `react`), and a tsforge upgrade can change what a rule flags with
+ *  an identical serialized config — either would let files cached under the weaker
+ *  ruleset keep passing. Hashing the env prefix + tsforge version (which pins the
+ *  bundled eslint) + the strict-config content into the filename means any of
+ *  those changing → a fresh cache → a real re-lint, while an unchanged toolchain
+ *  still hits the cache. */
 function eslintCachePath(envPrefix: string): string {
-  const key = Bun.hash(`v1:${envPrefix}`).toString(36);
+  const key = Bun.hash(
+    `v2:${currentVersion()}:${configIdentity()}:${envPrefix}`
+  ).toString(36);
 
   return `${GATE_CACHE_DIR}/eslint-gate-${key}.cache`;
 }
@@ -189,7 +217,10 @@ function lintPart(
   const envPrefix = packEnvPrefix(packs, ruleOverrides, conventions);
 
   return {
-    command: `${envPrefix}bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(STRICT_CONFIG)} --cache --cache-location ${shellQuote(eslintCachePath(envPrefix))} --format json .`,
+    // --cache-strategy content: the default (mtime+size) can serve a stale CLEAN
+    // entry when the gate runs right after `--fix` + prettier rewrite files —
+    // same-size same-mtime-tick rewrites are exactly this pipeline's hot path.
+    command: `${envPrefix}bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(STRICT_CONFIG)} --cache --cache-strategy content --cache-location ${shellQuote(eslintCachePath(envPrefix))} --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }
