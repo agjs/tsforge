@@ -22,6 +22,11 @@ import type { IConventions } from "../infer-rules/conventions.types";
  *  buildinfo). The syntactic-lint result cache lives here. */
 const GATE_CACHE_DIR = ".tsforge";
 
+/** Stage-label constants — exported so the auto gate's stage FLOOR
+ *  (gate/stage-floor.ts) observes stages from the label without string drift. */
+export const TSC_STAGE_LABEL = "tsc --strict";
+export const TYPE_AWARE_STAGE_LABEL = "type-aware async (tsforge)";
+
 /** Content hash of the bundled strict config, read once per process. Folded into
  *  the cache key so editing/upgrading the shipped config file invalidates caches
  *  even when the tsforge version is unchanged (a dev iterating on the config). */
@@ -94,7 +99,7 @@ export async function buildGate(
 
   if (tsc !== null) {
     parts.push(tsc);
-    labels.push("tsc --strict");
+    labels.push(TSC_STAGE_LABEL);
   }
 
   // The syntactic lint pass caches per-file results under .tsforge/ (see
@@ -239,6 +244,6 @@ async function typeAwareLintPart(cwd: string): Promise<IGateSpec | null> {
 
   return {
     command: `bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(TYPE_AWARE_CONFIG)} --format json .`,
-    label: "type-aware async (tsforge)",
+    label: TYPE_AWARE_STAGE_LABEL,
   };
 }

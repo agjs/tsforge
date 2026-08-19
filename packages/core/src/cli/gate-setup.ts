@@ -10,6 +10,12 @@ import {
   makeFileLinter,
   type FileLinter,
 } from "../gate";
+import {
+  EMPTY_STAGE_FLOOR,
+  observeStageFloor,
+  raiseStageFloor,
+  stageFloorViolation,
+} from "../gate/stage-floor";
 import type { IStackProfile } from "../stack-detection";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { ITsforgeProjectConfig } from "../config/tsforge-config";
@@ -23,6 +29,11 @@ export type AutoGateResolver = () => Promise<{
   command: string;
   stackProfile: IStackProfile;
   lintFile?: FileLinter;
+  /** Set when this re-resolution would DOWNGRADE the gate below the session's
+   *  stage floor (a stage the gate once had is gone — e.g. tsconfig.json was
+   *  deleted mid-session). The runner turns this into a red gate result and
+   *  must NOT adopt the weaker command. */
+  downgrade?: string;
 }>;
 
 export interface IResolvedGate {
@@ -209,6 +220,10 @@ function lintFileFor(
  *  noop package script. */
 function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
   const activePacks = new Set<string>(policy.baselinePacks);
+  // The STAGE floor, monotonic like the packs set: a stage the session's gate
+  // has ever had (tsc, type-aware) can't silently vanish from a re-resolution
+  // — see gate/stage-floor.ts.
+  let floor = EMPTY_STAGE_FLOOR;
 
   return async () => {
     const { detectStack } = await import("../stack-detection");
@@ -222,6 +237,18 @@ function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
 
     const packs = Array.from(activePacks).sort();
     const auto = await eslintFor(policy, packs);
+    const observed = observeStageFloor(auto.label);
+    const downgrade = stageFloorViolation(floor, observed);
+
+    if (downgrade !== null) {
+      return {
+        command: auto.command,
+        stackProfile: { ...stack, packs },
+        downgrade,
+      };
+    }
+
+    floor = raiseStageFloor(floor, observed);
 
     return {
       command: auto.command,

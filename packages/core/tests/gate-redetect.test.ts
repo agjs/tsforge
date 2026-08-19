@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveGate } from "../src/cli/gate-setup";
@@ -782,3 +782,171 @@ test("isProfileId accepts real ids and rejects prototype-chain names", () => {
   expect(isProfileId("nope")).toBe(false);
   expect(isProfileId("")).toBe(false);
 });
+
+// FG-2 (session boundary): a resolver-reported downgrade must red the gate cycle,
+// keep the previous accept command, and NOT adopt the weaker one.
+test("Session reds the gate cycle on a stage-floor downgrade instead of adopting a weaker command", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-floor-red-"));
+
+  const stackProfile: IStackProfile = {
+    name: "test",
+    packs: ["generic-ts"],
+    confidence: "guess",
+    reason: "test",
+  };
+  let downgraded = false;
+  let sawDowngradeCycle = 0;
+
+  const autoGate = async () => {
+    if (!downgraded) {
+      return { command: "exit 0", stackProfile };
+    }
+
+    sawDowngradeCycle += 1;
+
+    return {
+      command: "true",
+      stackProfile,
+      downgrade: 'gate integrity: the "tsc --strict" stage vanished',
+    };
+  };
+
+  let turn = 0;
+  let fileSeq = 0;
+  const provider: IProvider = {
+    async complete() {
+      turn += 1;
+
+      if (turn === 1) {
+        fileSeq += 1;
+
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: String(fileSeq),
+              name: "create",
+              arguments: {
+                file: `f${String(fileSeq)}.ts`,
+                content: "export const a = 1;\n",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      autoGate,
+    });
+
+    // Send 1: normal cycle — the resolver's command is adopted.
+    await session.send("build it");
+    expect(session.gate).toBe("exit 0");
+
+    // Send 2: the project was tampered with (resolver reports a downgrade).
+    downgraded = true;
+    turn = 0;
+    await session.send("more");
+
+    // The downgrade cycle ran, the gate went red with gate-integrity (send 2
+    // cannot settle green), and the weaker command was NEVER adopted.
+    expect(sawDowngradeCycle).toBeGreaterThan(0);
+    expect(session.gate).toBe("exit 0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+// FG-2 (container flip): deleting the root package.json mid-session flips
+// isWorkspaceContainer → before the floor, the auto gate downgraded a real
+// package gate to the container green-skip (accept "true") over a broken tree.
+test("Session refuses the package→container downgrade when root package.json vanishes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-container-flip-"));
+
+  const stackProfile: IStackProfile = {
+    name: "test",
+    packs: ["generic-ts"],
+    confidence: "guess",
+    reason: "test",
+  };
+  let resolverCalls = 0;
+
+  const autoGate = async () => {
+    resolverCalls += 1;
+
+    return { command: "exit 0", stackProfile };
+  };
+
+  let turn = 0;
+  let fileSeq = 0;
+  const provider: IProvider = {
+    async complete() {
+      turn += 1;
+
+      if (turn === 1) {
+        fileSeq += 1;
+
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: String(fileSeq),
+              name: "create",
+              arguments: {
+                file: `src/f${String(fileSeq)}.ts`,
+                content: "export const a = 1;\n",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    // A root package.json + a child package: deleting the root later makes
+    // isWorkspaceContainer(dir) true.
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+    await mkdir(join(dir, "api"), { recursive: true });
+    await writeFile(
+      join(dir, "api", "package.json"),
+      JSON.stringify({ name: "api" })
+    );
+
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      autoGate,
+    });
+
+    await session.send("build it");
+    expect(session.gate).toBe("exit 0");
+
+    const callsAfterSend1 = resolverCalls;
+
+    // The code under test (or anything else) removes the root package.json.
+    await rm(join(dir, "package.json"));
+
+    turn = 0;
+    await session.send("more");
+
+    // The container branch red-flagged BEFORE resolving/adopting anything:
+    // the persisted accept never became the container skip's literal "true".
+    expect(session.gate).toBe("exit 0");
+    expect(session.gate).not.toBe("true");
+    expect(resolverCalls).toBe(callsAfterSend1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 60_000);

@@ -47,6 +47,7 @@ import {
   isEslintJsonLine,
   type ErrorParser,
   type ErrorSet,
+  type IValidateResult,
 } from "../validate";
 import { ruleHelp } from "./feedback";
 import type { IConventionProvider } from "./conventions-provider";
@@ -303,6 +304,9 @@ export interface ISessionConfig {
     command: string;
     stackProfile: IStackProfile;
     lintFile?: FileLinter;
+    /** Set when re-resolution would downgrade the gate below the session's
+     *  stage floor — the runner reds the cycle instead of adopting it. */
+    downgrade?: string;
   }>;
   /** Pristine-scaffold meta-rule baseline to subtract from each cycle's violations.
    *  Usually captured mid-build via `captureMetaBaseline()`; this is for callers that
@@ -1010,6 +1014,16 @@ function packageGateCaptureFrom(cfg: ISessionConfig): IPackageGateCaptureOpts {
   };
 }
 
+/** A red gate result for a gate-INTEGRITY violation (the gate itself was
+ *  tampered with / downgraded), as opposed to the code under test being red. */
+function gateIntegrityRed(key: string, message: string): IValidateResult {
+  return {
+    passed: false,
+    errors: [{ key: `gate-integrity:${key}`, rule: "gate-integrity", message }],
+    output: message,
+  };
+}
+
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
@@ -1020,6 +1034,10 @@ function makeAutoGateRunner(
   const state = { active: true };
   let prevPacks: string[] | null = null;
   let workspaceLint: FileLinter | null = null;
+  /** True once any cycle gated this cwd as a PACKAGE (non-container) — the
+   *  container-flip floor: deleting the root package.json mid-session must not
+   *  downgrade a real package gate to the container skip. */
+  let wasPackageGate = false;
   /** Frozen per-package policies for workspace fan-out (test cmd + packs). */
   const workspacePolicies = new Map<string, IPackageGatePolicy>();
 
@@ -1038,6 +1056,20 @@ function makeAutoGateRunner(
       // only while auto-gate is active. `setGate` flips active off; then we
       // honor the manual command via validate (same as non-workspace).
       if (isWorkspaceContainer(cwd) && state.active) {
+        if (wasPackageGate) {
+          // The cwd HAD a root package.json (this session gated it as a
+          // package) and now presents as a container — the root package.json
+          // disappeared mid-session. Refusing beats silently downgrading to
+          // the container skip, which would green a broken tree.
+          return gateIntegrityRed(
+            "root-package-json",
+            "root package.json disappeared mid-session — the gate will not " +
+              "downgrade from a package gate to a workspace-container skip. " +
+              "Restore package.json, or start a new session / --continue " +
+              "(which re-captures the gate) if the restructuring is intentional."
+          );
+        }
+
         // One router for the whole session — each package's eslint engine is
         // rebuilt when packs grow so newly activated frameworks aren't missed.
         workspaceLint ??= makeWorkspaceFileLinter(
@@ -1073,8 +1105,17 @@ function makeAutoGateRunner(
 
       if (state.active) {
         const r = await resolve();
+
+        if (r.downgrade !== undefined) {
+          // The re-resolved gate fell below the session's stage floor (e.g.
+          // tsconfig.json deleted → tsc stage gone). Keep the previous accept
+          // command untouched and red the cycle with the explanation.
+          return gateIntegrityRed("stage-downgrade", r.downgrade);
+        }
+
         const packs = sortedPacks(r.stackProfile.packs);
 
+        wasPackageGate = true;
         ctx.task.accept = r.command;
         ctx.gate.stackProfile = r.stackProfile;
         rebuildTaskContract(ctx, offerCheck);
