@@ -18,6 +18,11 @@ import {
   type IPackageGatePolicy,
   type IPackageGateCaptureOpts,
 } from "../gate";
+import {
+  captureDirtyBaseline,
+  detectDirtyPackageRoots,
+  rememberNewChildren,
+} from "../gate/dirty-packages";
 import { commandGate, type IGate } from "../gate/gate-runner";
 import type { IStackProfile } from "../stack-detection";
 import {
@@ -1040,6 +1045,15 @@ function makeAutoGateRunner(
   let wasPackageGate = false;
   /** Frozen per-package policies for workspace fan-out (test cmd + packs). */
   const workspacePolicies = new Map<string, IPackageGatePolicy>();
+  /** FG-1: per-child git-state baseline, captured EAGERLY at runner creation
+   *  (before the model's first turn — a shell write during turn 1 would
+   *  otherwise be baselined away and never gated). Each container cycle diffs
+   *  against it so changes written OUTSIDE the edit tools still gate. */
+  const gateStartMs = Date.now();
+  const dirtyBaseline: Promise<Map<string, string>> | null =
+    isWorkspaceContainer(ctx.cwd)
+      ? captureDirtyBaseline(listChildPackageRoots(ctx.cwd))
+      : null;
 
   ctx.gate.workspacePolicies = workspacePolicies;
   ctx.gate.workspaceCapture = capture;
@@ -1079,17 +1093,42 @@ function makeAutoGateRunner(
         );
         ctx.gate.lintFile = workspaceLint;
 
+        // FG-1: union git-detected dirty children into the gate. `touched`
+        // records only edit/create TOOL writes — a `sed -i`/script/git-apply
+        // change is invisible to it and used to green-skip the whole gate.
+        const baseline = await (dirtyBaseline ??
+          captureDirtyBaseline(listChildPackageRoots(cwd)));
+        const children = listChildPackageRoots(cwd);
+        const detection = await detectDirtyPackageRoots(
+          children,
+          baseline,
+          gateStartMs
+        );
+
+        await rememberNewChildren(baseline, children);
+
         const run = await runWorkspaceContainerGate(
           cwd,
           ctx.task,
           ctx.tool.touched ?? [],
           parse,
-          { ...(opts ?? {}), policies: workspacePolicies, capture }
+          {
+            ...(opts ?? {}),
+            policies: workspacePolicies,
+            capture,
+            extraPackageRoots: detection.dirty,
+          }
         );
 
         // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
-        // --continue / a /clear rebuild, so a display label would run as a command.
-        ctx.task.accept = run.accept;
+        // --continue / a /clear rebuild, so a display label would run as a
+        // command. Only adopt it when something actually GATED — a nothing-
+        // changed cycle's vacuous "true" must never replace (and persist over)
+        // a real command.
+        if (run.label !== "") {
+          ctx.task.accept = run.accept;
+        }
+
         rebuildTaskContract(ctx, offerCheck);
 
         if (run.packs.length > 0) {

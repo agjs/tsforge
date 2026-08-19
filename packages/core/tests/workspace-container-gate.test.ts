@@ -413,3 +413,77 @@ test("capturePackageGatePolicy: child ruleOverrides stay package-local", async (
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// FG-1 seam: a change written OUTSIDE the edit tools (empty `touched`) must
+// still gate. Pre-fix, this exact scenario returned passed:true accept:"true"
+// — the false green that motivated the git-baseline detection.
+test("runWorkspaceContainerGate: extraPackageRoots gates a shell-written package despite empty touched", async () => {
+  const dir = await tempDir();
+
+  try {
+    const api = join(dir, "api");
+
+    await mkdir(join(api, "src"), { recursive: true });
+    await writeFile(join(api, "package.json"), '{"name":"api"}');
+    await writeFile(
+      join(api, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { strict: true, noEmit: true } })
+    );
+    // The type-broken file a `sed -i` would produce — invisible to `touched`.
+    await writeFile(
+      join(api, "src", "index.ts"),
+      'export const n: number = "boom";\n'
+    );
+
+    const run = await runWorkspaceContainerGate(dir, stubTask, [], undefined, {
+      extraPackageRoots: [api],
+    });
+
+    // Not the vacuous green skip: the package actually gated, red, with a
+    // real executable accept and the detection notice in its section.
+    expect(run.result.passed).toBe(false);
+    expect(run.accept).not.toBe("true");
+    expect(run.accept).toContain("api");
+    expect(run.label).toBe("api");
+    expect(run.result.output).toContain("included via git-detected changes");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test("runWorkspaceContainerGate: detected roots UNION with touched (both gate)", async () => {
+  const dir = await tempDir();
+
+  try {
+    for (const name of ["api", "app"]) {
+      const pkg = join(dir, name);
+
+      await mkdir(join(pkg, "src"), { recursive: true });
+      await writeFile(join(pkg, "package.json"), `{"name":"${name}"}`);
+      await writeFile(
+        join(pkg, "tsconfig.json"),
+        JSON.stringify({ compilerOptions: { strict: true, noEmit: true } })
+      );
+      await writeFile(join(pkg, "src", "index.ts"), "export const n = 1;\n");
+    }
+
+    const run = await runWorkspaceContainerGate(
+      dir,
+      stubTask,
+      ["app/src/index.ts"],
+      undefined,
+      { extraPackageRoots: [join(dir, "api")] }
+    );
+
+    expect(run.label).toBe("api + app");
+    // Only the DETECTED package carries the notice; the touched one doesn't.
+    expect(run.result.output).toContain(
+      "── api ── (included via git-detected changes"
+    );
+    expect(run.result.output).not.toContain(
+      "── app ── (included via git-detected changes"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 240_000);
