@@ -18,8 +18,32 @@ export const DEFAULT_TTSR_RULES: readonly ITtsrRule[] = [
     // `as <type>` — `unknown`/`any`/primitive/PascalType/`{`/`[`/`(`. Excludes the
     // one legal form, `as const` (lowercase, not in the alternation), and prose
     // like "…as the…" (lowercase non-keyword).
+    //
+    // Guards against the false positives that made this rule gaslight the model
+    // (it fired on text that contained no cast at all):
+    //   1. Import/export RENAMES are legal `as` — `import * as React`,
+    //      `import { Foo as Bar }`, `export { a as B }`. Two lookbehinds drop
+    //      anything after `import` up to its terminating `;` (imports can't
+    //      contain casts, and the window crosses JSON-escaped newlines in
+    //      multi-line imports), and after `export {`/`export type {` up to `}`.
+    //      `export const x = y as T` is NOT excluded (no `{` after export).
+    //      No leading \b on import/export: after a JSON-escaped newline the
+    //      text is `\nimport` and the escape's `n` glues onto the keyword
+    //      ("nimport" — no word boundary), which made the lookbehind miss
+    //      every import after the first line. Suffix-matching over-blocks only
+    //      odd identifiers ending in "import", and only until the next `;`.
+    //   2. PROSE — "such as React components", "save this as README.md". A real
+    //      cast's type is followed by a code delimiter (`;` `,` `)` `]` `}` `<`
+    //      `:` `&` `|` `?` `=` or a backslash, which is how a JSON-escaped
+    //      newline/quote appears on this channel — TTSR scans the RAW tool-args
+    //      string); prose is followed by another word. No `$`: at a chunk
+    //      boundary the delimiter simply arrives with the next delta (the
+    //      rolling buffer persists), whereas matching at end-of-buffer would
+    //      fire mid-sentence.
+    //   3. Sentence dots — `[A-Z]\w*(?:\.\w+)*` (not `[\w.]*`) so the `.` ending
+    //      "known as React." can't backtrack into the delimiter lookahead.
     condition: [
-      /\bas\s+(?:unknown|any|string|number|boolean|bigint|symbol|object|never|[A-Z][\w.]*|[[{(])/,
+      /(?<!import\b[^;]{0,300})(?<!export\s+(?:type\s+)?\{[^}]{0,200})\bas\s+(?:(?:unknown|any|string|number|boolean|bigint|symbol|object|never|[A-Z]\w*(?:\.\w+)*)\s{0,3}(?=[;,)\]}<:&|?=\\])|[[{(])/,
     ],
     scope: "tool-args",
     guidance:
@@ -41,7 +65,11 @@ export const DEFAULT_TTSR_RULES: readonly ITtsrRule[] = [
   },
   {
     name: "no-as-any",
-    condition: [/\bas\s+any\b/],
+    // Same delimiter lookahead as no-as-cast: a real `as any` cast is followed
+    // by a code delimiter (or an escaped newline/quote, i.e. a backslash on the
+    // raw tool-args channel); the ENGLISH phrase "as any developer knows" is
+    // followed by a word and must not abort the stream.
+    condition: [/\bas\s+any\b\s{0,3}(?=[;,)\]}<:&|?=\\])/],
     scope: "tool-args",
     guidance:
       "Never use 'as any'. If the type is unknown, use 'unknown' or a proper type. " +

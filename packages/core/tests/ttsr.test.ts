@@ -32,6 +32,61 @@ test("built-in no-as-cast does NOT fire on `as const`", () => {
   expect(hit).toBeNull();
 });
 
+// The gaslighting regression: the rule used to fire on text with NO cast at all
+// (`as` + any capitalized word) — legal import/export renames and plain English
+// prose — and the guidance then scolded the model about `as any` it never wrote.
+test("no-as-cast/no-as-any do NOT fire on import/export renames or prose", () => {
+  const innocents = [
+    'import * as React from "react";\n',
+    'import { Component as Button } from "./b";\n',
+    // A prettier-formatted multi-line import, as it appears on the RAW
+    // tool-args channel (JSON-escaped: newlines are the literal chars \n).
+    'import {\\n  Component as Button,\\n} from "./b";\\n',
+    // A SECOND import after an escaped newline: the escape's `n` glues onto
+    // `import` ("nimport"), which defeated a \b-anchored lookbehind.
+    'import * as React from \\"react\\";\\nimport { Component as Base } from \\"./base\\";',
+    "export { foo as Bar };\n",
+    "export type { Foo as Bar };\n",
+    "// save this as README.md\n",
+    "Render it the same as React components do.\n",
+    "known as Promise chaining.\n",
+    "as many as needed\n",
+    "as any developer knows, this is fine\n",
+  ];
+
+  for (const text of innocents) {
+    const hit = withDefaults().checkDelta(text, {
+      source: "tool-args",
+      currentFile: "apps/ui/src/x.tsx",
+    });
+
+    expect(hit?.name ?? null).toBeNull();
+  }
+});
+
+test("no-as-cast still fires on real casts, incl. escaped-newline endings and post-import code", () => {
+  const casts = [
+    "const x = data as any;\n",
+    // Line ends as a JSON-escaped newline on the raw tool-args channel.
+    "const x = data as any\\nconst y = 1;",
+    "return (x as unknown as T);\n",
+    "foo(bar as string, baz)\n",
+    "const z = v as Array<string>;\n",
+    "export const q = w as any;\n",
+    'import { A } from "./a"; const b = c as Foo;\n',
+    "const t = u as [string, number];\n",
+  ];
+
+  for (const text of casts) {
+    const hit = withDefaults().checkDelta(text, {
+      source: "tool-args",
+      currentFile: "apps/api/src/x.ts",
+    });
+
+    expect(hit?.name).toBe("no-as-cast");
+  }
+});
+
 test("built-in no-eslint-disable fires on an eslint-disable comment", () => {
   const hit = withDefaults().checkDelta(
     "// eslint-disable-next-line @typescript-eslint/no-explicit-any\n",
