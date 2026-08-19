@@ -45,6 +45,17 @@ function osascriptArgs(path: string): string[] {
   return ["osascript", ...script.flatMap((line) => ["-e", line])];
 }
 
+/** Cap on a pasted clipboard image (bytes). Without it a huge paste (a
+ *  multi-hundred-MB screenshot/PSD) was read whole and then base64-encoded
+ *  (~1.33× more) into a string held in the REPL attachment — mirrors the
+ *  MAX_FILE_BYTES bound every workspace read already has. */
+export const MAX_CLIPBOARD_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** A clipboard image of `size` bytes is readable: non-empty and within the cap. */
+export function clipboardImageSizeOk(size: number): boolean {
+  return size > 0 && size <= MAX_CLIPBOARD_IMAGE_BYTES;
+}
+
 const DEFAULT_DEPS: IClipboardDeps = {
   platform: process.platform,
   run: async (argv) =>
@@ -52,7 +63,7 @@ const DEFAULT_DEPS: IClipboardDeps = {
   readFileBytes: async (path) => {
     const file = Bun.file(path);
 
-    if (!(await file.exists()) || file.size === 0) {
+    if (!(await file.exists()) || !clipboardImageSizeOk(file.size)) {
       return null;
     }
 
