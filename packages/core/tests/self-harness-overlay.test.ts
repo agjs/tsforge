@@ -130,6 +130,50 @@ describe("mergeOverlay", () => {
     });
   });
 
+  test("re-merging the same append is idempotent (no duplicate stacking)", () => {
+    // A campaign relaunch that reprocesses the same lineage used to append the
+    // same learned text again and again, bloating the block with duplicates.
+    const base = mergeOverlay(emptyOverlay(), {
+      promptBlocks: { bootstrap: { mode: "append", text: "learned rule X" } },
+    });
+    const again = mergeOverlay(base, {
+      promptBlocks: { bootstrap: { mode: "append", text: "learned rule X" } },
+    });
+
+    expect(again.promptBlocks.bootstrap?.text).toBe("learned rule X");
+  });
+
+  test("distinct appends still stack (learning accumulates)", () => {
+    let overlay = emptyOverlay();
+
+    for (const text of ["one", "two", "three"]) {
+      overlay = mergeOverlay(overlay, {
+        promptBlocks: { execution: { mode: "append", text } },
+      });
+    }
+
+    expect(overlay.promptBlocks.execution?.text).toBe("one\ntwo\nthree");
+  });
+
+  test("append growth is bounded — a block never grows without limit", () => {
+    let overlay = emptyOverlay();
+
+    // Far more appends than the ceiling allows; each is distinct so dedup can't
+    // hide the growth. The block must stay within a bounded size.
+    for (let i = 0; i < 2000; i += 1) {
+      overlay = mergeOverlay(overlay, {
+        promptBlocks: {
+          verification: { mode: "append", text: `distinct learned line ${i}` },
+        },
+      });
+    }
+
+    const len = overlay.promptBlocks.verification?.text.length ?? 0;
+
+    expect(len).toBeGreaterThan(0);
+    expect(len).toBeLessThanOrEqual(8000);
+  });
+
   test("ttsr rules dedupe by name with the patch winning", () => {
     const base = mergeOverlay(emptyOverlay(), {
       ttsrRules: [

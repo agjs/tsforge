@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ISweepReport } from "../eval";
+import { writeFileAtomic } from "../lib/fs";
 import { overlayPathFor } from "./overlay";
 import type { IHarnessOverlay } from "./self-harness.types";
 
@@ -99,9 +100,13 @@ function describe(
 
 /**
  * Install an overlay for live use, keeping the displaced one as the rollback
- * point. Written to a temp file and renamed, so a session starting mid-write
- * can never read half an overlay — `activeOverlay()` reads this path
- * synchronously on a hot path with no locking.
+ * point. Both the `.prev` backup AND the live write go through
+ * `writeFileAtomic` (write-a-uniquely-named-temp, then rename): a session
+ * starting mid-write can never read half an overlay (`activeOverlay()` reads
+ * this path synchronously with no locking), the rollback backup can never be
+ * left truncated by a crash, and a fixed temp name no longer lets a second
+ * concurrent install (a campaign racing a manual promote, or a relaunch)
+ * interleave into the same `.tmp` and publish a half-merged document.
  */
 export async function installOverlay(
   modelId: string,
@@ -112,13 +117,10 @@ export async function installOverlay(
   await mkdir(dirname(live), { recursive: true });
 
   if (existsSync(live)) {
-    await Bun.write(previousPath(live), await Bun.file(live).text());
+    await writeFileAtomic(previousPath(live), await Bun.file(live).text());
   }
 
-  const tmp = `${live}.tmp`;
-
-  await Bun.write(tmp, JSON.stringify(overlay, null, 2));
-  await rename(tmp, live);
+  await writeFileAtomic(live, JSON.stringify(overlay, null, 2));
 }
 
 /**
@@ -132,7 +134,7 @@ export async function revertOverlay(modelId: string): Promise<boolean> {
   const prev = previousPath(live);
 
   if (existsSync(prev)) {
-    await Bun.write(live, await Bun.file(prev).text());
+    await writeFileAtomic(live, await Bun.file(prev).text());
     await rm(prev, { force: true });
 
     return true;

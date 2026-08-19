@@ -10,10 +10,18 @@
 //      with 95% Wilson CIs and a two-proportion z-test (the paper's Fig-4
 //      analog). The proof split is NEVER used for mining (exam ≠ homework).
 //
-// Hard rules: nothing is ever installed to ~/.tsforge/self-harness (the
-// campaign overlay lives under evals/self-harness/campaign/); the gate,
-// acceptance rule, and tolerances are never touched at runtime; all model
-// traffic is sequential (single-connection endpoint).
+// Promotion: the campaign's working overlay lives under
+// evals/self-harness/campaign/, and NOTHING reaches live use until it clears the
+// strict proof gate (promotionVerdict: a significant, interval-surviving uplift
+// over the frozen baseline on the never-mined proof split). Only then does
+// settlePromotion install it to ~/.tsforge/self-harness/<model>/overlay.json —
+// the overlay a human's own interactive sessions then run under — and a later
+// proof that regresses rolls it back and halts. That live install is the ONE
+// thing the campaign writes outside its own directory; a run that never clears
+// the bar cannot change what the human's sessions use.
+//
+// Hard rules: the gate, acceptance rule, and tolerances are never touched at
+// runtime; all model traffic is sequential (single-connection endpoint).
 //
 // Run:  bun packages/core/scripts/self-harness-campaign.ts
 //         [--max-sessions N] [--proof-every 3] [--rounds 3] [--width 3] [--repeats 2]
