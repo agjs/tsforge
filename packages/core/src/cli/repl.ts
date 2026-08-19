@@ -601,6 +601,9 @@ async function initReplSession(args: ICliArgs): Promise<{
       ? { executionMode: "drive-to-green" as const, offerCheck: true as const }
       : {}),
     ...(resumed === null ? {} : { history: resumed.messages }),
+    ...(resumed?.lastPromptTokens !== undefined
+      ? { lastPromptTokens: resumed.lastPromptTokens }
+      : {}),
     // Opt into the SCOPED format janitor (replaces the old whole-repo `fix`): the loop's
     // autoFixStep runs a strict eslint --fix + prettier over the files the model wrote
     // this session (ctx.tool.touched — NOT task.files, which defaults to ["**/*"] here),
@@ -755,6 +758,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       pausedWithEdit: session.hasDeferredGate,
       touched: session.touchedFiles,
       activePlanId: session.getActivePlanId(),
+      ...(session.lastPromptTokens > 0
+        ? { lastPromptTokens: session.lastPromptTokens }
+        : {}),
       messages: [...session.messages],
     });
   };

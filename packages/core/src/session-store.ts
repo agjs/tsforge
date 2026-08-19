@@ -58,6 +58,10 @@ export interface ISessionRecord {
    *  so task_* tools, turn inject, and the Tasks rail stay scoped to this session's
    *  plan (concurrent sessions in one project each bind their own id). */
   activePlanId?: string | null;
+  /** Last server-reported prompt size (tokens). Seeds the resumed session's
+   *  auto-compaction gauge so the FIRST send after --continue can compact a
+   *  near-full transcript instead of firing blind at full size. */
+  lastPromptTokens?: number;
   /** The full conversation, including the system message. */
   messages: IChatMessage[];
 }
@@ -227,6 +231,9 @@ function optionalSessionFields(
       : {}),
     ...(data.activePlanId === null || typeof data.activePlanId === "string"
       ? { activePlanId: data.activePlanId }
+      : {}),
+    ...(typeof data.lastPromptTokens === "number" && data.lastPromptTokens > 0
+      ? { lastPromptTokens: data.lastPromptTokens }
       : {}),
   };
 }

@@ -3,8 +3,10 @@ import type {
   IModelResponse,
   IProvider,
   ITokenUsage,
+  TokenChannel,
 } from "../inference";
 import { StreamInterruptedError } from "../inference";
+import { isContextOverflow } from "../agent/agent-runner";
 import type { ITask } from "../spec";
 import {
   makeFileLinter,
@@ -230,6 +232,11 @@ export interface ISessionConfig {
   /** Resume from a saved conversation (incl. its system message) instead of
    *  starting fresh — used by `--continue`. */
   history?: IChatMessage[];
+  /** The last server-reported prompt size (tokens) from the persisted session —
+   *  seeds the auto-compaction check so the FIRST resumed send can compact a
+   *  near-full transcript instead of firing blind at full size (before this, a
+   *  95%-full resume overflowed on its first call and, with no recovery, died). */
+  lastPromptTokens?: number;
   /** Extra opinionated guidance appended to the system prompt (e.g. a scaffold's
    *  conventions: "this is a web app, the entry is app.ts…"). */
   guidance?: string;
@@ -957,6 +964,24 @@ function resumeMessages(
   return [reuse ? first : systemMsg, ...rest];
 }
 
+/** The highest `revision N` stamped on a checklist snapshot in `history` — the
+ *  seed for a resumed session's revision counter (see the constructor). */
+function maxChecklistRevision(history: readonly IChatMessage[]): number {
+  let max = 0;
+
+  for (const m of history) {
+    for (const match of m.content.matchAll(/\(revision (\d+)\)/g)) {
+      const n = Number(match[1]);
+
+      if (Number.isFinite(n) && n > max) {
+        max = n;
+      }
+    }
+  }
+
+  return max;
+}
+
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
  *  stay idempotent across resumed/rebuilt sessions (so the prompt can't grow). */
 const DELEGATION_MARKER = "DELEGATION:";
@@ -1348,6 +1373,18 @@ export class Session {
       cfg.autoGate !== undefined ||
       (cfg.accept !== undefined && cfg.accept.length > 0);
     this.incrementalCheck = cfg.incrementalCheck ?? "";
+
+    // Seed the auto-compaction gauge from the persisted session so the FIRST
+    // resumed send can proactively compact a near-full transcript (see
+    // ISessionConfig.lastPromptTokens).
+    if (cfg.lastPromptTokens !== undefined && cfg.lastPromptTokens > 0) {
+      this.lastUsage = {
+        promptTokens: cfg.lastPromptTokens,
+        completionTokens: 0,
+        totalTokens: cfg.lastPromptTokens,
+      };
+    }
+
     // Start with the 4 BASE tools (read/run/edit/create). Measured: the bigger
     // 11-tool list pushes this model onto a malformed-tool-call boundary (it
     // emits unparseable formats the server leaves in content) — see
@@ -1366,6 +1403,13 @@ export class Session {
     // not advertise check in a chat session whose prompt would omit + contradict it.
     // (`resumeMessages` keeps the persisted prompt in lockstep with this on resume, so
     // the advertised tool set and the prompt can never disagree in either direction.)
+    // C3: the checklist snapshot revision counter is in-memory; a resumed
+    // history already contains snapshots stamped `revision N`. Starting back
+    // at 0 made the next change stamp `revision 1`, and the HISTORY FRESHNESS
+    // rule then pointed the model at the STALE higher-numbered tree for the
+    // next N changes. Seed from the highest revision already in history.
+    this.checklistRevision = maxChecklistRevision(cfg.history ?? []);
+
     const offerCheck = isOfferCheckActive(cfg);
 
     this.offerCheckActive = offerCheck;
@@ -1639,6 +1683,13 @@ export class Session {
   }
 
   /** The current gate command (empty when none). */
+  /** The last server-reported prompt size (tokens), for persistence: --continue
+   *  seeds it back so the FIRST resumed send can proactively compact a near-full
+   *  transcript instead of firing blind at full size. 0 = none recorded. */
+  get lastPromptTokens(): number {
+    return this.lastUsage?.promptTokens ?? 0;
+  }
+
   get gate(): string {
     return this.ctx.task.accept;
   }
@@ -2508,7 +2559,7 @@ export class Session {
     // into the next successful call (exception-safe one-shot semantics).
     this.state.pendingModelOverride = null;
 
-    const res = await this.provider.complete(ctx.messages, {
+    const callOpts = {
       tools: offeredTools,
       temperature,
       toolChoice,
@@ -2519,7 +2570,7 @@ export class Session {
         : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
       ...this.ttsrCallOption(),
       ...(signal === undefined ? {} : { signal }),
-      onToken: (token, channel) => {
+      onToken: (token: string, channel: TokenChannel) => {
         // Stamp the first token so tokens/sec measures generation rate (excluding
         // prompt-processing / time-to-first-token), not total wall time.
         if (firstTokenAt === 0) {
@@ -2533,7 +2584,9 @@ export class Session {
         // below stays as the log's record (the interactive renderer dedupes it).
         report({ kind: "token", task: SESSION_ID, message: token, channel });
       },
-    });
+    };
+
+    const res = await this.completeWithOverflowRecovery(callOpts, signal);
 
     if (res.usage !== undefined) {
       const ended = performance.now();
@@ -2574,6 +2627,41 @@ export class Session {
     }
 
     return res;
+  }
+
+  /** One provider call with REACTIVE overflow recovery (the subagent loop has
+   *  had this for a while; the main loop only had the PROACTIVE lastUsage
+   *  check, which is blind after any turn that returned no usage —
+   *  aborted/TTSR/degenerated streams routinely don't). Without this, one
+   *  context-length 400 ended the send as stuck, nothing ever shrank the
+   *  transcript, and every later send re-overflowed: a dead session that
+   *  --continue faithfully restored. */
+  private async completeWithOverflowRecovery(
+    callOpts: Parameters<IProvider["complete"]>[1],
+    signal?: AbortSignal
+  ): Promise<IModelResponse> {
+    try {
+      return await this.provider.complete(this.ctx.messages, callOpts);
+    } catch (err) {
+      if (
+        signal?.aborted === true ||
+        !isContextOverflow(err) ||
+        this.ctx.messages.length <= 2
+      ) {
+        throw err;
+      }
+
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message:
+          "⊙ request overflowed the context window — compacting and retrying",
+      });
+      await this.compact(signal);
+      this.lastUsage = undefined;
+
+      return this.provider.complete(this.ctx.messages, callOpts);
+    }
   }
 
   /**
