@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { streamResponse } from "../src/inference/stream";
 import { parseResponse } from "../src/inference/wire";
+import { StreamInterruptedError } from "../src/inference/inference.types";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { fetchReturning } from "./stub-provider";
 
@@ -596,4 +597,80 @@ test("path-in-one-big-delta: file-scoped TTSR still gets currentFile (the perf-l
 
   expect(seen.length).toBe(1);
   expect(seen[0]?.currentFile).toBe("src/big.ts");
+});
+
+// ── I3: stream lifecycle ─────────────────────────────────────────────────────
+
+test("a null response body throws instead of returning a silent empty completion", async () => {
+  const res = new Response(null, { status: 200 });
+
+  await expect(streamResponse(res, () => {})).rejects.toThrow("no body");
+});
+
+test("a mid-stream read failure salvages the partial as StreamInterruptedError", async () => {
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+
+      if (pulls === 1) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            `data: {"choices":[{"delta":{"content":"hello"}}]}\n`
+          )
+        );
+
+        return;
+      }
+
+      // The socket dies at token N — a timeout/reset shape.
+      controller.error(new Error("socket reset"));
+    },
+  });
+  const res = new Response(stream, { status: 200 });
+
+  try {
+    await streamResponse(res, () => {});
+    expect(true).toBe(false);
+  } catch (err) {
+    expect(err).toBeInstanceOf(StreamInterruptedError);
+
+    if (err instanceof StreamInterruptedError) {
+      // Everything generated before the failure is preserved, not discarded.
+      expect(err.partial.content).toBe("hello");
+      expect(err.cause).toBeInstanceOf(Error);
+    }
+  }
+});
+
+test("a chunk arriving after TTSR fires is NOT consumed into content", async () => {
+  const firing = {
+    checkDelta(
+      text: string,
+      _ctx: { source: "content" | "tool-args" }
+    ): { readonly name: string; readonly guidance: string } | null {
+      return text.includes("BAD") ? { name: "r", guidance: "g" } : null;
+    },
+  };
+  // The trailing partial line (no terminating \n) used to be consumed even
+  // after an abort decision — appending post-abort tokens to recorded content.
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"BAD"}}]}\ndata: {"choices":[{"delta":{"content":"tail-after-abort"}}]}`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {}, firing);
+
+  expect(res.ttsrFired?.ruleName).toBe("r");
+  expect(res.content).toBe("BAD");
+  expect(res.content).not.toContain("tail-after-abort");
+});
+
+test("an SSE error event still surfaces as ModelRequestError (reader released via finally)", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"partial"}}]}\n`,
+    `data: {"error":{"message":"unknown parameter: reasoning_effort","code":400}}\n`,
+  ];
+
+  await expect(streamResponse(sseResponse(chunks), () => {})).rejects.toThrow(
+    "unknown parameter"
+  );
 });

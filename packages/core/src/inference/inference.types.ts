@@ -240,6 +240,30 @@ export interface IOpenAICompatibleConfig {
  * from-scratch build into nine silent no-op turns that read as the model
  * refusing to work.
  */
+/**
+ * A stream that died MID-READ (timeout, socket reset, caller abort) after some
+ * of the response was already received. Carries the salvaged partial response
+ * so the caller can log/steer with what the model DID produce instead of
+ * discarding minutes of generation, and the original failure as `cause`.
+ * ModelRequestError (a server-sent error event) is deliberately NOT wrapped —
+ * the unsupported-field detector keys on its type.
+ */
+export class StreamInterruptedError extends Error {
+  /** What had been assembled when the read failed (content/reasoning/usage —
+   *  never executed tool calls; the loop records, it does not act on these). */
+  readonly partial: IModelResponse;
+
+  constructor(partial: IModelResponse, cause: unknown) {
+    super(
+      `model stream interrupted after ${String(partial.content.length)} content chars` +
+        (cause instanceof Error ? `: ${cause.message}` : ""),
+      { cause }
+    );
+    this.name = "StreamInterruptedError";
+    this.partial = partial;
+  }
+}
+
 export class ModelRequestError extends Error {
   readonly status: number;
   /** The server's own explanation, which usually names the offending field. */

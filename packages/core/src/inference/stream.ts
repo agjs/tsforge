@@ -5,7 +5,7 @@ import type {
   ITtsrWatcher,
   TokenChannel,
 } from "./inference.types";
-import { ModelRequestError } from "./inference.types";
+import { ModelRequestError, StreamInterruptedError } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import {
   parseArgsOrNull,
@@ -51,7 +51,12 @@ export async function streamResponse(
   const body = res.body;
 
   if (body === null) {
-    return { content: "", toolCalls: [] };
+    // Silently returning an empty completion here reads as "the model chose to
+    // say nothing" — the same worst-outcome shape throwIfStreamError exists for.
+    throw new ModelRequestError(
+      502,
+      "response had no body — expected an SSE stream"
+    );
   }
 
   const reader = body.getReader();
@@ -67,35 +72,62 @@ export async function streamResponse(
   // `usage` arrives in a trailing chunk (choices: []), captured in consumeLines.
   let buffer = "";
   let degenerated = false;
-  let result = await reader.read();
 
-  while (!result.done) {
-    buffer += decoder.decode(result.value, { stream: true });
+  try {
+    let result = await readOrInterrupt(reader, acc);
 
-    const lines = buffer.split("\n");
+    while (!result.done) {
+      buffer += decoder.decode(result.value, { stream: true });
 
-    buffer = lines.pop() ?? "";
+      const lines = buffer.split("\n");
 
-    degenerated = consumeLines(lines, acc, onToken);
+      buffer = lines.pop() ?? "";
 
-    if (degenerated || acc.ttsrFired !== null) {
-      // Stop the runaway generation instead of letting it spew to max_tokens,
-      // or abort when TTSR fires to inject corrective guidance.
-      await reader.cancel();
+      degenerated = consumeLines(lines, acc, onToken);
 
-      break;
+      if (degenerated || acc.ttsrFired !== null) {
+        // Stop the runaway generation instead of letting it spew to max_tokens,
+        // or abort when TTSR fires to inject corrective guidance.
+        break;
+      }
+
+      result = await readOrInterrupt(reader, acc);
     }
-
-    result = await reader.read();
+  } finally {
+    // ALWAYS release the connection — an SSE error event thrown out of
+    // consumeLines used to leave the reader (and socket) dangling for GC.
+    // Cancelling an already-closed reader is a no-op.
+    await reader.cancel().catch(() => undefined);
   }
 
   buffer += decoder.decode();
 
-  if (!degenerated && buffer.trim().length > 0) {
+  // Do not consume the trailing buffer after a degeneration OR a TTSR abort —
+  // the abort decision was made; more tokens appended after it would land in
+  // content the caller records.
+  if (!degenerated && acc.ttsrFired === null && buffer.trim().length > 0) {
     degenerated = consumeLines([buffer], acc, onToken);
   }
 
   return assemble(acc, degenerated);
+}
+
+/** One reader.read() that converts a MID-STREAM failure (timeout firing at
+ *  token 15k of 16k, a socket reset) into StreamInterruptedError carrying the
+ *  partial response — instead of discarding everything already generated.
+ *  A ModelRequestError (server-sent error event) passes through untouched
+ *  elsewhere; only transport-level read failures are wrapped here. */
+async function readOrInterrupt(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  acc: IStreamAcc
+): Promise<
+  Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>>
+> {
+  try {
+    return await reader.read();
+  } catch (err) {
+    throw new StreamInterruptedError(assemble(acc, false), err);
+  }
 }
 
 /** One in-flight tool call being assembled from streamed deltas. The `path`/
