@@ -374,3 +374,51 @@ test("streaming: a silent server leaves the cache field absent", async () => {
   expect(r.usage?.promptTokens).toBe(800);
   expect(r.usage?.cachedPromptTokens).toBeUndefined();
 });
+
+test("tool-args TTSR gets the latched file path on LATE deltas without rescanning", async () => {
+  // Three deltas: path in the first, big body, closing quote. The path must be
+  // latched once and still reach the watcher on the last delta — the old code
+  // re-ran the extraction regex over the WHOLE accumulated args per delta
+  // (O(n²) across a large file write).
+  const seen: { text: string; currentFile?: string }[] = [];
+  const watcher = {
+    checkDelta(
+      text: string,
+      context: { source: "content" | "tool-args"; currentFile?: string }
+    ): { readonly name: string; readonly guidance: string } | null {
+      if (context.source === "tool-args") {
+        seen.push(
+          context.currentFile === undefined
+            ? { text }
+            : { text, currentFile: context.currentFile }
+        );
+      }
+
+      return null;
+    },
+  };
+  const big = "y".repeat(4000);
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"create","arguments":"{\\"file\\":\\"src/latched.ts\\",\\"content\\":\\""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"${big}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => sseResponse(chunks)),
+  });
+
+  await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+    ttsrManager: watcher,
+  });
+
+  expect(seen.length).toBe(3);
+  // The path is known from delta 1 and carried to every later delta.
+  expect(seen.every((s) => s.currentFile === "src/latched.ts")).toBe(true);
+  // Each delta feeds only ITS OWN fragment to the watcher, never the
+  // accumulated args (the watcher keeps its own rolling buffer).
+  expect(seen[1]?.text.length).toBe(4000);
+});

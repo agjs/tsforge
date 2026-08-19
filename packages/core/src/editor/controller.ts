@@ -83,12 +83,16 @@ type KeyAction = (buffer: EditorBuffer) => void;
  *  RESERVED_ROWS (2) + 1 in status-bar.ts. */
 const EDITOR_RESERVED_ROWS = 3;
 
-/** Debug logging helper: append to TSFORGE_EDITOR_DEBUG if set. */
-function debugLog(msg: string): void {
-  const path = process.env.TSFORGE_EDITOR_DEBUG;
+/** Read once — the enabled check must not run per keystroke. */
+const EDITOR_DEBUG_PATH = process.env.TSFORGE_EDITOR_DEBUG;
 
-  if (path !== undefined) {
-    appendFileSync(path, `${msg}\n`);
+/** Debug logging helper: append to TSFORGE_EDITOR_DEBUG if set. Takes a THUNK
+ *  so callers never pay for message construction (the old shape built
+ *  JSON.stringify of the whole rendered frame on every keystroke, flag or no
+ *  flag — pure waste on the most latency-sensitive path in the product). */
+function debugLog(msg: () => string): void {
+  if (EDITOR_DEBUG_PATH !== undefined) {
+    appendFileSync(EDITOR_DEBUG_PATH, `${msg()}\n`);
   }
 }
 
@@ -262,7 +266,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     if (renderEditorFn) {
       debugLog(
-        `[repaint] rows=${frame.rows} cursorRow=${frame.cursorRow} cursorCol=${frame.cursorCol} frame=${JSON.stringify(frame.frame)}`
+        () =>
+          `[repaint] rows=${frame.rows} cursorRow=${frame.cursorRow} cursorCol=${frame.cursorCol} frame=${JSON.stringify(frame.frame)}`
       );
 
       // Extract visual lines from the rendered frame (simple split on \n)
@@ -617,7 +622,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     // Buffer would throw on the first keystroke. Normalize to a UTF-8 string.
     const chunk = typeof raw === "string" ? raw : raw.toString("utf8");
 
-    debugLog(`[input-chunk] raw=${JSON.stringify(chunk)}`);
+    debugLog(() => `[input-chunk] raw=${JSON.stringify(chunk)}`);
     processChunk(chunk);
   }
 
@@ -629,7 +634,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     const pasteScan = pasteScanner.feed(chunk);
 
     if (pasteScan.content !== null) {
-      debugLog(`[paste] content=${JSON.stringify(pasteScan.content)}`);
+      debugLog(() => `[paste] content=${JSON.stringify(pasteScan.content)}`);
 
       buffer.insertPaste(pasteScan.content);
       repaint();
@@ -648,7 +653,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     const keyEvents = decodeKeys(chunk);
 
-    debugLog(`[keys] decoded=${JSON.stringify(keyEvents)}`);
+    debugLog(() => `[keys] decoded=${JSON.stringify(keyEvents)}`);
 
     for (const event of keyEvents) {
       dispatchKeyEvent(event);
