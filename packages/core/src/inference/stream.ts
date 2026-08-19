@@ -8,7 +8,7 @@ import type {
 import { ModelRequestError } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import {
-  parseArgs,
+  parseArgsOrNull,
   parseUsage,
   salvageToolCalls,
   salvageFusedToolName,
@@ -38,6 +38,7 @@ interface IStreamDelta {
   reasoning?: string;
   toolCalls?: unknown;
   usage?: ITokenUsage;
+  finishReason?: string;
 }
 
 /** Streaming: parse SSE chunks, forward tokens to `onToken`, assemble the response.
@@ -112,6 +113,9 @@ interface IStreamingCall {
    *  write (~200M char-scans for a 40KB create). The path sits in the first
    *  bytes of the JSON and never changes. */
   extractedPath?: string;
+  /** True once the bounded path-scan window is exhausted (found, or the full
+   *  prefix arrived pathless) — stop rescanning. */
+  pathScanDone?: boolean;
 }
 
 interface IStreamAcc {
@@ -122,6 +126,8 @@ interface IStreamAcc {
   usage?: ITokenUsage;
   ttsr?: ITtsrWatcher;
   ttsrFired: { readonly name: string; readonly guidance: string } | null;
+  /** Last non-empty finish_reason seen ("stop" | "length" | "tool_calls" | …). */
+  finishReason?: string;
   /** The slot the last tool-call delta landed in — the anchor for inferring
    *  call boundaries when a backend omits `index` (see resolveCallIndex). */
   lastCallIndex?: number;
@@ -192,6 +198,10 @@ function consumeLines(
       acc.usage = delta.usage;
     }
 
+    if (delta.finishReason !== undefined) {
+      acc.finishReason = delta.finishReason;
+    }
+
     accumulateToolCalls(delta.toolCalls, acc.calls, onToken, acc);
   }
 
@@ -205,19 +215,37 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
   // Emit in INDEX order, not Map-insertion order — a backend may interleave
   // index 1 before index 0, and two edits to the same file must not execute
   // in reverse.
-  const toolCalls: IToolCall[] = [...acc.calls.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([, c]) => c)
-    .map((c) => {
-      // Rescue a structured call whose `name` absorbed the XML body (qwen emitted a
-      // bare `edit<parameter=file>…` the server couldn't split) — otherwise the
-      // garbage name hits the policy as an "unknown tool" and the model loops on it.
-      const fused = salvageFusedToolName(c.name, c.args);
+  const toolCalls: IToolCall[] = [];
+  let truncated = false;
 
-      return fused === null
-        ? { id: c.id, name: c.name, arguments: parseArgs(c.args) }
-        : { id: c.id, name: fused.name, arguments: fused.arguments };
-    });
+  for (const [, c] of [...acc.calls.entries()].sort(([a], [b]) => a - b)) {
+    // Rescue a structured call whose `name` absorbed the XML body (qwen emitted a
+    // bare `edit<parameter=file>…` the server couldn't split) — otherwise the
+    // garbage name hits the policy as an "unknown tool" and the model loops on it.
+    const fused = salvageFusedToolName(c.name, c.args);
+
+    if (fused !== null) {
+      toolCalls.push({
+        id: c.id,
+        name: fused.name,
+        arguments: fused.arguments,
+      });
+      continue;
+    }
+
+    const parsedArgs = parseArgsOrNull(c.args);
+
+    // finish_reason:"length" + args cut mid-JSON: DROP the call and flag
+    // truncation — executing it with silently-empty {} args was the old
+    // behavior (the create-with-no-content loop). The loop steers on
+    // `truncated` with an explicit smaller-call resteer instead.
+    if (parsedArgs === null && acc.finishReason === "length") {
+      truncated = true;
+      continue;
+    }
+
+    toolCalls.push({ id: c.id, name: c.name, arguments: parsedArgs ?? {} });
+  }
 
   const ttsrFired =
     acc.ttsrFired !== null
@@ -228,8 +256,11 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
           },
         }
       : {};
+  const finish =
+    acc.finishReason === undefined ? {} : { finishReason: acc.finishReason };
+  const wasTruncated = truncated ? { truncated: true } : {};
 
-  if (toolCalls.length > 0) {
+  if (toolCalls.length > 0 || truncated) {
     return degenerated
       ? {
           content: acc.content,
@@ -238,6 +269,8 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
           ...reasoning,
           ...ttsrFired,
           ...usage,
+          ...finish,
+          ...wasTruncated,
         }
       : {
           content: acc.content,
@@ -245,6 +278,8 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
           ...reasoning,
           ...ttsrFired,
           ...usage,
+          ...finish,
+          ...wasTruncated,
         };
   }
 
@@ -258,6 +293,7 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
     ...reasoning,
     ...ttsrFired,
     ...usage,
+    ...finish,
   };
 }
 
@@ -317,16 +353,28 @@ function parseSseLine(line: string): IStreamDelta | null {
   const first = isArray(choices) ? choices[0] : undefined;
 
   if (!isRecord(first) || !isRecord(first.delta)) {
-    return usage === undefined ? null : { usage };
+    const fin =
+      isRecord(first) && typeof first.finish_reason === "string"
+        ? { finishReason: first.finish_reason }
+        : {};
+
+    return usage === undefined && Object.keys(fin).length === 0
+      ? null
+      : { ...(usage === undefined ? {} : { usage }), ...fin };
   }
 
   const delta = first.delta;
+  const finishReason =
+    typeof first.finish_reason === "string" && first.finish_reason.length > 0
+      ? { finishReason: first.finish_reason }
+      : {};
 
   return {
     content: typeof delta.content === "string" ? delta.content : undefined,
     reasoning: firstString(delta.reasoning, delta.reasoning_content),
     toolCalls: delta.tool_calls,
     ...(usage === undefined ? {} : { usage }),
+    ...finishReason,
   };
 }
 
@@ -349,16 +397,21 @@ function emitToolProgress(
     return;
   }
 
-  // Same bound as the TTSR latch: a pathless args body (or one where the path
-  // key never comes) must not be re-scanned in full on every delta forever.
-  if (call.pathShown !== true && call.args.length <= MAX_PATH_SCAN_CHARS) {
+  // Same bound as the TTSR latch: scan only the bounded PREFIX — the old
+  // `args.length <= cap` SKIP meant a single large first delta (a whole file
+  // body in one SSE frame) never surfaced its path at all. Give up for good
+  // once the prefix is complete and pathless.
+  if (call.pathShown !== true) {
     const path = /"(?:file|filename|path)"\s*:\s*"([^"]+)"/.exec(
-      call.args
+      call.args.slice(0, MAX_PATH_SCAN_CHARS)
     )?.[1];
 
     if (path !== undefined) {
       call.pathShown = true;
       onToken(`\n  ${streamToolGlyph(call.name)} → ${path}`, "tool");
+    } else if (call.args.length >= MAX_PATH_SCAN_CHARS) {
+      // The whole window is here and holds no path — stop rescanning.
+      call.pathShown = true;
     }
   }
 
@@ -505,13 +558,24 @@ function processToolCallDelta(
     acc.ttsrFired === null &&
     TTSR_WATCHED_TOOLS.has(existing.name)
   ) {
-    // Latch the path once (mirrors pathShown): scan only until found, and stop
-    // trying once the args have grown past where a path key could still start.
+    // Latch the path once (mirrors pathShown): scan the bounded PREFIX. The
+    // old `args.length <= cap` guard SKIPPED the scan entirely when a backend
+    // delivered the whole args in one large delta — so extractedPath was never
+    // set and every file-scoped TTSR rule silently never fired.
     if (
       existing.extractedPath === undefined &&
-      existing.args.length <= MAX_PATH_SCAN_CHARS
+      existing.pathScanDone !== true
     ) {
-      existing.extractedPath = extractFilePath(existing.args);
+      existing.extractedPath = extractFilePath(
+        existing.args.slice(0, MAX_PATH_SCAN_CHARS)
+      );
+
+      if (
+        existing.extractedPath !== undefined ||
+        existing.args.length >= MAX_PATH_SCAN_CHARS
+      ) {
+        existing.pathScanDone = true;
+      }
     }
 
     acc.ttsrFired = acc.ttsr.checkDelta(fn.arguments, {

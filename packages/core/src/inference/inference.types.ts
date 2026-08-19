@@ -68,6 +68,16 @@ export interface IModelResponse {
   /** Set when TTSR aborted the stream due to a rule match. Contains the rule name
    *  and guidance to append to the corrective retry message. */
   ttsrFired?: { ruleName: string; guidance: string };
+  /** The server's finish_reason for the first choice ("stop", "length",
+   *  "tool_calls", …), when reported. "length" = the response hit the output
+   *  token cap — the one the loop must steer on instead of retrying blind. */
+  finishReason?: string;
+  /** Set when the response hit the token cap ("length") AND a tool call's
+   *  arguments were left unparseable mid-JSON. The broken call is DROPPED
+   *  (executing it with silently-empty {} args was the old behavior — the
+   *  create-with-no-content loop) and the loop steers with a smaller-call
+   *  resteer instead. */
+  truncated?: boolean;
 }
 
 export interface ICompleteOptions {

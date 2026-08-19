@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { streamResponse } from "../src/inference/stream";
+import { parseResponse } from "../src/inference/wire";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { fetchReturning } from "./stub-provider";
 
@@ -492,4 +493,107 @@ test("an id-less split name assembles by APPEND; a re-declared name with id repl
   const r2 = await streamResponse(sseResponse(redeclared), () => {});
 
   expect(r2.toolCalls[0]?.name).toBe("search");
+});
+
+// ── I2: finish_reason, truncation, parity, big-first-delta path latch ───────
+
+test("finish_reason is surfaced on the streamed response", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"hi"}}]}\n`,
+    `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.finishReason).toBe("stop");
+});
+
+test("length-truncated tool args are DROPPED with truncated:true (not executed as {})", async () => {
+  // A create cut off at max_tokens mid-JSON: the old behavior parsed the
+  // broken args to {} and executed create with no file/content → reject loop.
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"create","arguments":"{\\"file\\":\\"a.ts\\",\\"content\\":\\"const x ="}}]}}]}\n`,
+    `data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.truncated).toBe(true);
+  expect(res.finishReason).toBe("length");
+  expect(res.toolCalls).toHaveLength(0);
+});
+
+test("unparseable args WITHOUT length keep the old {} degradation (no behavior change)", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{broken"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.truncated).toBeUndefined();
+  expect(res.toolCalls).toHaveLength(1);
+  expect(res.toolCalls[0]?.arguments).toEqual({});
+});
+
+test("streaming and non-streaming agree on the same logical payload (parity)", async () => {
+  const streamed = await streamResponse(
+    sseResponse([
+      `data: {"choices":[{"delta":{"reasoning":"thinking"}}]}\n`,
+      `data: {"choices":[{"delta":{"content":"answer"}}]}\n`,
+      `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n`,
+      `data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n`,
+      `data: [DONE]\n`,
+    ]),
+    () => {}
+  );
+  const nonStreamed = parseResponse({
+    choices: [
+      {
+        finish_reason: "stop",
+        // vLLM spells it `reasoning` — the non-streaming path used to read
+        // ONLY `reasoning_content` and silently dropped the chain-of-thought.
+        message: { content: "answer", reasoning: "thinking" },
+      },
+    ],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  });
+
+  expect(nonStreamed.content).toBe(streamed.content);
+  expect(nonStreamed.reasoning).toBe(streamed.reasoning);
+  expect(nonStreamed.finishReason).toBe(streamed.finishReason);
+  expect(nonStreamed.usage?.totalTokens).toBe(streamed.usage?.totalTokens);
+});
+
+test("path-in-one-big-delta: file-scoped TTSR still gets currentFile (the perf-latch regression)", async () => {
+  // The whole 3KB args arrive in ONE SSE frame — past MAX_PATH_SCAN_CHARS on
+  // the first check. The old guard SKIPPED the scan entirely, so extractedPath
+  // was never set and file-scoped TTSR rules silently never fired.
+  const seen: { currentFile?: string }[] = [];
+  const watcher = {
+    checkDelta(
+      _text: string,
+      context: { source: "content" | "tool-args"; currentFile?: string }
+    ): { readonly name: string; readonly guidance: string } | null {
+      if (context.source === "tool-args") {
+        seen.push(
+          context.currentFile === undefined
+            ? {}
+            : { currentFile: context.currentFile }
+        );
+      }
+
+      return null;
+    },
+  };
+  const body = "z".repeat(3000);
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"create","arguments":"{\\"file\\":\\"src/big.ts\\",\\"content\\":\\"${body}\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+
+  await streamResponse(sseResponse(chunks), () => {}, watcher);
+
+  expect(seen.length).toBe(1);
+  expect(seen[0]?.currentFile).toBe("src/big.ts");
 });
