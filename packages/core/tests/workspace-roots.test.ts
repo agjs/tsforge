@@ -223,3 +223,66 @@ describe("read/run confinement", () => {
     expect(out.toLowerCase()).toContain("secret");
   });
 });
+
+describe("confinement — quote-aware segmentation + word scan (F1/B2/B3/B4)", () => {
+  const CWD = "/ws";
+
+  test("F1: sed/grep expression args are NOT read as paths (the false-red)", () => {
+    for (const cmd of [
+      "sed -i 's|/old|/new|g' src/x.ts",
+      "sed -n '/foo/,/bar/p' src/x.ts",
+      "sed -i '/^import/d' src/x.ts",
+      "grep -E '^(a|/tmp)' src/x.ts",
+      "awk '/start/,/end/' src/x.ts",
+      "rg 'foo/bar' src",
+    ]) {
+      expect(outsideWorkspacePaths(CWD, cmd)).toEqual([]);
+    }
+  });
+
+  test("F1: a REAL foreign path under an expression command still trips (quoted or bare)", () => {
+    expect(outsideWorkspacePaths(CWD, "sed -i s/a/b/ /foreign/secret")).toEqual(
+      ["/foreign/secret"]
+    );
+    expect(outsideWorkspacePaths(CWD, "rg leak '/foreign/tree'")).toEqual([
+      "/foreign/tree",
+    ]);
+  });
+
+  test("B2: unquoted ~ and $HOME paths are caught (fail closed)", () => {
+    expect(outsideWorkspacePaths(CWD, "cat ~/.aws/credentials")).toEqual([
+      "~/.aws/credentials",
+    ]);
+    expect(outsideWorkspacePaths(CWD, "cat $HOME/.npmrc").length).toBe(1);
+    expect(outsideWorkspacePaths(CWD, "rg secret $HOME/other").length).toBe(1);
+  });
+
+  test("B3: a ../ component anywhere in a token escapes cwd", () => {
+    expect(outsideWorkspacePaths(CWD, "cat ./../foreign/x")).toEqual([
+      "./../foreign/x",
+    ]);
+    expect(outsideWorkspacePaths(CWD, "cat src/../../foreign/x").length).toBe(
+      1
+    );
+  });
+
+  test("B4: echo + newline no longer exempts a following real command", () => {
+    expect(
+      outsideWorkspacePaths(CWD, "echo start\ncat /foreign/secret")
+    ).toEqual(["/foreign/secret"]);
+    expect(
+      outsideWorkspacePaths(CWD, "echo $(cat /foreign/secret)").length
+    ).toBe(1);
+  });
+
+  test("benign idioms stay allowed", () => {
+    for (const cmd of [
+      "date +%Y/%m/%d",
+      "curl https://host/x",
+      "git log --format=%H",
+      "rg secret src/lib",
+    ]) {
+      expect(outsideWorkspacePaths(CWD, cmd)).toEqual([]);
+    }
+  });
+});
