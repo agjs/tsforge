@@ -229,3 +229,53 @@ test("organizeImports removes an unused import", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("positionOfSymbol resolves a real token, not a same-named comment or string", async () => {
+  // A `\b`-regex matched the FIRST textual occurrence, so a name in a comment or
+  // string literal that appeared before the declaration won — getReferences at
+  // that offset finds no symbol, the tool reports "no references", and the model
+  // deletes a live symbol as dead. The resolver must land on an identifier token.
+  const dir = await project({
+    "types.ts":
+      "// A User record used across the whole app.\n" + // 'User' in a comment, FIRST
+      'const label = "User settings panel";\n' + // 'User' inside a string
+      "export interface User {\n  id: number;\n}\n", // the real declaration
+    "a.ts":
+      'import type { User } from "./types";\n' +
+      "export const u = (x: User): number => x.id;\n",
+  });
+
+  try {
+    const svc = new TsService(dir);
+    const pos = svc.positionOfSymbol("types.ts", "User");
+
+    expect(pos).not.toBeUndefined();
+
+    // The offset resolves to a symbol TS can follow — references finds the
+    // cross-file use (the old regex offset, inside the comment, found none).
+    const refs = svc.references("types.ts", pos ?? 0);
+    const files = new Set(refs.map((r) => r.file.split("/").slice(-1)[0]));
+
+    expect(files.has("types.ts")).toBe(true);
+    expect(files.has("a.ts")).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("positionOfSymbol returns undefined when the name is ONLY in a comment/string", async () => {
+  // No identifier token of that name anywhere → honestly undefined (the tool
+  // then says 'no such symbol'), not a comment offset that silently resolves to
+  // nothing downstream.
+  const dir = await project({
+    "only.ts": '// mentions Ghost in a comment\nconst s = "Ghost here too";\n',
+  });
+
+  try {
+    const svc = new TsService(dir);
+
+    expect(svc.positionOfSymbol("only.ts", "Ghost")).toBeUndefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
