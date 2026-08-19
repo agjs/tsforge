@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { streamResponse } from "../src/inference/stream";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { fetchReturning } from "./stub-provider";
 
@@ -421,4 +422,74 @@ test("tool-args TTSR gets the latched file path on LATE deltas without rescannin
   // Each delta feeds only ITS OWN fragment to the watcher, never the
   // accumulated args (the watcher keeps its own rolling buffer).
   expect(seen[1]?.text.length).toBe(4000);
+});
+
+// ── I1: tool-call assembly correctness ─────────────────────────────────────
+
+test("missing-index deltas with distinct ids stay TWO calls with intact args", async () => {
+  // Mistral-compat / some llama.cpp builds omit `index` — everything used to
+  // collapse into slot 0 with concatenated args that parsed to {} silently.
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"id":"call_a","type":"function","function":{"name":"create","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\\"file\\":\\"a.ts\\"}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"id":"call_b","type":"function","function":{"name":"create","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\\"file\\":\\"b.ts\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const tokens: string[] = [];
+  const res = await streamResponse(sseResponse(chunks), (t) => tokens.push(t));
+
+  expect(res.toolCalls).toHaveLength(2);
+  expect(res.toolCalls[0]?.arguments).toEqual({ file: "a.ts" });
+  expect(res.toolCalls[1]?.arguments).toEqual({ file: "b.ts" });
+  // The degraded shape is visible in the log exactly once.
+  expect(tokens.filter((t) => t.includes("missing index")).length).toBe(1);
+});
+
+test("missing-index: a name after the current call's args began starts a NEW call", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"read","arguments":"{\\"file\\":\\"x.ts\\"}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"read","arguments":"{\\"file\\":\\"y.ts\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.toolCalls).toHaveLength(2);
+  expect(res.toolCalls[0]?.arguments).toEqual({ file: "x.ts" });
+  expect(res.toolCalls[1]?.arguments).toEqual({ file: "y.ts" });
+});
+
+test("out-of-order indices emit in INDEX order, not arrival order", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"edit","arguments":"{\\"file\\":\\"second.ts\\"}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"edit","arguments":"{\\"file\\":\\"first.ts\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.toolCalls.map((c) => c.arguments.file)).toEqual([
+    "first.ts",
+    "second.ts",
+  ]);
+});
+
+test("an id-less split name assembles by APPEND; a re-declared name with id replaces", async () => {
+  const split = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"cre","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"ate","arguments":"{\\"file\\":\\"a.ts\\",\\"content\\":\\"x\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const r1 = await streamResponse(sseResponse(split), () => {});
+
+  // Old behavior overwrote → name "ate" → unknown-tool denial loop.
+  expect(r1.toolCalls[0]?.name).toBe("create");
+
+  const redeclared = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"search","arguments":"{\\"query\\":\\"q\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const r2 = await streamResponse(sseResponse(redeclared), () => {});
+
+  expect(r2.toolCalls[0]?.name).toBe("search");
 });

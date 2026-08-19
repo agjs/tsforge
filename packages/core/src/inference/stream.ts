@@ -122,6 +122,11 @@ interface IStreamAcc {
   usage?: ITokenUsage;
   ttsr?: ITtsrWatcher;
   ttsrFired: { readonly name: string; readonly guidance: string } | null;
+  /** The slot the last tool-call delta landed in — the anchor for inferring
+   *  call boundaries when a backend omits `index` (see resolveCallIndex). */
+  lastCallIndex?: number;
+  /** One-time ⚠ so a missing-index stream is visible in the log exactly once. */
+  noIndexWarned?: boolean;
 }
 
 /** Forward a content delta, watching for degeneration and TTSR matches.
@@ -197,16 +202,22 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
   const usage = acc.usage === undefined ? {} : { usage: acc.usage };
   const reasoning =
     acc.reasoning.length > 0 ? { reasoning: acc.reasoning } : {};
-  const toolCalls: IToolCall[] = [...acc.calls.values()].map((c) => {
-    // Rescue a structured call whose `name` absorbed the XML body (qwen emitted a
-    // bare `edit<parameter=file>…` the server couldn't split) — otherwise the
-    // garbage name hits the policy as an "unknown tool" and the model loops on it.
-    const fused = salvageFusedToolName(c.name, c.args);
+  // Emit in INDEX order, not Map-insertion order — a backend may interleave
+  // index 1 before index 0, and two edits to the same file must not execute
+  // in reverse.
+  const toolCalls: IToolCall[] = [...acc.calls.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, c]) => c)
+    .map((c) => {
+      // Rescue a structured call whose `name` absorbed the XML body (qwen emitted a
+      // bare `edit<parameter=file>…` the server couldn't split) — otherwise the
+      // garbage name hits the policy as an "unknown tool" and the model loops on it.
+      const fused = salvageFusedToolName(c.name, c.args);
 
-    return fused === null
-      ? { id: c.id, name: c.name, arguments: parseArgs(c.args) }
-      : { id: c.id, name: fused.name, arguments: fused.arguments };
-  });
+      return fused === null
+        ? { id: c.id, name: c.name, arguments: parseArgs(c.args) }
+        : { id: c.id, name: fused.name, arguments: fused.arguments };
+    });
 
   const ttsrFired =
     acc.ttsrFired !== null
@@ -362,6 +373,65 @@ function emitToolProgress(
 
 const TTSR_WATCHED_TOOLS = new Set(["edit", "edit_lines", "create"]);
 
+/**
+ * The slot a tool-call delta belongs to. With an `index` field this is trivial.
+ * WITHOUT one (Mistral-compat, some llama.cpp builds, gateways that re-emit
+ * calls), everything used to collapse into slot 0: N parallel calls fused into
+ * one, their argument strings concatenated into `{"a":1}{"b":2}` — which
+ * parseArgs degrades to `{}` — so the loop executed ONE call with the wrong
+ * name and EMPTY args, silently. Heuristics for the index-less shape:
+ * a NEW id, or a name arriving after the current call's args already started,
+ * begins a new call; otherwise the delta continues the current one.
+ */
+function resolveCallIndex(
+  tc: Record<string, unknown>,
+  fn: Record<string, unknown>,
+  calls: Map<number, IStreamingCall>,
+  acc: IStreamAcc | undefined,
+  onToken: (text: string, channel: TokenChannel) => void
+): number {
+  if (typeof tc.index === "number") {
+    if (acc !== undefined) {
+      acc.lastCallIndex = tc.index;
+    }
+
+    return tc.index;
+  }
+
+  if (acc !== undefined && acc.noIndexWarned !== true) {
+    acc.noIndexWarned = true;
+    onToken(
+      "\n  ⚠ tool_call delta missing index — inferring call boundaries",
+      "tool"
+    );
+  }
+
+  const last = acc?.lastCallIndex ?? 0;
+
+  if (calls.size === 0) {
+    if (acc !== undefined) {
+      acc.lastCallIndex = 0;
+    }
+
+    return 0;
+  }
+
+  const current = calls.get(last);
+  const newId =
+    typeof tc.id === "string" && tc.id.length > 0 && tc.id !== current?.id;
+  const nameAfterArgs =
+    typeof fn.name === "string" &&
+    fn.name.length > 0 &&
+    (current?.args.length ?? 0) > 0;
+  const index = newId || nameAfterArgs ? last + 1 : last;
+
+  if (acc !== undefined) {
+    acc.lastCallIndex = index;
+  }
+
+  return index;
+}
+
 function accumulateToolCalls(
   raw: unknown,
   calls: Map<number, IStreamingCall>,
@@ -377,14 +447,15 @@ function accumulateToolCalls(
       continue;
     }
 
-    const index = typeof tc.index === "number" ? tc.index : 0;
+    const index = resolveCallIndex(tc, tc.function, calls, acc, onToken);
     const existing: IStreamingCall = calls.get(index) ?? { name: "", args: "" };
+    const hasId = typeof tc.id === "string" && tc.id.length > 0;
 
-    if (typeof tc.id === "string" && tc.id.length > 0) {
-      existing.id = tc.id;
+    if (hasId) {
+      existing.id = typeof tc.id === "string" ? tc.id : existing.id;
     }
 
-    processToolCallDelta(tc.function, existing, onToken, acc);
+    processToolCallDelta(tc.function, existing, hasId, onToken, acc);
     calls.set(index, existing);
   }
 }
@@ -392,6 +463,7 @@ function accumulateToolCalls(
 function processToolCallDelta(
   fn: Record<string, unknown>,
   existing: IStreamingCall,
+  hasId: boolean,
   onToken: (text: string, channel: TokenChannel) => void,
   acc?: IStreamAcc
 ): void {
@@ -399,12 +471,24 @@ function processToolCallDelta(
   // generation shows "it's writing X now" instead of a frozen cursor. As the
   // (often large) file body then streams, emitToolProgress adds the path + a
   // throttled size heartbeat; the file lands as a clean create/edit event on run.
+  //
+  // Name semantics: OpenAI/vLLM/DeepSeek send the full name once, with the id,
+  // on a call's first delta — that hits the first branch. An id-less name
+  // fragment while args are still empty is a CONTINUATION (some backends split
+  // the name across deltas: "cre" + "ate"); it appends, so the old overwrite
+  // no longer turns `create` into `ate` → an unknown-tool denial loop. A name
+  // arriving WITH an id (a re-declaration of the slot) replaces. Identical
+  // re-sends are a no-op either way. (Cosmetic: the glyph line printed on the
+  // first fragment can show a partial name.)
   if (typeof fn.name === "string" && fn.name.length > 0) {
     if (existing.name.length === 0) {
       onToken(`\n  ${streamToolGlyph(fn.name)} ${fn.name}…`, "tool");
+      existing.name = fn.name;
+    } else if (hasId || existing.args.length > 0) {
+      existing.name = fn.name;
+    } else if (fn.name !== existing.name) {
+      existing.name += fn.name;
     }
-
-    existing.name = fn.name;
   }
 
   if (typeof fn.arguments !== "string" || fn.arguments.length === 0) {
