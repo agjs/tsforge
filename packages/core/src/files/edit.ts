@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { writeFileAtomic } from "../lib/fs";
 import { EDIT_FAIL_REASON } from "./files.constants";
 import type {
   EditResult,
@@ -31,7 +32,7 @@ export async function applyEdit(cwd: string, edit: IEdit): Promise<EditResult> {
         return { ok: true, file: edit.file, changed: false };
       }
 
-      await Bun.write(path, edit.newString);
+      await writeFileAtomic(path, edit.newString);
 
       return { ok: true, file: edit.file, changed: true };
     }
@@ -64,7 +65,7 @@ export async function applyEdit(cwd: string, edit: IEdit): Promise<EditResult> {
     return { ok: true, file: edit.file, changed: false };
   }
 
-  await Bun.write(path, next);
+  await writeFileAtomic(path, next);
 
   return { ok: true, file: edit.file, changed: true };
 }
@@ -191,7 +192,7 @@ export async function applyEdits(
     return { ok: true, file, count: edits.length, changed: false };
   }
 
-  await Bun.write(path, content);
+  await writeFileAtomic(path, content);
 
   return { ok: true, file, count: edits.length, changed: true };
 }

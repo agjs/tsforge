@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { writeFileAtomic } from "../lib/fs";
 import { CREATE_FAIL_REASON } from "./files.constants";
 import type { CreateResult, ICreateFile } from "./files.types";
 
@@ -19,7 +20,7 @@ export async function applyCreate(
     return { ok: false, file: create.file, reason: CREATE_FAIL_REASON.exists };
   }
 
-  await Bun.write(path, create.content);
+  await writeFileAtomic(path, create.content);
 
   return { ok: true, file: create.file };
 }

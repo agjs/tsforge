@@ -1,5 +1,5 @@
-import { join } from "node:path";
-import { rm, stat } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { rm, stat, rename, mkdir, unlink } from "node:fs/promises";
 import { Glob } from "bun";
 import type { IFileView } from "./fs.types";
 import { runArgvCommand } from "./process";
@@ -7,6 +7,36 @@ import { runArgvCommand } from "./process";
 /** True when the file exists on disk (the one place this check lives). */
 export function fileExists(cwd: string, path: string): Promise<boolean> {
   return Bun.file(join(cwd, path)).exists();
+}
+
+/**
+ * Write `content` to `abs` CRASH-ATOMICALLY: write a sibling temp file, then
+ * `rename` it over the target (atomic on the same filesystem). The old
+ * truncate-in-place `Bun.write` left the user's real source file half-written
+ * or zero-length on an ENOSPC/crash mid-write, and the pre-edit bytes lived
+ * only in memory — lost when the throw propagated. A reader now always sees
+ * either the whole old file or the whole new one, never a torn write. The temp
+ * is cleaned up on a failed rename so a botched write can't litter.
+ */
+export async function writeFileAtomic(
+  abs: string,
+  content: string | Uint8Array
+): Promise<void> {
+  await mkdir(dirname(abs), { recursive: true });
+
+  // Same directory as the target so `rename` stays on one filesystem (a cross-
+  // device rename would fall back to copy — non-atomic). A random suffix avoids
+  // colliding with a concurrent write to the same path.
+  const tmp = `${abs}.${Math.random().toString(36).slice(2)}.tmp`;
+
+  try {
+    await Bun.write(tmp, content);
+    await rename(tmp, abs);
+  } catch (err) {
+    await unlink(tmp).catch(() => undefined);
+
+    throw err;
+  }
 }
 
 /** Directory segments never worth reading into context (deps, build output, vcs). */
@@ -143,7 +173,7 @@ async function rollback(done: readonly ITouched[]): Promise<void> {
     try {
       await (entry.prior === null
         ? rm(entry.abs, { force: true })
-        : Bun.write(entry.abs, entry.prior));
+        : writeFileAtomic(entry.abs, entry.prior));
     } catch {
       // best-effort
     }
@@ -175,7 +205,7 @@ export async function writeFilesOrRollback(
       // Record BEFORE writing: a write that truncates-then-throws (disk full)
       // must still be rolled back to `prior`, so the entry has to exist already.
       done.push({ abs, prior });
-      await Bun.write(abs, file.content);
+      await writeFileAtomic(abs, file.content);
     }
 
     return { ok: true, written: files.map((f) => f.path) };

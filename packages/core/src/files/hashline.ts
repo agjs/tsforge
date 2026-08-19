@@ -12,6 +12,7 @@ import {
   normalizeHash,
   HL_HEADER_SIGIL,
 } from "./hashline-format";
+import { writeFileAtomic } from "../lib/fs";
 
 /**
  * One full-file version observed at a point in time.
@@ -394,7 +395,7 @@ async function commitHashline(
   }
 
   if (changed) {
-    await Bun.write(path, text);
+    await writeFileAtomic(path, text);
     store.record(file, text);
   }
 
