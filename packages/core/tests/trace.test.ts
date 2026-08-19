@@ -14,6 +14,9 @@ function writeLedger(file: string, events: readonly ILoopEvent[]): void {
   for (const event of events) {
     ledger.record(ledgerTypeFor(event), { ...event });
   }
+
+  // Writes batch per event-loop tick — drain before the caller reads the file.
+  ledger.flush();
 }
 
 describe("trace parser: writer↔reader contract", () => {
