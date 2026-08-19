@@ -975,7 +975,19 @@ function buildSyntheticHandoff(
   };
 }
 
-/** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`. */
+/** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`.
+ *
+ *  Replaces ONLY the contract section. The old form truncated everything from
+ *  the marker to the END of the system message — deleting any block appended
+ *  after it (the `## Active plan rules` text that binds on plan approval).
+ *  The next turn re-appended the rules, so with a plan bound and the auto gate
+ *  firing every cycle, message 0 OSCILLATED between two byte strings — every
+ *  flip invalidating the entire server-side prefix cache (592ms vs 92,787ms
+ *  prefill, measured) and dropping/restoring a governance block mid-drive.
+ *
+ *  Also a strict no-op when the rebuilt content is byte-identical: callers run
+ *  on every gate cycle, and an equal-string reassignment should never even
+ *  look like a mutation of the prompt prefix. */
 function rebuildTaskContract(
   ctx: Pick<ILoopCtx, "messages" | "task">,
   offerCheck = false
@@ -989,10 +1001,23 @@ function rebuildTaskContract(
   const fresh = taskContract(ctx.task.files, ctx.task.accept, offerCheck);
   const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
 
-  system.content =
-    idx === -1
-      ? `${system.content}\n\n${fresh}`
-      : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
+  if (idx === -1) {
+    system.content = `${system.content}\n\n${fresh}`;
+
+    return;
+  }
+
+  // The contract body (Scope:/Check: lines) contains no `## ` headings, so the
+  // first heading after the marker starts the NEXT section — keep it and
+  // everything that follows, byte-for-byte (including its newline run).
+  const afterMarker = system.content.slice(idx + TASK_CONTRACT_MARKER.length);
+  const nextSection = /\n+## /.exec(afterMarker);
+  const tail = nextSection === null ? "" : afterMarker.slice(nextSection.index);
+  const next = `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}${tail}`;
+
+  if (system.content !== next) {
+    system.content = next;
+  }
 }
 
 /** Gate identity for a workspace-container cycle: the packs that actually ran, over the
