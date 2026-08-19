@@ -1162,11 +1162,16 @@ export async function runTask(
     opts.checkpointIntervalTurns ?? LOOP_LIMITS.checkpointIntervalTurns;
   // Buffer every event so the post-run memory hook can mine the run for
   // failure→fix lessons, while still forwarding live to the real reporter.
+  // Token events are NOT retained: mining reads red/edit/validated/tool kinds
+  // only, and a long drive held every streamed token in memory for nothing.
   const base: Reporter = opts.onEvent ?? (() => undefined);
   const events: ILoopEvent[] = [];
 
   const report: Reporter = (event) => {
-    events.push(event);
+    if (event.kind !== "token") {
+      events.push(event);
+    }
+
     base(event);
   };
 

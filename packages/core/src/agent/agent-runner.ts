@@ -509,7 +509,13 @@ export class AgentRunner {
         parentTask: opts.parentTaskId,
       };
 
-      events.push(tagged);
+      // Retain everything EXCEPT per-token stream events: a 20k-token
+      // investigation held 20k copied objects for its whole lifetime, and no
+      // consumer of result.events reads tokens (they render live and land in
+      // the final output).
+      if (event.kind !== "token") {
+        events.push(tagged);
+      }
 
       try {
         opts.report?.(tagged);

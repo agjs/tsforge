@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative, isAbsolute } from "node:path";
 
 /**
@@ -207,11 +207,45 @@ function toAliasSpecifier(absFile: string, cwd: string): string | null {
 
 /**
  * Index every exported name in `<cwd>/src` → the `@/` module specifier(s) that
- * export it. Built fresh (files change mid-build, so a cached index would mislead)
- * but only on demand — see `unresolvedNameHint`. Scoped to `src/` since that's the
- * aliased layout where the `Cannot find name` thrash was observed; a flat/no-`src`
- * project simply yields an empty index (no hint, no harm).
+ * export it. Only on demand — see `unresolvedNameHint`. Scoped to `src/` since
+ * that's the aliased layout where the `Cannot find name` thrash was observed; a
+ * flat/no-`src` project simply yields an empty index (no hint, no harm).
+ *
+ * Freshness: the walk runs every call (files appear mid-build), but the
+ * per-file export-name scan is cached against mtimeMs+size — the old shape
+ * re-read and re-regexed EVERY src file per write-guard invocation.
  */
+const exportNamesCache = new Map<
+  string,
+  { mtimeMs: number; size: number; names: string[] }
+>();
+
+function cachedExportedNames(abs: string): string[] {
+  let stat: { mtimeMs: number; size: number };
+
+  try {
+    stat = statSync(abs);
+  } catch {
+    return [];
+  }
+
+  const hit = exportNamesCache.get(abs);
+
+  if (hit?.mtimeMs === stat.mtimeMs && hit.size === stat.size) {
+    return hit.names;
+  }
+
+  const names = readExportedNames(abs);
+
+  exportNamesCache.set(abs, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    names,
+  });
+
+  return names;
+}
+
 export function buildExportIndex(cwd: string): Map<string, string[]> {
   const index = new Map<string, string[]>();
 
@@ -222,7 +256,7 @@ export function buildExportIndex(cwd: string): Map<string, string[]> {
       continue;
     }
 
-    for (const name of readExportedNames(abs)) {
+    for (const name of cachedExportedNames(abs)) {
       const specs = index.get(name) ?? [];
 
       if (!specs.includes(spec)) {

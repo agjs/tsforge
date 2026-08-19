@@ -101,7 +101,7 @@ function writeGuardLines(
   typeErrors: readonly ITsDiagnostic[],
   lintProblems: readonly IFileLintProblem[]
 ): string {
-  let text = "";
+  let text: string;
 
   try {
     text = readFileSync(absPath, "utf8");
@@ -109,11 +109,36 @@ function writeGuardLines(
     text = "";
   }
 
-  const lineOf = (offset: number): number =>
-    text.slice(0, offset).split("\n").length;
-  // Slice to the backstop BEFORE mapping: lineOf does O(offset) string work per
-  // diag, so mapping past the ceiling in a degenerate cascade would be wasteful.
-  // Output is identical to map-all-then-slice (type errors fill the budget first).
+  // One pass over the text builds the line-start offsets; each diag then maps
+  // via binary search. The old `text.slice(0, offset).split("\n")` per diag was
+  // O(offset) string churn — ~10MB of copies for 200 diags in a 5k-line file.
+  const lineStarts: number[] = [0];
+
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charCodeAt(i) === 10) {
+      lineStarts.push(i + 1);
+    }
+  }
+
+  const lineOf = (offset: number): number => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+
+      if ((lineStarts[mid] ?? 0) <= offset) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    return lo + 1;
+  };
+
+  // Slice to the backstop BEFORE mapping. Output is identical to
+  // map-all-then-slice (type errors fill the budget first).
   const total = typeErrors.length + lintProblems.length;
   const capped = typeErrors.slice(0, MAX_WRITE_GUARD_DIAGS);
   // Build the project export index ONLY if a `Cannot find name` (TS2304) is among

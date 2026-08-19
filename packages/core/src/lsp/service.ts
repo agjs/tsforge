@@ -462,8 +462,19 @@ export class TsService {
     }
 
     const out: { file: string; errors: ITsDiagnostic[] }[] = [];
+    // Each dependent costs a FULL synchronous semantic pass; a hub module can
+    // have dozens. Cap the sweep generously — a change that breaks more than
+    // this many files is already unmistakably a blast-radius problem, and the
+    // guard's message only names the first few anyway.
+    const MAX_DEPENDANTS_CHECKED = 12;
+    let checked = 0;
 
     for (const dep of deps) {
+      if (checked >= MAX_DEPENDANTS_CHECKED) {
+        break;
+      }
+
+      checked += 1;
       this.refresh(dep);
 
       const errors = this.diagnostics(dep).filter(

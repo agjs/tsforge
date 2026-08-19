@@ -36,14 +36,21 @@ export interface IAutoFixSummary {
   summary: string[];
 }
 
-/** Snapshot mtime + content (when comparable) of the editable scope. */
+/** Files read concurrently per batch — bounded so a whole-repo scope doesn't
+ *  open thousands of fds at once. */
+const SNAPSHOT_CONCURRENCY = 32;
+
+/** Snapshot mtime + content (when comparable) of the editable scope. Reads run
+ *  in bounded parallel batches — the serial version awaited every file in turn,
+ *  twice per settle over the whole repo in the REPL's default `**\/*` scope. */
 export async function snapshotFixState(
   cwd: string,
   files: readonly string[]
 ): Promise<Map<string, IFixFileState>> {
   const out = new Map<string, IFixFileState>();
+  const resolved = await resolveScopeFiles(cwd, [...files]);
 
-  for (const f of await resolveScopeFiles(cwd, [...files])) {
+  const snapOne = async (f: string): Promise<void> => {
     try {
       const handle = Bun.file(join(cwd, f));
       const state: IFixFileState = { mtime: handle.lastModified };
@@ -57,6 +64,10 @@ export async function snapshotFixState(
       // ignore — a file that can't be stat'd/read just isn't tracked
       trace("snapshotFixState", err);
     }
+  };
+
+  for (let i = 0; i < resolved.length; i += SNAPSHOT_CONCURRENCY) {
+    await Promise.all(resolved.slice(i, i + SNAPSHOT_CONCURRENCY).map(snapOne));
   }
 
   return out;
