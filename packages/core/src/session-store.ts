@@ -313,8 +313,10 @@ const CONNECTION_PASSWORD = /(:\/\/[^\s:/@]*:)[^\s:/@]+(@)/g;
 // `<key>: <value>` / `<key> = <value>` where the key NAME contains a secret word.
 // The value is only redacted when it actually looks like a secret (see
 // valueLooksSecret) — so `password: string` (a type annotation) survives.
+// `[:=](?!=)`: an assignment/pair separator, never the first char of a
+// comparison — `opts.onToken === undefined` is code, not a secret binding.
 const SECRET_KEYWORD =
-  /\b([\w.]*(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|private[_-]?key)[\w.]*)(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;{}()]+)/gi;
+  /\b([\w.]*(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|private[_-]?key)[\w.]*)([ \t]*["']?[ \t]*[:=](?!=)[ \t]*)("[^"]*"|'[^']*'|[^\s,;{}()]+)/gi;
 
 // Standalone secret SHAPES — the whole match is the secret, replaced wholesale.
 const SECRET_SHAPES: readonly RegExp[] = [
@@ -369,12 +371,14 @@ function valueLooksSecret(value: string): boolean {
     return false;
   }
 
-  // A bare literal: secret-looking if it mixes letters and digits (the classic
-  // credential shape) or is long. Short identifiers (`string`, `getInput`) and
-  // plain words survive; `hunter2xyz9` and 16+-char blobs do not.
+  // A bare literal: secret-looking if it carries symbols beyond identifier
+  // chars, or mixes letters and digits (the classic credential shape). A pure
+  // camelCase identifier of ANY length is code — `parseCachedPromptTokens`
+  // assigned to a `…Tokens` variable is not a secret (a length-only arm
+  // redacted exactly that).
   return (
-    (/[A-Za-z]/.test(value) && /[0-9]/.test(value) && value.length >= 8) ||
-    value.length >= 16
+    /[^A-Za-z0-9_-]/.test(value) ||
+    (/[0-9]/.test(value) && /[A-Za-z]/.test(value) && value.length >= 8)
   );
 }
 

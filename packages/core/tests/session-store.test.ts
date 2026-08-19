@@ -407,11 +407,13 @@ test("redactText round-trips real code unchanged (property over repo sources)", 
   let checked = 0;
 
   for (const dir of dirs) {
-    const files = (await readdir(join(import.meta.dir, "..", dir))).filter(
-      (f) => f.endsWith(".ts")
-    );
+    // ALL files, sorted: an unsorted 8-file slice let readdir order decide
+    // coverage — CI sampled a file local runs missed.
+    const files = (await readdir(join(import.meta.dir, "..", dir)))
+      .filter((f) => f.endsWith(".ts"))
+      .sort();
 
-    for (const f of files.slice(0, 8)) {
+    for (const f of files) {
       const src = await readFile(join(import.meta.dir, "..", dir, f), "utf8");
 
       expect(redactText(src)).toBe(src);
