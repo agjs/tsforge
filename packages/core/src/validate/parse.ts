@@ -2,6 +2,11 @@ import type { IErrorItem, ErrorParserFn } from "./validate.types";
 import { isArray, isRecord } from "../lib/guards";
 
 const TSC = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/;
+/** File-less tsc diagnostics — config/project-level errors like TS18003
+ *  ("No inputs were found"). They carry no `file(line,col):` prefix, so the
+ *  main TSC regex drops them; in mixed output they'd vanish entirely (the
+ *  generic fallback only covers a ZERO-parse result). */
+const TSC_GLOBAL = /^error (TS\d+): (.+)$/;
 const GENERIC_CAP = 500;
 
 /** Bound raw output without hiding that more text exists. */
@@ -19,6 +24,16 @@ export function parseTsc(output: string): IErrorItem[] {
     const m = TSC.exec(line);
 
     if (!m) {
+      const g = TSC_GLOBAL.exec(line);
+
+      if (g?.[1] !== undefined && g[2] !== undefined) {
+        items.push({
+          key: `tsc:${g[1]}`,
+          rule: g[1],
+          message: g[2].trim(),
+        });
+      }
+
       continue;
     }
 
@@ -165,49 +180,136 @@ function eslintFileItems(file: unknown): IErrorItem[] {
  */
 export function parseTestFailures(output: string): IErrorItem[] {
   const items: IErrorItem[] = [];
-  let file = "";
+  let bunFileCtx = "";
+  // Vitest's DEFAULT reporter file context (`❯ file (N tests | M failed)`) —
+  // tracked separately from the bun `file:` context so a stray `×` glyph in
+  // arbitrary output can't parse as a failure without a preceding file line.
+  const vitest: IVitestCtx = { file: "", failedCount: 0, namedFails: 0 };
 
   for (const line of output.split("\n")) {
     const bunFile = /^\s*(.+?\.(?:test|spec)\.[cm]?[jt]sx?):\s*$/u.exec(line);
 
     if (bunFile?.[1] !== undefined) {
-      file = bunFile[1];
+      bunFileCtx = bunFile[1];
       continue;
     }
 
-    const fail = /^\s*\(fail\)\s+(.+)$/u.exec(line);
-
-    if (fail?.[1] !== undefined) {
-      const title = fail[1].trim();
-      const key = file.length > 0 ? `${file}:${title}` : title;
-
-      items.push({
-        key,
-        ...(file.length > 0 ? { file } : {}),
-        rule: "bun-test",
-        message: title,
-      });
+    if (parseBunFailLine(line, bunFileCtx, items)) {
       continue;
     }
 
-    const vitestFail =
-      /^\s*FAIL\s+(.+?\.(?:test|spec)\.[cm]?[jt]sx?)\s*(.*)$/u.exec(line);
-
-    if (vitestFail?.[1] !== undefined) {
-      const f = vitestFail[1];
-      const rest = (vitestFail[2] ?? "").trim();
-      const message = rest.length > 0 ? rest : "test failed";
-
-      items.push({
-        key: `${f}:${message}`,
-        file: f,
-        rule: "vitest",
-        message,
-      });
+    if (parseVitestLine(line, vitest, items)) {
+      continue;
     }
+
+    parseVitestVerboseFail(line, items);
   }
 
+  flushUnnamedVitestFails(items, vitest);
+
   return items;
+}
+
+interface IVitestCtx {
+  file: string;
+  failedCount: number;
+  namedFails: number;
+}
+
+/** A bun `(fail) title` row, keyed under the current `file:` context. */
+function parseBunFailLine(
+  line: string,
+  file: string,
+  items: IErrorItem[]
+): boolean {
+  const fail = /^\s*\(fail\)\s+(.+)$/u.exec(line);
+
+  if (fail?.[1] === undefined) {
+    return false;
+  }
+
+  const title = fail[1].trim();
+  const key = file.length > 0 ? `${file}:${title}` : title;
+
+  items.push({
+    key,
+    ...(file.length > 0 ? { file } : {}),
+    rule: "bun-test",
+    message: title,
+  });
+
+  return true;
+}
+
+/** Vitest default reporter: a `❯ file (N tests | M failed)` header opens a file
+ *  context (a no-`failed` header closes it — all its tests passed); an `×` case
+ *  line inside a context is one failure. */
+function parseVitestLine(
+  line: string,
+  ctx: IVitestCtx,
+  items: IErrorItem[]
+): boolean {
+  const header =
+    /^\s*[❯✗✖]?\s*(.+?\.(?:test|spec)\.[cm]?[jt]sx?)\s+\((\d+) tests?(?:\s*\|\s*(\d+) failed)?\)/u.exec(
+      line
+    );
+
+  if (header?.[1] !== undefined) {
+    flushUnnamedVitestFails(items, ctx);
+    ctx.file = header[1];
+    ctx.failedCount = Number(header[3] ?? "0");
+    ctx.namedFails = 0;
+
+    return true;
+  }
+
+  const failCase = /^\s*[×✕]\s+(.+)$/u.exec(line);
+
+  if (failCase?.[1] !== undefined && ctx.file.length > 0) {
+    const title = failCase[1].trim();
+
+    items.push({
+      key: `${ctx.file}:${title}`,
+      file: ctx.file,
+      rule: "vitest",
+      message: title,
+    });
+    ctx.namedFails += 1;
+
+    return true;
+  }
+
+  return false;
+}
+
+/** The jest/CI-reporter shape: `FAIL src/x.test.ts <reason>`. */
+function parseVitestVerboseFail(line: string, items: IErrorItem[]): void {
+  const vitestFail =
+    /^\s*FAIL\s+(.+?\.(?:test|spec)\.[cm]?[jt]sx?)\s*(.*)$/u.exec(line);
+
+  if (vitestFail?.[1] === undefined) {
+    return;
+  }
+
+  const f = vitestFail[1];
+  const rest = (vitestFail[2] ?? "").trim();
+  const message = rest.length > 0 ? rest : "test failed";
+
+  items.push({ key: `${f}:${message}`, file: f, rule: "vitest", message });
+}
+
+/** When a vitest `❯ file (N tests | M failed)` header reported failures but no
+ *  `×` lines followed (a reporter variant, or the titles were filtered), emit
+ *  one summary item — a failed file must never parse to ZERO errors. */
+function flushUnnamedVitestFails(items: IErrorItem[], ctx: IVitestCtx): void {
+  if (ctx.file.length > 0 && ctx.failedCount > 0 && ctx.namedFails === 0) {
+    items.push({
+      key: `${ctx.file}:failed`,
+      file: ctx.file,
+      rule: "vitest",
+      message: `${String(ctx.failedCount)} test(s) failed`,
+    });
+  }
 }
 
 export function combinedParser(output: string): IErrorItem[] {

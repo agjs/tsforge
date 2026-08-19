@@ -1,5 +1,5 @@
 import type { ITask } from "../spec/spec.types";
-import { validate } from "../validate";
+import { validate, fallbackMessage } from "../validate";
 import type { ErrorParser, IValidateResult } from "../validate";
 
 /** Per-run hooks a gate/stage forwards to the underlying command runner. */
@@ -44,9 +44,19 @@ export function composeGate(stages: IStage[]): IGate {
         outputs.push(r.output);
 
         if (!r.passed) {
+          // INVARIANT: a red result carries ≥1 error (same guarantee validate
+          // gives its command path). turn.ts treats errors.length === 0 as
+          // green for the near-green window, so a stage returning
+          // {passed:false, errors:[]} would report "red (0 error(s))" AND
+          // silently clear near-green tracking.
+          const errors =
+            r.errors.length > 0
+              ? r.errors
+              : [{ key: "nonzero", message: fallbackMessage(r.output) }];
+
           return {
             passed: false,
-            errors: r.errors,
+            errors,
             output: outputs.join("\n"),
           };
         }

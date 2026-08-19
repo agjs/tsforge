@@ -53,6 +53,25 @@ describe("composeGate", () => {
 
     expect(r.passed).toBe(true);
   });
+
+  test("a red stage with ZERO errors gets a fallback error (never red-with-empty)", async () => {
+    // turn.ts treats errors.length === 0 as green for the near-green window, so
+    // {passed:false, errors:[]} would report "red (0 error(s))" and clear it.
+    const emptyRed: IStage = {
+      run: async () => ({ passed: false, errors: [], output: "boom output" }),
+    };
+    const r = await composeGate([emptyRed]).run("/tmp");
+
+    expect(r.passed).toBe(false);
+    expect(r.errors.length).toBe(1);
+    expect(r.errors[0]?.message).toContain("boom output");
+  });
+
+  test("a red stage with real errors passes them through untouched", async () => {
+    const r = await composeGate([redWith(["x", "y"])]).run("/tmp");
+
+    expect(r.errors.map((e) => e.key)).toEqual(["x", "y"]);
+  });
 });
 
 describe("differentialStage", () => {

@@ -165,3 +165,43 @@ describe("parseTestFailures / parserFor", () => {
     expect(items[0]?.message ?? "").not.toContain("2 pass");
   });
 });
+
+describe("parseTestFailures — vitest default reporter", () => {
+  const VITEST_DEFAULT = [
+    " ❯ src/foo.test.ts (3 tests | 1 failed) 12ms",
+    "   ✓ accepts valid input",
+    "   × rejects empty input",
+    "   ✓ trims whitespace",
+    " ❯ src/bar.test.ts (2 tests) 4ms",
+    "",
+    " Test Files  1 failed | 1 passed (2)",
+  ].join("\n");
+
+  test("extracts the failing case under its ❯ file context", () => {
+    const items = parseTestFailures(VITEST_DEFAULT);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.file).toBe("src/foo.test.ts");
+    expect(items[0]?.rule).toBe("vitest");
+    expect(items[0]?.message).toBe("rejects empty input");
+  });
+
+  test("an all-passing ❯ block parses to zero errors", () => {
+    const items = parseTestFailures(" ❯ src/bar.test.ts (2 tests) 4ms\n");
+
+    expect(items).toHaveLength(0);
+  });
+
+  test("a failed header with NO × lines still yields a summary item (never zero for a failed file)", () => {
+    const items = parseTestFailures(
+      " ❯ src/foo.test.ts (3 tests | 2 failed) 12ms\n"
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.message).toContain("2 test(s) failed");
+  });
+
+  test("a stray × glyph with NO file context does not parse as a failure", () => {
+    expect(parseTestFailures("  × not a test line\n")).toHaveLength(0);
+  });
+});

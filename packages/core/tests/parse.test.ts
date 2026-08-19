@@ -233,3 +233,17 @@ test("fallbackMessage degrades to a fixed string when nothing human-readable rem
   expect(fallbackMessage(onlyJson)).toBe("command exited non-zero");
   expect(fallbackMessage("   \n  ")).toBe("command exited non-zero");
 });
+
+test("parseTsc surfaces file-less diagnostics like TS18003 (config-level errors)", () => {
+  const out = [
+    "error TS18003: No inputs were found in config file '/repo/tsconfig.json'.",
+    "src/a.ts(3,1): error TS2322: Type 'string' is not assignable to type 'number'.",
+  ].join("\n");
+  const items = parseTsc(out);
+
+  expect(items).toHaveLength(2);
+  expect(items.some((e) => e.key === "tsc:TS18003")).toBe(true);
+  expect(items.find((e) => e.key === "tsc:TS18003")?.message).toContain(
+    "No inputs were found"
+  );
+});
