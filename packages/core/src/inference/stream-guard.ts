@@ -33,8 +33,14 @@ const PREFIX_WORDS = 4;
  *  the stream, is a loop — long lines don't recur exactly in real prose/code. */
 const LONG_LINE_LEN = 20;
 /** Was 5 — local models often stutter the same "Let me check…" line 3–4 times
- *  before a tool call; trip earlier so the CLI doesn't paint a wall of repeats. */
+ *  before a tool call; trip earlier so the CLI doesn't paint a wall of repeats.
+ *  Applies to the REASONING channel, where the stutter lives. */
 const GLOBAL_REPEAT_LIMIT = 3;
+/** The CONTENT channel gets more headroom: a real answer legitimately repeats a
+ *  line (quote it, show it fixed, mention it in the summary) without looping —
+ *  at 3, normal answers were aborted as degenerate. Code inside fences is
+ *  exempted entirely below; this bound covers repeated PROSE lines. */
+const CONTENT_REPEAT_LIMIT = 5;
 
 /** Markers that the model has started emitting STRUCTURED tool calls into the
  *  content channel — a server tool-call-parser mismatch (e.g. atlas-spark's
@@ -64,6 +70,12 @@ export class StreamGuard {
   /** Set once tool-call markup leaks into the content channel — thereafter the
    *  prose-loop guard stands down for content (see TOOL_MARKUP_RE). */
   private contentIsToolMarkup = false;
+  /** True while the content channel is inside a ``` fence. Fenced CODE
+   *  legitimately repeats lines (imports, `return null;`, table rows) that the
+   *  prose thresholds would abort as degenerate — a real answer containing a
+   *  code block must not be killed mid-stream. Fenced lines are drained but
+   *  never counted. Reasoning is unaffected (its loops are prose stutter). */
+  private contentFenceOpen = false;
 
   /** Feed a streamed token; returns true once the channel has degenerated. Only
    *  the prose channels are watched — tool-call output is structured, not a loop
@@ -94,40 +106,62 @@ export class StreamGuard {
     }
 
     for (const segment of segments) {
-      const trimmed = segment.trim();
-
-      if (trimmed.length < MIN_LINE_LEN) {
-        continue;
-      }
-
-      // Period-agnostic: a long line repeated many times anywhere in the stream
-      // is a loop even when the repeating BLOCK is larger than WINDOW (which the
-      // sliding-window checks below would miss).
-      if (trimmed.length >= LONG_LINE_LEN) {
-        const counts = this.counts[channel];
-        const seen = (counts.get(trimmed) ?? 0) + 1;
-
-        counts.set(trimmed, seen);
-
-        if (seen >= GLOBAL_REPEAT_LIMIT) {
-          return true;
-        }
-      }
-
-      const window = this.lines[channel];
-
-      window.push(trimmed);
-
-      if (window.length > WINDOW) {
-        window.shift();
-      }
-
-      if (window.length === WINDOW && isRepetitive(window)) {
+      if (this.lineDegenerates(segment.trim(), channel)) {
         return true;
       }
     }
 
     return false;
+  }
+
+  /** One completed line's contribution to the loop checks. Fence markers toggle
+   *  the content fence; fenced content lines are drained but never counted. */
+  private lineDegenerates(trimmed: string, channel: ProseChannel): boolean {
+    if (channel === "content" && trimmed.startsWith("```")) {
+      this.contentFenceOpen = !this.contentFenceOpen;
+
+      return false;
+    }
+
+    if (channel === "content" && this.contentFenceOpen) {
+      return false;
+    }
+
+    if (trimmed.length < MIN_LINE_LEN) {
+      return false;
+    }
+
+    // Period-agnostic: a long line repeated many times anywhere in the stream
+    // is a loop even when the repeating BLOCK is larger than WINDOW (which the
+    // sliding-window checks below would miss).
+    if (
+      trimmed.length >= LONG_LINE_LEN &&
+      this.longLineLooped(trimmed, channel)
+    ) {
+      return true;
+    }
+
+    const window = this.lines[channel];
+
+    window.push(trimmed);
+
+    if (window.length > WINDOW) {
+      window.shift();
+    }
+
+    return window.length === WINDOW && isRepetitive(window);
+  }
+
+  /** The whole-stream exact-repeat counter for substantial lines. */
+  private longLineLooped(trimmed: string, channel: ProseChannel): boolean {
+    const counts = this.counts[channel];
+    const seen = (counts.get(trimmed) ?? 0) + 1;
+    const limit =
+      channel === "content" ? CONTENT_REPEAT_LIMIT : GLOBAL_REPEAT_LIMIT;
+
+    counts.set(trimmed, seen);
+
+    return seen >= limit;
   }
 }
 
