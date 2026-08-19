@@ -919,9 +919,16 @@ function systemPrompt(
  *  from an external provider (network-variable, fail-soft to absent). Neither
  *  affects which tools/flags the prompt advertises. */
 function stableSystemKey(content: string): string {
-  return content
-    .replace(/<project-decisions>[\s\S]*?<\/project-decisions>\s*/u, "")
-    .replace(/^Map built .*$/mu, "");
+  return (
+    content
+      .replace(/<project-decisions>[\s\S]*?<\/project-decisions>\s*/u, "")
+      .replace(/^Map built .*$/mu, "")
+      // The delegation roster is INSERTED before the task contract (guide()),
+      // not appended — so it breaks the prefix relation between the persisted
+      // prompt (which has it) and a fresh rebuild (which doesn't yet; it
+      // re-ensures itself after resume). Idempotent by marker either way.
+      .replace(/DELEGATION:[\s\S]*?(?:\n+(?=## )|$)/u, "")
+  );
 }
 
 /** Build the initial message list. A FRESH session gets one freshly-built system
