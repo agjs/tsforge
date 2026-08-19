@@ -1,4 +1,5 @@
 import { isRecord } from "../lib/guards";
+import { isHarnessGovernedPath } from "../lib/scope";
 import {
   codeBodyIsDangerous,
   commandReadsPrivateKey,
@@ -299,6 +300,23 @@ function criticalDeny(
     return {
       reason: `private-key file access blocked: ${preview(action.command)}`,
       rule: "critical:private-key-read",
+    };
+  }
+
+  // A write to a harness-governed file (tsforge.config.* / .tsforge/**) is a
+  // PERSISTENT escalation — the config carries policy.rules, so editing it now
+  // relaxes the policy on the next session. `writable()` already blocks the
+  // edit tools + shell redirects; this is the policy-layer belt-and-suspenders,
+  // enforced in EVERY mode (incl. bypassPermissions).
+  const governed =
+    WRITE_KINDS.has(action.kind) && action.paths !== undefined
+      ? action.paths.find((p) => isHarnessGovernedPath(p))
+      : undefined;
+
+  if (governed !== undefined) {
+    return {
+      reason: `write to a harness-governed file blocked (policy/gate config is not model-editable): ${governed}`,
+      rule: "critical:governed-config-write",
     };
   }
 

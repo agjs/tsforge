@@ -54,6 +54,20 @@ export function insideWorkspace(file: string): boolean {
   return !segments.includes("..");
 }
 
+/** The workspace-relative paths that govern the harness and must never be
+ *  model-writable: the policy/gate config (which carries `policy.rules`) and
+ *  the `.tsforge/` state dir. Matched on the normalized, workspace-relative
+ *  form (so `./tsforge.config.json` and nested `.tsforge/x` both catch). */
+export function isHarnessGovernedPath(file: string): boolean {
+  const norm = file.replace(/^\.\//u, "");
+
+  return (
+    /^tsforge\.config\.jsonc?$/u.test(norm) ||
+    norm === ".tsforge" ||
+    norm.startsWith(".tsforge/")
+  );
+}
+
 /** A file the model may write: its editable scope, OR a throwaway scratch file.
  *  A path that escapes the workspace (`../…`) or is absolute is NEVER writable —
  *  a recursive glob would otherwise match a traversal path. Normalize with
@@ -66,6 +80,17 @@ export function insideWorkspace(file: string): boolean {
  *  a file even under a scope as broad as `["**\/*"]`. */
 export function writable(file: string, patterns: string[]): boolean {
   if (!insideWorkspace(file)) {
+    return false;
+  }
+
+  // The model must never edit the files that govern it: the policy/gate config
+  // and the harness's own state dir. tsforge.config.json carries `policy.rules`
+  // (a config `allow` overrides the mode default), so a self-edit here is a
+  // PERSISTENT privilege escalation that takes effect on the next session/
+  // --continue. Blocked in EVERY scope, ahead of the in-scope check, so even a
+  // `**/*` scope can't reach them. The harness writes .tsforge itself via direct
+  // fs (not the model's tools), so nothing legitimate is lost.
+  if (isHarnessGovernedPath(file)) {
     return false;
   }
 

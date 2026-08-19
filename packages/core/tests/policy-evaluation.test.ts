@@ -842,3 +842,37 @@ describe("mcp_tool in tightened modes (B8)", () => {
     expect(evaluatePolicy(mcp, withSrv("default")).decision).toBe("allow");
   });
 });
+
+// ── B7: harness-governed config is never model-writable ──────────────────────
+describe("harness-governed config write block (B7)", () => {
+  function write(file: string): IProposedAction {
+    return classifyAction(
+      { id: "1", name: "create", arguments: { file, content: "x" } },
+      CWD
+    );
+  }
+
+  test("writing tsforge.config.json is a critical deny in EVERY mode", () => {
+    for (const mode of [
+      "default",
+      "acceptEdits",
+      "ci",
+      "dontAsk",
+      "bypassPermissions",
+    ] as const) {
+      const v = evaluatePolicy(write("tsforge.config.json"), ctx(mode));
+
+      expect(v.decision).toBe("deny");
+      expect(v.matchedRules).toContain("critical:governed-config-write");
+    }
+  });
+
+  test("writing under .tsforge/ is blocked; ordinary source is not", () => {
+    expect(
+      evaluatePolicy(write(".tsforge/rules.json"), ctx("default")).decision
+    ).toBe("deny");
+    expect(evaluatePolicy(write("src/app.ts"), ctx("default")).decision).toBe(
+      "allow"
+    );
+  });
+});
