@@ -88,6 +88,10 @@ const FORGE_PLACEHOLDER = "describe a task, or /help";
 const GUTTER = "│";
 /** Paint rate cap while streaming (~60fps) — see queueMainPaint. */
 const MAIN_PAINT_MIN_INTERVAL_MS = 16;
+/** Quiet time after the last machine frame before the caret re-shows. Must
+ *  exceed the 120ms status tick — at or below it, shows leak through between
+ *  ticks and the caret still flickers during a busy turn. */
+const CURSOR_SHOW_DELAY_MS = 250;
 /** Fallback when no worklist lines are set — mirrors formatWorklistLines empty. */
 const EMPTY_PANEL_LINES = ["approve a plan", "to fill this list"] as const;
 
@@ -126,6 +130,11 @@ export class PaneScreen {
   private pendingMainPaint = false;
   private mainPaintTimer: ReturnType<typeof setTimeout> | null = null;
   private lastMainPaintAt = 0;
+  /** Caret is hidden by a machine-driven frame; a debounced SHOW restores it
+   *  once frames go quiet. A SHOW per frame made the caret strobe in step
+   *  with rendering (~7×/s measured during streaming). */
+  private cursorHidden = false;
+  private cursorShowTimer: ReturnType<typeof setTimeout> | null = null;
   private bodyViewportRows = 1;
   private entered = false;
   /** True after a successful enter — resize may re-enter after a shrink-leave. */
@@ -208,6 +217,7 @@ export class PaneScreen {
     }
 
     this.stopBusyTimer();
+    this.cancelCursorShow();
 
     if (this.mainPaintTimer !== null) {
       clearTimeout(this.mainPaintTimer);
@@ -581,6 +591,38 @@ export class PaneScreen {
     this.paint();
   }
 
+  /**
+   * Restore the caret ~120ms after machine frames go quiet. During a stream
+   * the caret stays hidden (calm) instead of strobing once per frame; between
+   * bursts and at turn end it reappears at the input row. Typing bypasses
+   * this — paintInputOnly shows instantly.
+   */
+  private scheduleCursorShow(): void {
+    this.cursorHidden = true;
+
+    if (this.cursorShowTimer !== null) {
+      clearTimeout(this.cursorShowTimer);
+    }
+
+    this.cursorShowTimer = setTimeout(() => {
+      this.cursorShowTimer = null;
+
+      if (this.entered && this.cursorHidden) {
+        this.cursorHidden = false;
+        this.out.write(BEGIN_SYNC + SHOW_CURSOR + END_SYNC);
+      }
+    }, CURSOR_SHOW_DELAY_MS);
+  }
+
+  private cancelCursorShow(): void {
+    if (this.cursorShowTimer !== null) {
+      clearTimeout(this.cursorShowTimer);
+      this.cursorShowTimer = null;
+    }
+
+    this.cursorHidden = false;
+  }
+
   /** Patch just the top-strip rows (mirrors paintInputOnly). */
   private paintTopOnly(
     layout: ReturnType<typeof computeLayout>,
@@ -632,7 +674,7 @@ export class PaneScreen {
       BEGIN_SYNC +
       HIDE_CURSOR +
       dirty +
-      this.cursor.move(cursorRow, cursorCol) +
+      this.cursor.placeOnly(cursorRow, cursorCol) +
       END_SYNC;
 
     if (PERF_ENABLED) {
@@ -641,6 +683,7 @@ export class PaneScreen {
     }
 
     this.out.write(frame);
+    this.scheduleCursorShow();
   }
 
   setOverlay(lines: readonly string[]): void {
@@ -826,10 +869,11 @@ export class PaneScreen {
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     if (dirty.length > 0) {
-      // Row writes physically moved the cursor — force the re-home CUP, and
-      // hide the caret while rows paint so terminals without synchronized-
-      // output support never show it teleporting through the band.
+      // Typing hot path: row writes moved the cursor — force the re-home and
+      // SHOW instantly (the user is watching the caret), hiding it only for
+      // the duration of the band rewrite.
       this.cursor.reset();
+      this.cancelCursorShow();
       this.out.write(
         BEGIN_SYNC +
           HIDE_CURSOR +
@@ -848,6 +892,7 @@ export class PaneScreen {
     const cursorBytes = this.cursor.move(cursorRow, cursorCol);
 
     if (cursorBytes.length > 0) {
+      this.cancelCursorShow();
       this.out.write(BEGIN_SYNC + cursorBytes + END_SYNC);
     }
   }
@@ -923,7 +968,7 @@ export class PaneScreen {
       BEGIN_SYNC +
       HIDE_CURSOR +
       dirty +
-      this.cursor.move(cursorRow, cursorCol) +
+      this.cursor.placeOnly(cursorRow, cursorCol) +
       END_SYNC;
 
     if (PERF_ENABLED) {
@@ -931,6 +976,7 @@ export class PaneScreen {
     }
 
     this.out.write(frame);
+    this.scheduleCursorShow();
   }
 
   /** Patch main-body terminal rows in `screen`; returns CSI dirty bytes. */
@@ -1495,7 +1541,7 @@ export class PaneScreen {
     // on the footer. Pure no-op paints (no dirty) write nothing.
     if (dirty.length > 0) {
       this.cursor.reset();
-      const cursorBytes = this.cursor.move(cursorRow, cursorCol);
+      const cursorBytes = this.cursor.placeOnly(cursorRow, cursorCol);
       const frame = BEGIN_SYNC + HIDE_CURSOR + dirty + cursorBytes + END_SYNC;
 
       if (PERF_ENABLED) {
@@ -1503,6 +1549,7 @@ export class PaneScreen {
       }
 
       this.out.write(frame);
+      this.scheduleCursorShow();
     }
 
     this.prevLines = screen;
@@ -1521,6 +1568,7 @@ export class PaneScreen {
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
+    this.cancelCursorShow();
     this.out.write(
       BEGIN_SYNC + this.cursor.move(cursorRow, cursorCol) + END_SYNC
     );

@@ -1608,22 +1608,49 @@ describe("cursor blink hygiene", () => {
     expect(term.writes.length).toBe(before);
   });
 
-  test("row-painting frames hide the caret while rows write, then re-show", () => {
+  test("streaming frames hide the caret; ONE deferred show after quiet", async () => {
     const term = new CursorTerm();
     const panes = new PaneScreen(term, 40, 120);
 
     panes.enter();
-    panes.appendMain("streamed line\n");
-    panes.flushPendingPaint();
 
+    for (let i = 0; i < 5; i += 1) {
+      panes.appendMain(`streamed line ${String(i)}\n`);
+      panes.flushPendingPaint();
+    }
+
+    // Every machine frame hides; NONE re-shows inline — a SHOW per frame made
+    // the caret strobe in step with rendering (~7×/s measured).
+    const frames = term.writes.filter((w) => w.includes("\x1b[?25l"));
+
+    expect(frames.length).toBeGreaterThanOrEqual(5);
+    expect(frames.every((w) => !w.includes("\x1b[?25h"))).toBe(true);
+
+    // After the stream goes quiet, exactly one debounced SHOW restores it.
+    const before = term.writes.length;
+
+    await new Promise((resolve) => setTimeout(resolve, 330));
+
+    const tail = term.writes.slice(before).join("");
+
+    expect(tail).toContain("\x1b[?25h");
+    expect(term.writes.length).toBe(before + 1);
+  });
+
+  test("typing shows the caret instantly even mid-stream", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.appendMain("streaming…");
+    panes.flushPendingPaint(); // caret now hidden, show deferred
+
+    panes.setInput({ lines: ["h"], cursorRow: 0, cursorCol: 1 });
+
+    // The input repaint ends with an immediate SHOW — typing never waits on
+    // the machine-frame debounce.
     const frame = term.writes.at(-1) ?? "";
-    const hide = frame.indexOf("\x1b[?25l");
-    const show = frame.lastIndexOf("\x1b[?25h");
 
-    // Hidden before the row writes, shown after the final re-home — so a
-    // terminal without synchronized-output support never renders the caret
-    // teleporting through the painted rows.
-    expect(hide).toBeGreaterThan(-1);
-    expect(show).toBeGreaterThan(hide);
+    expect(frame).toContain("\x1b[?25h");
   });
 });
