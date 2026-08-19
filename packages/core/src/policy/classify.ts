@@ -25,12 +25,14 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // `script` runs a program that can call other tools — classify as shell so the
   // policy treats it like `run` (its stub calls are each re-classified on dispatch).
   [TOOL_NAME.script]: "shell",
-  // `check` (WS-G) runs the acceptance gate on demand (bun/eslint/tsc + meta-rules)
-  // — command execution with side effects, exactly like `run`/`script`, so it's
-  // `shell`: allowed in the build's default mode, and plan mode still blocks it via
-  // executeTool's non-read-only hard guard. WITHOUT this it classifies `unknown` →
-  // deny, and every check call dies before doCheck (the spawn_agent/script regression).
-  [TOOL_NAME.check]: "shell",
+  // `check` (WS-G) runs the FROZEN gate command and ignores its args entirely
+  // (doCheck takes `_args`), so it has ZERO model-chosen input — classifying it
+  // `shell` conflated "spawns a process" with "model wrote the command line" and
+  // got it DENIED in ci/dontAsk (and ask→deny in non-interactive acceptEdits),
+  // killing every check call in exactly the unattended runs that need it. It is a
+  // `harness_tool`: allowed everywhere except plan, where executeTool's
+  // non-read-only hard guard still blocks it.
+  [TOOL_NAME.check]: "harness_tool",
   // `ask_user` (WS-C1) asks the human a question and mutates nothing → zero-risk,
   // classified `read_file` so it's allowed in every mode (incl. plan). Absent here it
   // would classify `unknown` → deny before the handler runs (the check/script DOA class).

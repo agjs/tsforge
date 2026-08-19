@@ -47,9 +47,9 @@ describe("classifyAction", () => {
       ["move_file", "write_file"],
       ["run", "shell"],
       ["add_dependency", "shell"],
-      // WS-G: check runs the gate (bun/eslint/tsc) — shell, NOT unknown. Absent from
-      // this table it classified `unknown` → non-interactive deny → every call DOA.
-      ["check", "shell"],
+      // check runs the FROZEN gate and ignores its args → harness_tool (zero
+      // model input), NOT shell. As shell it was denied in ci/dontAsk.
+      ["check", "harness_tool"],
       // WS-C1: ask_user mutates nothing — read_file (zero-risk), NOT unknown.
       ["ask_user", "read_file"],
       // pull_conventions is a pure read-only convention lookup — read_file, NOT unknown
@@ -788,5 +788,25 @@ describe("script body critical scan (B1)", () => {
     );
 
     expect(v.decision).toBe("allow");
+  });
+});
+
+// ── F2: the check tool is allowed in unattended modes, blocked only in plan ──
+describe("check tool policy (F2)", () => {
+  const checkAction = classifyAction(
+    { id: "1", name: "check", arguments: {} },
+    CWD
+  );
+
+  test("check is allowed in ci and dontAsk (was wrongly denied as shell)", () => {
+    expect(evaluatePolicy(checkAction, ctx("ci")).decision).toBe("allow");
+    expect(evaluatePolicy(checkAction, ctx("dontAsk")).decision).toBe("allow");
+    expect(evaluatePolicy(checkAction, ctx("acceptEdits")).decision).toBe(
+      "allow"
+    );
+  });
+
+  test("check is denied in plan (matrix), and executeTool's guard also blocks it", () => {
+    expect(evaluatePolicy(checkAction, ctx("plan")).decision).toBe("deny");
   });
 });
