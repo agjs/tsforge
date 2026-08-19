@@ -10,7 +10,7 @@
  * (scheduler unitReporter); the runner only tags its inner events with
  * agentId/parentTask so interleaved streams stay attributable.
  */
-import type { IProvider, IModelResponse } from "../inference";
+import type { IProvider, IModelResponse, TokenChannel } from "../inference";
 import type { TsService } from "../lsp";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import type { ILoopEvent, Reporter } from "../loop/loop.types";
@@ -994,9 +994,24 @@ export class AgentRunner {
     }
 
     let res: IModelResponse;
+    // Count tokens the FAILED attempt already streamed: the overflow retry used
+    // to re-send with the SAME onToken sink, so anything the first attempt had
+    // emitted appeared twice in the transcript. (Context-overflow errors are
+    // request-time rejections, so a non-zero count is rare — but honest.)
+    let firstAttemptTokens = 0;
+    const attemptOpts =
+      callOpts?.onToken === undefined
+        ? callOpts
+        : {
+            ...callOpts,
+            onToken: (text: string, channel: TokenChannel) => {
+              firstAttemptTokens += 1;
+              callOpts.onToken?.(text, channel);
+            },
+          };
 
     try {
-      res = await provider.complete(ctx.messages, callOpts);
+      res = await provider.complete(ctx.messages, attemptOpts);
     } catch (err) {
       if (
         opts.signal?.aborted === true ||
@@ -1004,6 +1019,16 @@ export class AgentRunner {
         ctx.messages.length <= 2
       ) {
         throw err;
+      }
+
+      if (firstAttemptTokens > 0) {
+        // No rewind exists in the event stream — mark the discard honestly so
+        // the transcript doesn't read as one seamless (duplicated) answer.
+        report({
+          kind: "tool",
+          task: `${opts.parentTaskId}:${this.spec.id}`,
+          message: "↯ discarding partial output — retrying after compaction",
+        });
       }
 
       await compact("recovering from a context-overflow");

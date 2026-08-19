@@ -137,6 +137,98 @@ function handleDegeneration(
   };
 }
 
+/** Degeneration (terminal stuck) or token-cap truncation (re-steer +
+ *  continue) — the aborted-stream shapes handled before tool execution.
+ *  Truncated calls were DROPPED at assembly (never executed with silently-
+ *  empty args); the resteer mirrors the Session's TRUNCATION_RESTEER. */
+function abortedTurnAction(args: {
+  res: IModelResponse;
+  ctx: ILoopCtx;
+  state: ILoopState;
+  messages: IChatMessage[];
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  historyMetaStreak: number;
+  turn: number;
+  turnStart: number;
+  taskStart: number;
+  report: Reporter;
+  taskId: string;
+}): {
+  action: "continue" | IRunResult;
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  historyMetaStreak: number;
+  forceWriteNext: boolean;
+} | null {
+  const looped = handleDegeneration(args.res, args.ctx, args.state, {
+    turn: args.turn,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
+  });
+
+  if (looped !== null) {
+    return {
+      action: looped,
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+      historyMetaStreak: args.historyMetaStreak,
+      forceWriteNext: false,
+    };
+  }
+
+  return args.res.truncated === true ? truncationContinue(args) : null;
+}
+
+/** Report + re-steer a token-cap truncation, then continue the loop. */
+function truncationContinue(args: {
+  report: Reporter;
+  taskId: string;
+  messages: IChatMessage[];
+  turn: number;
+  turnStart: number;
+  taskStart: number;
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  historyMetaStreak: number;
+}): {
+  action: "continue";
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  historyMetaStreak: number;
+  forceWriteNext: boolean;
+} {
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message:
+      "⚠ response hit the token cap mid-tool-call — dropped the partial call, re-steering to a smaller one",
+  });
+  args.messages.push({
+    role: "user",
+    content:
+      "Your tool call was CUT OFF by the response token limit — its arguments " +
+      "never arrived intact and it was NOT executed. Emit a smaller call now: " +
+      "write the file in smaller pieces (create the first part, then extend " +
+      "with edit), or split the work across multiple calls. No prose.",
+  });
+  emitTiming(
+    args.report,
+    args.taskId,
+    args.turn,
+    args.turnStart,
+    args.taskStart
+  );
+
+  return {
+    action: "continue",
+    readonlyStreak: args.readonlyStreak,
+    readonlyRecoveries: args.readonlyRecoveries,
+    historyMetaStreak: args.historyMetaStreak,
+    forceWriteNext: false,
+  };
+}
+
 // TTSR init + project/learned-rule loading live in the shared ttsr-init module
 // (the interactive session uses the same loaders). Re-exported here so existing
 // importers (and tests) keep their path.
@@ -667,21 +759,12 @@ async function handleModelResponse(args: {
     };
   }
 
-  // Degeneration check: terminal stuck
-  const looped = handleDegeneration(args.res, args.ctx, args.state, {
-    turn: args.turn,
-    turnStart: args.turnStart,
-    taskStart: args.taskStart,
-  });
+  // Aborted-stream shapes: degeneration (terminal stuck) or a token-cap
+  // truncation (re-steer + continue). Grouped so the loop body stays lean.
+  const aborted = abortedTurnAction(args);
 
-  if (looped !== null) {
-    return {
-      action: looped,
-      readonlyStreak: args.readonlyStreak,
-      readonlyRecoveries: args.readonlyRecoveries,
-      historyMetaStreak: args.historyMetaStreak,
-      forceWriteNext: false,
-    };
+  if (aborted !== null) {
+    return aborted;
   }
 
   // No tool calls: settle gate or nudge
