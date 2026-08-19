@@ -111,6 +111,37 @@ export function createMouseCsiFilter(): IMouseCsiFilter {
     holding: false,
   });
 
+  /** End of the plain-text span starting at `i` (up to the next ESC or '['). */
+  const plainSpanEnd = (input: string, i: number): number => {
+    let j = i + 1;
+
+    while (j < input.length) {
+      const c = input.charCodeAt(j);
+
+      if (c === 27 || c === 0x5b) {
+        break;
+      }
+
+      j += 1;
+    }
+
+    return j;
+  };
+
+  /** Report matched AT `i`, rendered with its leading ESC; null if none. */
+  const reportAt = (input: string, i: number, code: number): string | null => {
+    if (code === 27) {
+      FULL_REPORT_AT.lastIndex = i;
+
+      return FULL_REPORT_AT.exec(input)?.[0] ?? null;
+    }
+
+    ORPHAN_REPORT_AT.lastIndex = i;
+    const orphan = ORPHAN_REPORT_AT.exec(input)?.[0];
+
+    return orphan === undefined ? null : `${ESC}${orphan}`;
+  };
+
   const run = (input: string): IMouseCsiFeed => {
     const reports: string[] = [];
     let cleaned = "";
@@ -122,41 +153,20 @@ export function createMouseCsiFilter(): IMouseCsiFilter {
       // Plain text (neither ESC nor '[') can never start a report — bulk-copy
       // the whole span in one slice instead of char-by-char through the regexes.
       if (code !== 27 && code !== 0x5b) {
-        let j = i + 1;
-
-        while (j < input.length) {
-          const c = input.charCodeAt(j);
-
-          if (c === 27 || c === 0x5b) {
-            break;
-          }
-
-          j += 1;
-        }
+        const j = plainSpanEnd(input, i);
 
         cleaned += input.slice(i, j);
         i = j;
         continue;
       }
 
-      if (code === 27) {
-        FULL_REPORT_AT.lastIndex = i;
-        const full = FULL_REPORT_AT.exec(input);
+      const report = reportAt(input, i, code);
 
-        if (full !== null) {
-          reports.push(full[0]);
-          i += full[0].length;
-          continue;
-        }
-      } else {
-        ORPHAN_REPORT_AT.lastIndex = i;
-        const orphan = ORPHAN_REPORT_AT.exec(input);
-
-        if (orphan !== null) {
-          reports.push(`${ESC}${orphan[0]}`);
-          i += orphan[0].length;
-          continue;
-        }
+      if (report !== null) {
+        reports.push(report);
+        // Orphans carry a prepended ESC that is not in the input.
+        i += code === 27 ? report.length : report.length - 1;
+        continue;
       }
 
       // A hold is a report prefix cut off by the chunk boundary — it can only
