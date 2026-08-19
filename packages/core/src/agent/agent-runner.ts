@@ -10,7 +10,12 @@
  * (scheduler unitReporter); the runner only tags its inner events with
  * agentId/parentTask so interleaved streams stay attributable.
  */
-import type { IProvider, IModelResponse, TokenChannel } from "../inference";
+import type {
+  IProvider,
+  IModelResponse,
+  IToolCall,
+  TokenChannel,
+} from "../inference";
 import type { TsService } from "../lsp";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import type { ILoopEvent, Reporter } from "../loop/loop.types";
@@ -282,16 +287,29 @@ function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOL_NAMES.has(name);
 }
 
-/** The agent's advertised tools: read-only set ∩ optional spec subset.
- *  `spawn_agent` is NOT among them — it is never part of `toolsFor()` (the CLI
- *  adds it only to the orchestrator's list), so a subagent structurally cannot
- *  delegate and recursion depth is capped at 1. */
+/** The agent's advertised tools: read-only set ∩ optional spec subset, MINUS
+ *  `spawn_agent`. A subagent must never delegate — recursion depth is capped at
+ *  1 — and `spawn_agent` is `readOnly:true`, so it passes `isReadOnlyTool` and
+ *  today survives only because `toolsFor()` happens not to include it. That is
+ *  an implicit guarantee one edit to the base tool list would silently void
+ *  (turning any no-subset subagent into an unbounded self-recursion / fork-bomb
+ *  of provider calls). The explicit exclusion here makes the depth cap
+ *  structural rather than incidental. */
 function agentTools(subset: readonly string[] | undefined): unknown[] {
+  const spawn: string = TOOL_NAME.spawnAgent;
+
   return toolsFor(true).filter((tool) => {
-    const name = tool.function.name;
+    // `name` widened to string on purpose: `toolsFor()`'s return type does not
+    // currently include `spawn_agent`, so a literal compare would be flagged as
+    // dead — but that omission is exactly the guarantee we must not depend on.
+    // The runtime exclusion holds even if `spawn_agent` is later added to the
+    // base tool list, keeping the recursion depth cap structural.
+    const name: string = tool.function.name;
 
     return (
-      isReadOnlyTool(name) && (subset === undefined || subset.includes(name))
+      name !== spawn &&
+      isReadOnlyTool(name) &&
+      (subset === undefined || subset.includes(name))
     );
   });
 }
@@ -473,6 +491,28 @@ function nextToolChoice(
 
 /** Append the model's turn (content + tool calls, replaying reasoning for the
  *  deepseek style) to the conversation. */
+/** Answer EVERY agent_result call in the just-pushed assistant message with the
+ *  "investigate first" steer. A model that emits a duplicate agent_result (open
+ *  models do) would otherwise leave the extra tool_call_id unanswered, and the
+ *  next provider.complete rejects an assistant message with an unmatched
+ *  tool_call_id (a 400) — knocking a productive investigation into the
+ *  error/salvage path over a benign duplicate. */
+function steerInvestigateFirst(
+  ctx: ILoopCtx,
+  resultCalls: readonly IToolCall[]
+): void {
+  for (const call of resultCalls) {
+    ctx.messages.push({
+      role: "tool",
+      toolCallId: call.id ?? AGENT_RESULT_TOOL.function.name,
+      content:
+        "Investigate FIRST: use the tools to read the relevant files, then " +
+        "call agent_result with findings backed by file:line. Don't answer " +
+        "before looking.",
+    });
+  }
+}
+
 function pushAssistant(ctx: ILoopCtx, res: IModelResponse): void {
   ctx.messages.push({
     role: "assistant",
@@ -771,9 +811,10 @@ export class AgentRunner {
         lastText = res.content.length > 0 ? res.content : lastText;
         progress.lastText = lastText;
 
-        const resultCall = res.toolCalls.find(
+        const resultCalls = res.toolCalls.filter(
           (c) => c.name === AGENT_RESULT_TOOL.function.name
         );
+        const resultCall = resultCalls[0];
         const investigativeCalls = res.toolCalls.filter(
           (c) => c.name !== AGENT_RESULT_TOOL.function.name
         );
@@ -795,14 +836,7 @@ export class AgentRunner {
             return finish("done", resultPayload(resultCall.arguments), turn);
           }
 
-          ctx.messages.push({
-            role: "tool",
-            toolCallId: resultCall.id ?? AGENT_RESULT_TOOL.function.name,
-            content:
-              "Investigate FIRST: use the tools to read the relevant files, then " +
-              "call agent_result with findings backed by file:line. Don't answer " +
-              "before looking.",
-          });
+          steerInvestigateFirst(ctx, resultCalls);
 
           continue;
         }
