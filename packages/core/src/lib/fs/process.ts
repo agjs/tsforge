@@ -62,6 +62,16 @@ export interface IBoundedCapture {
  *  (trim at 2× the cap back down to the cap) so appending N chars is O(N)
  *  total, not O(N²). The notice reuses the capWithNotice vocabulary
  *  ("output truncated") so downstream message-cap logic recognizes the family. */
+/** A UTF-16 high surrogate (0xD800–0xDBFF) — the first half of an astral pair. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** A UTF-16 low surrogate (0xDC00–0xDFFF) — the second half of an astral pair. */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
 export function createBoundedCapture(
   headCap = CAPTURE_HEAD_CAP,
   tailCap = CAPTURE_TAIL_CAP
@@ -72,8 +82,18 @@ export function createBoundedCapture(
 
   const trimTail = (limit: number): void => {
     if (tail.length > limit) {
-      elided += tail.length - tailCap;
-      tail = tail.slice(-tailCap);
+      // Never cut BETWEEN a surrogate pair: if the kept-tail would start on a
+      // low surrogate, drop it into the elided count so the pair isn't split
+      // (harmless in the no-elision join, but the elision notice inserted
+      // between the halves would otherwise strand two replacement chars).
+      let keep = tailCap;
+
+      if (isLowSurrogate(tail.charCodeAt(tail.length - keep))) {
+        keep -= 1;
+      }
+
+      elided += tail.length - keep;
+      tail = tail.slice(-keep);
     }
   };
 
@@ -82,7 +102,13 @@ export function createBoundedCapture(
       let rest = text;
 
       if (head.length < headCap) {
-        const take = Math.min(headCap - head.length, rest.length);
+        let take = Math.min(headCap - head.length, rest.length);
+
+        // Don't end the head on a lone high surrogate (its low half would land
+        // in the tail, across the elision notice).
+        if (take < rest.length && isHighSurrogate(rest.charCodeAt(take - 1))) {
+          take -= 1;
+        }
 
         head += rest.slice(0, take);
         rest = rest.slice(take);
@@ -246,7 +272,6 @@ export async function runArgvCommand(
     }
   }
 
-  const decoder = new TextDecoder();
   const buf: { out: IBoundedCapture; err: IBoundedCapture } = {
     out: createBoundedCapture(),
     err: createBoundedCapture(),
@@ -256,6 +281,15 @@ export async function runArgvCommand(
     stream: ReadableStream<Uint8Array>,
     key: "out" | "err"
   ): Promise<void> => {
+    // Each pump gets its OWN decoder: a single shared TextDecoder retains the
+    // trailing bytes of an incomplete UTF-8 sequence across `decode(…, {stream})`
+    // calls, and the two pumps run concurrently — so a multibyte codepoint split
+    // on a stdout chunk boundary would carry into the NEXT decode, which might be
+    // the stderr pump, corrupting both streams (mojibake / bytes on the wrong
+    // stream). A final flush decode emits any bytes left buffered at EOF (an
+    // incomplete trailing sequence was otherwise silently dropped).
+    const decoder = new TextDecoder();
+
     for await (const bytes of stream) {
       const text = decoder.decode(bytes, { stream: true });
 
@@ -263,6 +297,16 @@ export async function runArgvCommand(
 
       if (onChunk !== undefined) {
         onChunk(text);
+      }
+    }
+
+    const tail = decoder.decode();
+
+    if (tail.length > 0) {
+      buf[key].append(tail);
+
+      if (onChunk !== undefined) {
+        onChunk(tail);
       }
     }
   };

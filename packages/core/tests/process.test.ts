@@ -6,6 +6,7 @@ import {
   runShellCommand,
   runArgvCommand,
   createBoundedCapture,
+  shellQuote,
 } from "../src/lib/fs/process";
 
 // P2 (review): a timed-out command killed only the `sh -c` wrapper, so a
@@ -196,6 +197,80 @@ test("a multi-megabyte command output is captured bounded end-to-end", async () 
     expect(r.stdout).toContain("output truncated");
     expect(r.stdout.startsWith("y")).toBe(true);
     expect(r.stdout.trimEnd().endsWith("y")).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── C1: concurrent stdout+stderr non-ASCII must not corrupt (per-pump decoder) ──
+test("concurrent non-ASCII stdout+stderr is decoded intact (no shared-decoder mojibake)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-utf8-"));
+
+  try {
+    // Interleave multibyte output on BOTH streams so chunk boundaries land
+    // mid-codepoint; a shared decoder would carry bytes across the two pumps.
+    const out = "café—π—世界—😀".repeat(400);
+    const err = "naïve—Ω—日本—🚀".repeat(400);
+    const r = await runShellCommand(
+      dir,
+      `bun -e 'process.stdout.write(${JSON.stringify(out)}); process.stderr.write(${JSON.stringify(err)})'`,
+      { timeoutMs: 60_000 }
+    );
+
+    expect(r.exitCode).toBe(0);
+    // No U+FFFD replacement chars, and each stream is its own content only.
+    expect(r.stdout).not.toContain("�");
+    expect(r.stderr).not.toContain("�");
+    expect(r.stdout).toContain("café—π—世界—😀");
+    expect(r.stderr).toContain("naïve—Ω—日本—🚀");
+    expect(r.stdout).not.toContain("naïve");
+    expect(r.stderr).not.toContain("café");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── C2: a surrogate pair straddling the cap boundary is never split ──────────
+test("createBoundedCapture never strands a lone surrogate across the elision notice", () => {
+  const cap = createBoundedCapture(5, 5);
+
+  cap.append("abcd");
+  cap.append("\u{1F600}xyzzy"); // 😀 = 2 code units, would split at head take=1
+
+  for (let i = 0; i < 3; i += 1) {
+    cap.append("0123456789");
+  }
+
+  const text = cap.text();
+  const loneSurrogate =
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  expect(text).toContain("output truncated");
+  expect(loneSurrogate.test(text)).toBe(false);
+});
+
+// ── shellQuote: the sole quoting helper for gate command-building (was untested) ──
+test("shellQuote wraps in single quotes and escapes embedded single quotes", () => {
+  expect(shellQuote("plain")).toBe("'plain'");
+  expect(shellQuote("a b")).toBe("'a b'");
+  // POSIX close-quote / escaped-quote / reopen: 'it'\''s'
+  expect(shellQuote("it's")).toBe("'it'\\''s'");
+  expect(shellQuote("$(rm -rf /)")).toBe("'$(rm -rf /)'");
+  expect(shellQuote("`whoami`")).toBe("'`whoami`'");
+  expect(shellQuote("a\nb")).toBe("'a\nb'");
+});
+
+test("a shellQuote'd path with shell metacharacters is passed literally", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-sq $(x)-"));
+
+  try {
+    // The dir name has a space AND $(…) — if not quoted, the shell would try to
+    // run `x`. Quoted, `ls` sees the literal path.
+    const r = await runShellCommand(dir, `ls ${shellQuote(dir)}`, {
+      timeoutMs: 30_000,
+    });
+
+    expect(r.exitCode).toBe(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -3,6 +3,8 @@ import {
   readClipboardImage,
   readClipboardText,
   captureClipboardImageToFile,
+  clipboardImageSizeOk,
+  MAX_CLIPBOARD_IMAGE_BYTES,
   type IClipboardDeps,
 } from "../src/lib/clipboard/clipboard-image";
 
@@ -127,4 +129,14 @@ test("readClipboardText: non-zero exit → empty string", async () => {
   });
 
   expect(text).toBe("");
+});
+
+// ── R1: a clipboard image read is size-bounded ──────────────────────────────
+test("clipboardImageSizeOk bounds the read (empty → false, huge → false)", () => {
+  expect(clipboardImageSizeOk(0)).toBe(false);
+  expect(clipboardImageSizeOk(1)).toBe(true);
+  expect(clipboardImageSizeOk(MAX_CLIPBOARD_IMAGE_BYTES)).toBe(true);
+  expect(clipboardImageSizeOk(MAX_CLIPBOARD_IMAGE_BYTES + 1)).toBe(false);
+  // A multi-hundred-MB paste (the RESOURCE case) is refused before arrayBuffer.
+  expect(clipboardImageSizeOk(500 * 1024 * 1024)).toBe(false);
 });
