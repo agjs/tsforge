@@ -4,6 +4,7 @@ import type {
   IProvider,
   ITokenUsage,
 } from "../inference";
+import { StreamInterruptedError } from "../inference";
 import type { ITask } from "../spec";
 import {
   makeFileLinter,
@@ -636,14 +637,35 @@ const TIMEOUT_RESTEER =
   "file, kept small. Keep reasoning brief. No prose.";
 
 /** True when an error is a request TIMEOUT (AbortSignal.timeout fires a
- *  `TimeoutError`), as opposed to a caller abort or a connection drop. */
-function isModelTimeout(err: unknown): boolean {
+ *  `TimeoutError`), as opposed to a caller abort or a connection drop. Matched
+ *  on error CLASSES, not the message: the old `/timeout/i` substring match
+ *  classified any permanent 400 whose response BODY mentioned a "timeout"
+ *  field as recoverable, re-steering a doomed request MAX_TIMEOUT_RECOVERIES
+ *  times. A StreamInterruptedError is a timeout iff its cause is. */
+export function isModelTimeout(err: unknown): boolean {
+  if (err instanceof StreamInterruptedError) {
+    return isModelTimeout(err.cause);
+  }
+
   if (!(err instanceof Error)) {
     return false;
   }
 
-  return err.name === "TimeoutError" || /timed out|timeout/i.test(err.message);
+  return (
+    err.name === "TimeoutError" ||
+    err.name === "HeadersTimeoutError" ||
+    err.name === "BodyTimeoutError"
+  );
 }
+
+/** Pushed after a response hit the output-token cap mid-tool-call: the partial
+ *  call was dropped (its arguments were cut mid-JSON), so demand the same work
+ *  in smaller pieces instead of retrying the identical over-long emission. */
+const TRUNCATION_RESTEER =
+  "Your tool call was CUT OFF by the response token limit — its arguments never " +
+  "arrived intact and it was NOT executed. Emit a smaller call now: write the " +
+  "file in smaller pieces (create the file with the first part, then extend it " +
+  "with edit), or split the work across multiple calls. No prose.";
 
 /** Pushed after a repetition loop — break the spiral by demanding ONE concrete
  *  action (paired with a forced tool call, which can't loop in prose). */
@@ -2650,8 +2672,13 @@ export class Session {
 
     // Log the RAW error so the timeout's true source (request-timeout ceiling vs a
     // server-side stream close) is diagnosable from the --log, not swallowed.
+    const salvage =
+      err instanceof StreamInterruptedError
+        ? ` (salvaged ${String(err.partial.content.length)} content + ${String(err.partial.reasoning?.length ?? 0)} reasoning chars before the failure)`
+        : "";
     const detail =
-      err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      (err instanceof Error ? `${err.name}: ${err.message}` : String(err)) +
+      salvage;
 
     if (timeouts >= MAX_TIMEOUT_RECOVERIES) {
       const errorMessages = this.state.prevGateErrors.map((e) => e.message);
@@ -3464,24 +3491,65 @@ export class Session {
     return true;
   }
 
-  /** Handle a degenerate stream: a bounded recovery or a terminal stop. Returns a
-   *  stop result, "retry" to continue with a forced tool, or null if not degenerate. */
+  /** Handle an ABORTED stream: a degenerate repetition loop (bounded recovery or
+   *  a terminal stop) or a token-cap truncation (bounded smaller-call resteer).
+   *  Returns a stop result, "retry" to continue with a forced tool, or null when
+   *  the response is neither. Bumps the matching counter itself. */
   private degenerationStop(
     res: IModelResponse,
-    degenerations: number,
+    recoveries: { degenerations: number; truncations: number },
     turn: number,
     turnStart: number,
     sendStart: number
   ): ISendResult | "retry" | null {
-    if (res.degenerated !== true) {
-      return null;
+    if (res.degenerated === true) {
+      const stop = this.degenerationRecovery(recoveries.degenerations, turn);
+
+      recoveries.degenerations += 1;
+      emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
+
+      return stop ?? "retry";
     }
 
-    const stop = this.degenerationRecovery(degenerations, turn);
+    if (
+      this.truncationResteer(
+        res,
+        recoveries.truncations,
+        turn,
+        turnStart,
+        sendStart
+      )
+    ) {
+      recoveries.truncations += 1;
 
+      return "retry";
+    }
+
+    return null;
+  }
+
+  /** True when a token-cap truncation was re-steered (bounded): pushes the
+   *  smaller-call resteer + reports it. See TRUNCATION_RESTEER. */
+  private truncationResteer(
+    res: IModelResponse,
+    truncations: number,
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): boolean {
+    if (res.truncated !== true || truncations >= MAX_TIMEOUT_RECOVERIES) {
+      return false;
+    }
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⚠ response hit the token cap mid-tool-call — dropped the partial call, re-steering to a smaller one (${String(truncations + 1)}/${String(MAX_TIMEOUT_RECOVERIES)})`,
+    });
+    this.ctx.messages.push({ role: "user", content: TRUNCATION_RESTEER });
     emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
 
-    return stop ?? "retry";
+    return true;
   }
 
   /** Handle a read-only spin: the model keeps calling tools but never touches an
@@ -3657,9 +3725,10 @@ export class Session {
     // tool schema strictly — so the model can't narrate (or emit malformed tool
     // syntax) again on a turn where we already know a tool call is the move.
     let forceTool = false;
-    // Times the stream degenerated into a repetition loop this send — we try a
-    // bounded recovery (force a concrete tool call) before giving up.
-    let degenerations = 0;
+    // Bounded recoveries this send: repetition loops (force a concrete tool
+    // call) and token-cap truncations (re-steer to a smaller call) — counted
+    // in one object so the abort handler can bump the right one itself.
+    const recoveries = { degenerations: 0, truncations: 0 };
     // Times a model request timed out this send — a single over-long turn must not
     // throw away prior progress; we re-steer to a small turn and continue.
     let timeouts = 0;
@@ -3757,18 +3826,19 @@ export class Session {
         continue;
       }
 
-      // The stream caught a degenerate repetition loop. Bounded recovery (force a
-      // concrete tool call next turn) before giving up; see degenerationRecovery.
+      // Aborted-stream recovery: a degenerate repetition loop (bounded: force a
+      // concrete tool call next turn, then give up — see degenerationRecovery)
+      // or a token-cap truncation (bounded smaller-call resteer; the broken
+      // call was DROPPED at assembly, never executed with empty args).
       const deg = this.degenerationStop(
         res,
-        degenerations,
+        recoveries,
         turn,
         turnStart,
         sendStart
       );
 
       if (deg === "retry") {
-        degenerations += 1;
         forceTool = true;
 
         continue;

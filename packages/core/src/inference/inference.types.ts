@@ -68,6 +68,16 @@ export interface IModelResponse {
   /** Set when TTSR aborted the stream due to a rule match. Contains the rule name
    *  and guidance to append to the corrective retry message. */
   ttsrFired?: { ruleName: string; guidance: string };
+  /** The server's finish_reason for the first choice ("stop", "length",
+   *  "tool_calls", …), when reported. "length" = the response hit the output
+   *  token cap — the one the loop must steer on instead of retrying blind. */
+  finishReason?: string;
+  /** Set when the response hit the token cap ("length") AND a tool call's
+   *  arguments were left unparseable mid-JSON. The broken call is DROPPED
+   *  (executing it with silently-empty {} args was the old behavior — the
+   *  create-with-no-content loop) and the loop steers with a smaller-call
+   *  resteer instead. */
+  truncated?: boolean;
 }
 
 export interface ICompleteOptions {
@@ -230,6 +240,30 @@ export interface IOpenAICompatibleConfig {
  * from-scratch build into nine silent no-op turns that read as the model
  * refusing to work.
  */
+/**
+ * A stream that died MID-READ (timeout, socket reset, caller abort) after some
+ * of the response was already received. Carries the salvaged partial response
+ * so the caller can log/steer with what the model DID produce instead of
+ * discarding minutes of generation, and the original failure as `cause`.
+ * ModelRequestError (a server-sent error event) is deliberately NOT wrapped —
+ * the unsupported-field detector keys on its type.
+ */
+export class StreamInterruptedError extends Error {
+  /** What had been assembled when the read failed (content/reasoning/usage —
+   *  never executed tool calls; the loop records, it does not act on these). */
+  readonly partial: IModelResponse;
+
+  constructor(partial: IModelResponse, cause: unknown) {
+    super(
+      `model stream interrupted after ${String(partial.content.length)} content chars` +
+        (cause instanceof Error ? `: ${cause.message}` : ""),
+      { cause }
+    );
+    this.name = "StreamInterruptedError";
+    this.partial = partial;
+  }
+}
+
 export class ModelRequestError extends Error {
   readonly status: number;
   /** The server's own explanation, which usually names the offending field. */

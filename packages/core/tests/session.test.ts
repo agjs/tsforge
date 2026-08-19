@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
 import { Session, filterGateStream } from "../src/loop";
+import { isModelTimeout } from "../src/loop/session";
+import { ModelRequestError, StreamInterruptedError } from "../src/inference";
 
 /** A provider that yields immediately (no tool calls) — the "model is done" case. */
 function yields(content = "ok"): IProvider {
@@ -1250,4 +1252,34 @@ test("Session: a TTSR abort leaves NO dangling assistant tool_calls in the next 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("isModelTimeout matches error CLASSES, not response-body text", () => {
+  const timeout = new DOMException("The operation timed out.", "TimeoutError");
+
+  expect(isModelTimeout(timeout)).toBe(true);
+
+  // A permanent 400 whose BODY mentions a timeout field used to be classified
+  // as recoverable and re-steered MAX_TIMEOUT_RECOVERIES times.
+  const permanent = new ModelRequestError(
+    400,
+    'invalid field "timeout": must be a number'
+  );
+
+  expect(isModelTimeout(permanent)).toBe(false);
+
+  // A stream interrupted BY a timeout is a timeout; by a socket reset is not.
+  expect(
+    isModelTimeout(
+      new StreamInterruptedError({ content: "x", toolCalls: [] }, timeout)
+    )
+  ).toBe(true);
+  expect(
+    isModelTimeout(
+      new StreamInterruptedError(
+        { content: "x", toolCalls: [] },
+        new Error("socket reset")
+      )
+    )
+  ).toBe(false);
 });

@@ -97,17 +97,38 @@ export function parseResponse(data: unknown): IModelResponse {
   }
 
   const content = typeof message.content === "string" ? message.content : "";
-  const toolCalls = collectToolCalls(message.tool_calls);
+  const finishReason =
+    typeof first.finish_reason === "string" ? first.finish_reason : undefined;
+  const collected = collectToolCalls(
+    message.tool_calls,
+    finishReason === "length"
+  );
   const usage = parseUsage(data.usage);
   const withUsage = usage === undefined ? {} : { usage };
+  const withFinish = finishReason === undefined ? {} : { finishReason };
+  const withTruncated = collected.truncated ? { truncated: true } : {};
+  // Parity with the streaming path: vLLM spells it `reasoning`, others
+  // `reasoning_content` — dropping the former lost the chain-of-thought on
+  // every non-streaming call (judge/planner/proposer), and for a
+  // replayReasoning profile the NEXT request then 400s for the missing replay.
+  const reasoningText = firstString(
+    message.reasoning,
+    message.reasoning_content
+  );
   const reasoning =
-    typeof message.reasoning_content === "string" &&
-    message.reasoning_content.length > 0
-      ? { reasoning: message.reasoning_content }
+    reasoningText !== undefined && reasoningText.length > 0
+      ? { reasoning: reasoningText }
       : {};
 
-  if (toolCalls.length > 0) {
-    return { content, toolCalls, ...reasoning, ...withUsage };
+  if (collected.calls.length > 0 || collected.truncated) {
+    return {
+      content,
+      toolCalls: collected.calls,
+      ...reasoning,
+      ...withUsage,
+      ...withFinish,
+      ...withTruncated,
+    };
   }
 
   const salvaged = salvageToolCalls(content);
@@ -118,6 +139,7 @@ export function parseResponse(data: unknown): IModelResponse {
     salvaged: salvaged.length,
     ...reasoning,
     ...withUsage,
+    ...withFinish,
   };
 }
 
@@ -432,9 +454,13 @@ function jsonObjectAt(s: string, open: number): string | null {
   return null;
 }
 
-function collectToolCalls(rawCalls: unknown): IToolCall[] {
+function collectToolCalls(
+  rawCalls: unknown,
+  dropUnparseable = false
+): { calls: IToolCall[]; truncated: boolean } {
   const calls = isArray(rawCalls) ? rawCalls : [];
   const toolCalls: IToolCall[] = [];
+  let truncated = false;
 
   for (const tc of calls) {
     if (!isRecord(tc) || !isRecord(tc.function)) {
@@ -450,17 +476,35 @@ function collectToolCalls(rawCalls: unknown): IToolCall[] {
     // (`edit<parameter=file>…`) is recovered to its real name + parsed parameters.
     const fused = salvageFusedToolName(name, args);
 
-    toolCalls.push(
-      fused === null
-        ? { id, name, arguments: parseArgs(args) }
-        : { id, name: fused.name, arguments: fused.arguments }
-    );
+    if (fused !== null) {
+      toolCalls.push({ id, name: fused.name, arguments: fused.arguments });
+      continue;
+    }
+
+    const parsed = parseArgsOrNull(args);
+
+    // finish_reason:"length" + args cut mid-JSON: drop the call and flag
+    // `truncated` instead of executing it with silently-empty {} args.
+    if (parsed === null && dropUnparseable) {
+      truncated = true;
+      continue;
+    }
+
+    toolCalls.push({ id, name, arguments: parsed ?? {} });
   }
 
-  return toolCalls;
+  return { calls: toolCalls, truncated };
 }
 
 export function parseArgs(raw?: unknown): Record<string, unknown> {
+  return parseArgsOrNull(raw) ?? {};
+}
+
+/** Like parseArgs, but reports FAILURE as null instead of silently degrading a
+ *  non-empty-but-unparseable args string to {} — callers use this to tell
+ *  "the model sent no args" from "the args were cut off mid-JSON" (the
+ *  finish_reason:"length" truncation case). */
+export function parseArgsOrNull(raw?: unknown): Record<string, unknown> | null {
   if (raw === undefined) {
     return {};
   }
@@ -470,14 +514,31 @@ export function parseArgs(raw?: unknown): Record<string, unknown> {
   }
 
   if (typeof raw !== "string") {
+    return null;
+  }
+
+  if (raw.trim().length === 0) {
     return {};
   }
 
   try {
     const value: unknown = JSON.parse(raw);
 
-    return isRecord(value) ? value : {};
+    return isRecord(value) ? value : null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+/** First of the candidates that is a string (vLLM uses `reasoning`; others
+ *  `reasoning_content`) — shared by the streaming and non-streaming parsers so
+ *  the two paths can't drift on which spelling they accept. */
+export function firstString(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === "string") {
+      return v;
+    }
+  }
+
+  return undefined;
 }

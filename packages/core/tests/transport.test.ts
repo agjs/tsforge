@@ -85,3 +85,112 @@ test("a caller abort is terminal — no retry", async () => {
   ).rejects.toBeDefined();
   expect(stub.calls).toBe(0); // aborted before the first attempt
 });
+
+// ── I4: cause-chain classification + HTTP retry ─────────────────────────────
+
+test("Node/undici-shaped 'fetch failed' with buried ECONNREFUSED retries", async () => {
+  // Bun puts the story in err.message; Node throws TypeError: fetch failed
+  // with the real code in err.cause (inside an AggregateError). The old
+  // message-only regex made ride-out-a-restart a no-op off Bun.
+  const inner = Object.assign(
+    new Error("connect ECONNREFUSED 127.0.0.1:8888"),
+    {
+      code: "ECONNREFUSED",
+    }
+  );
+  const undiciShaped = new TypeError("fetch failed");
+
+  Object.defineProperty(undiciShaped, "cause", {
+    value: new AggregateError([inner], "All attempts failed"),
+  });
+
+  const stub = flakyFetch(2, undiciShaped);
+  const res = await fetchWithRetry(stub.fetch, URL, HEADERS, BODY, 5000);
+
+  expect(res.status).toBe(200);
+  expect(stub.calls).toBe(3);
+});
+
+/** A fetch stub returning `statuses` in order, then 200. */
+function statusFetch(statuses: number[], headers: Record<string, string> = {}) {
+  let calls = 0;
+  const fn = (async () => {
+    calls += 1;
+    const status = statuses[calls - 1];
+
+    if (status !== undefined) {
+      return new Response("busy", { status, headers });
+    }
+
+    return new Response("ok", { status: 200 });
+  }) as unknown as typeof fetch;
+
+  return {
+    fetch: fn,
+    get calls() {
+      return calls;
+    },
+  };
+}
+
+test("429 with integer Retry-After retries within the budget and succeeds", async () => {
+  const stub = statusFetch([429], { "retry-after": "0" });
+  const res = await fetchWithRetry(
+    stub.fetch,
+    URL,
+    HEADERS,
+    BODY,
+    5000,
+    undefined,
+    10_000
+  );
+
+  expect(res.status).toBe(200);
+  expect(stub.calls).toBe(2);
+});
+
+test("503 retries with backoff; a permanent 400 does NOT retry", async () => {
+  const retried = statusFetch([503]);
+  const ok = await fetchWithRetry(
+    retried.fetch,
+    URL,
+    HEADERS,
+    BODY,
+    5000,
+    undefined,
+    10_000
+  );
+
+  expect(ok.status).toBe(200);
+  expect(retried.calls).toBe(2);
+
+  const permanent = statusFetch([400, 400, 400]);
+  const rejected = await fetchWithRetry(
+    permanent.fetch,
+    URL,
+    HEADERS,
+    BODY,
+    5000,
+    undefined,
+    10_000
+  );
+
+  expect(rejected.status).toBe(400);
+  expect(permanent.calls).toBe(1);
+});
+
+test("at budget exhaustion the retryable response is RETURNED, not thrown (caller sees the status)", async () => {
+  const stub = statusFetch([429, 429, 429, 429, 429, 429, 429, 429]);
+  const res = await fetchWithRetry(
+    stub.fetch,
+    URL,
+    HEADERS,
+    BODY,
+    5000,
+    undefined,
+    // Tiny budget: first 429 comes back immediately with wait >= budget.
+    1
+  );
+
+  expect(res.status).toBe(429);
+});

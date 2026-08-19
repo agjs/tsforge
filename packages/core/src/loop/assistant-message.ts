@@ -28,12 +28,22 @@ function cloneToolCalls(calls: readonly IToolCall[]): IToolCall[] {
  *  (with a placeholder when it was empty, so the message is never both content-less and
  *  tool-less). The corrective guidance is appended separately as a user message by
  *  applyTtsrInterrupt. Shared by BOTH loops (Session.drive and runTask) so the two can't
- *  drift — a fix in one path but not the other left the bug live on the headless loop. */
+ *  drift — a fix in one path but not the other left the bug live on the headless loop.
+ *
+ *  The SAME dangling-tool_calls shape exists on two more aborted paths and gets the
+ *  same treatment: `degenerated` (the repetition guard cancelled the stream mid-call;
+ *  the loop resteers WITHOUT executing the partial calls) and `truncated` (the
+ *  response hit the token cap mid-JSON; the broken call was dropped and the loop
+ *  steers with a smaller-call resteer). */
 export function assistantMessage(res: IModelResponse): IChatMessage {
   const reasoning =
     res.reasoning === undefined ? {} : { reasoningContent: res.reasoning };
 
-  if (res.ttsrFired !== undefined) {
+  if (
+    res.ttsrFired !== undefined ||
+    res.degenerated === true ||
+    res.truncated === true
+  ) {
     return {
       role: "assistant",
       content:

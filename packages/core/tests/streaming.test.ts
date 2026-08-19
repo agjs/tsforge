@@ -1,4 +1,7 @@
 import { test, expect } from "bun:test";
+import { streamResponse } from "../src/inference/stream";
+import { parseResponse } from "../src/inference/wire";
+import { StreamInterruptedError } from "../src/inference/inference.types";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { fetchReturning } from "./stub-provider";
 
@@ -421,4 +424,314 @@ test("tool-args TTSR gets the latched file path on LATE deltas without rescannin
   // Each delta feeds only ITS OWN fragment to the watcher, never the
   // accumulated args (the watcher keeps its own rolling buffer).
   expect(seen[1]?.text.length).toBe(4000);
+});
+
+// ── I1: tool-call assembly correctness ─────────────────────────────────────
+
+test("missing-index deltas with distinct ids stay TWO calls with intact args", async () => {
+  // Mistral-compat / some llama.cpp builds omit `index` — everything used to
+  // collapse into slot 0 with concatenated args that parsed to {} silently.
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"id":"call_a","type":"function","function":{"name":"create","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\\"file\\":\\"a.ts\\"}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"id":"call_b","type":"function","function":{"name":"create","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\\"file\\":\\"b.ts\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const tokens: string[] = [];
+  const res = await streamResponse(sseResponse(chunks), (t) => tokens.push(t));
+
+  expect(res.toolCalls).toHaveLength(2);
+  expect(res.toolCalls[0]?.arguments).toEqual({ file: "a.ts" });
+  expect(res.toolCalls[1]?.arguments).toEqual({ file: "b.ts" });
+  // The degraded shape is visible in the log exactly once.
+  expect(tokens.filter((t) => t.includes("missing index")).length).toBe(1);
+});
+
+test("missing-index: a name after the current call's args began starts a NEW call", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"read","arguments":"{\\"file\\":\\"x.ts\\"}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"read","arguments":"{\\"file\\":\\"y.ts\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.toolCalls).toHaveLength(2);
+  expect(res.toolCalls[0]?.arguments).toEqual({ file: "x.ts" });
+  expect(res.toolCalls[1]?.arguments).toEqual({ file: "y.ts" });
+});
+
+test("out-of-order indices emit in INDEX order, not arrival order", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"edit","arguments":"{\\"file\\":\\"second.ts\\"}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"edit","arguments":"{\\"file\\":\\"first.ts\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.toolCalls.map((c) => c.arguments.file)).toEqual([
+    "first.ts",
+    "second.ts",
+  ]);
+});
+
+test("an id-less split name assembles by APPEND; a re-declared name with id replaces", async () => {
+  const split = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"cre","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"ate","arguments":"{\\"file\\":\\"a.ts\\",\\"content\\":\\"x\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const r1 = await streamResponse(sseResponse(split), () => {});
+
+  // Old behavior overwrote → name "ate" → unknown-tool denial loop.
+  expect(r1.toolCalls[0]?.name).toBe("create");
+
+  const redeclared = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"search","arguments":"{\\"query\\":\\"q\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const r2 = await streamResponse(sseResponse(redeclared), () => {});
+
+  expect(r2.toolCalls[0]?.name).toBe("search");
+});
+
+// ── I2: finish_reason, truncation, parity, big-first-delta path latch ───────
+
+test("finish_reason is surfaced on the streamed response", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"hi"}}]}\n`,
+    `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.finishReason).toBe("stop");
+});
+
+test("length-truncated tool args are DROPPED with truncated:true (not executed as {})", async () => {
+  // A create cut off at max_tokens mid-JSON: the old behavior parsed the
+  // broken args to {} and executed create with no file/content → reject loop.
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"create","arguments":"{\\"file\\":\\"a.ts\\",\\"content\\":\\"const x ="}}]}}]}\n`,
+    `data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.truncated).toBe(true);
+  expect(res.finishReason).toBe("length");
+  expect(res.toolCalls).toHaveLength(0);
+});
+
+test("unparseable args WITHOUT length keep the old {} degradation (no behavior change)", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{broken"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {});
+
+  expect(res.truncated).toBeUndefined();
+  expect(res.toolCalls).toHaveLength(1);
+  expect(res.toolCalls[0]?.arguments).toEqual({});
+});
+
+test("streaming and non-streaming agree on the same logical payload (parity)", async () => {
+  const streamed = await streamResponse(
+    sseResponse([
+      `data: {"choices":[{"delta":{"reasoning":"thinking"}}]}\n`,
+      `data: {"choices":[{"delta":{"content":"answer"}}]}\n`,
+      `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n`,
+      `data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n`,
+      `data: [DONE]\n`,
+    ]),
+    () => {}
+  );
+  const nonStreamed = parseResponse({
+    choices: [
+      {
+        finish_reason: "stop",
+        // vLLM spells it `reasoning` — the non-streaming path used to read
+        // ONLY `reasoning_content` and silently dropped the chain-of-thought.
+        message: { content: "answer", reasoning: "thinking" },
+      },
+    ],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  });
+
+  expect(nonStreamed.content).toBe(streamed.content);
+  expect(nonStreamed.reasoning).toBe(streamed.reasoning);
+  expect(nonStreamed.finishReason).toBe(streamed.finishReason);
+  expect(nonStreamed.usage?.totalTokens).toBe(streamed.usage?.totalTokens);
+});
+
+test("path-in-one-big-delta: file-scoped TTSR still gets currentFile (the perf-latch regression)", async () => {
+  // The whole 3KB args arrive in ONE SSE frame — past MAX_PATH_SCAN_CHARS on
+  // the first check. The old guard SKIPPED the scan entirely, so extractedPath
+  // was never set and file-scoped TTSR rules silently never fired.
+  const seen: { currentFile?: string }[] = [];
+  const watcher = {
+    checkDelta(
+      _text: string,
+      context: { source: "content" | "tool-args"; currentFile?: string }
+    ): { readonly name: string; readonly guidance: string } | null {
+      if (context.source === "tool-args") {
+        seen.push(
+          context.currentFile === undefined
+            ? {}
+            : { currentFile: context.currentFile }
+        );
+      }
+
+      return null;
+    },
+  };
+  const body = "z".repeat(3000);
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"create","arguments":"{\\"file\\":\\"src/big.ts\\",\\"content\\":\\"${body}\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+
+  await streamResponse(sseResponse(chunks), () => {}, watcher);
+
+  expect(seen.length).toBe(1);
+  expect(seen[0]?.currentFile).toBe("src/big.ts");
+});
+
+// ── I3: stream lifecycle ─────────────────────────────────────────────────────
+
+test("a null response body throws instead of returning a silent empty completion", async () => {
+  const res = new Response(null, { status: 200 });
+
+  await expect(streamResponse(res, () => {})).rejects.toThrow("no body");
+});
+
+test("a mid-stream read failure salvages the partial as StreamInterruptedError", async () => {
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+
+      if (pulls === 1) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            `data: {"choices":[{"delta":{"content":"hello"}}]}\n`
+          )
+        );
+
+        return;
+      }
+
+      // The socket dies at token N — a timeout/reset shape.
+      controller.error(new Error("socket reset"));
+    },
+  });
+  const res = new Response(stream, { status: 200 });
+
+  try {
+    await streamResponse(res, () => {});
+    expect(true).toBe(false);
+  } catch (err) {
+    expect(err).toBeInstanceOf(StreamInterruptedError);
+
+    if (err instanceof StreamInterruptedError) {
+      // Everything generated before the failure is preserved, not discarded.
+      expect(err.partial.content).toBe("hello");
+      expect(err.cause).toBeInstanceOf(Error);
+    }
+  }
+});
+
+test("a chunk arriving after TTSR fires is NOT consumed into content", async () => {
+  const firing = {
+    checkDelta(
+      text: string,
+      _ctx: { source: "content" | "tool-args" }
+    ): { readonly name: string; readonly guidance: string } | null {
+      return text.includes("BAD") ? { name: "r", guidance: "g" } : null;
+    },
+  };
+  // The trailing partial line (no terminating \n) used to be consumed even
+  // after an abort decision — appending post-abort tokens to recorded content.
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"BAD"}}]}\ndata: {"choices":[{"delta":{"content":"tail-after-abort"}}]}`,
+  ];
+  const res = await streamResponse(sseResponse(chunks), () => {}, firing);
+
+  expect(res.ttsrFired?.ruleName).toBe("r");
+  expect(res.content).toBe("BAD");
+  expect(res.content).not.toContain("tail-after-abort");
+});
+
+test("an SSE error event still surfaces as ModelRequestError (reader released via finally)", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"partial"}}]}\n`,
+    `data: {"error":{"message":"unknown parameter: reasoning_effort","code":400}}\n`,
+  ];
+
+  await expect(streamResponse(sseResponse(chunks), () => {})).rejects.toThrow(
+    "unknown parameter"
+  );
+});
+
+// ── I4: duplicate-token guard on the unsupported-field retry ────────────────
+
+test("a mid-stream error AFTER tokens does NOT auto-retry (no duplicated output)", async () => {
+  // vLLM answers a rejected parameter as the FIRST SSE event; if a backend ever
+  // errors AFTER streaming tokens, the old retry re-sent with the same onToken
+  // sink and the transcript showed the whole prefix twice.
+  let requests = 0;
+  const tokens: string[] = [];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => {
+      requests += 1;
+
+      return sseResponse([
+        `data: {"choices":[{"delta":{"content":"prefix"}}]}\n`,
+        `data: {"error":{"message":"response_format is not supported","code":400}}\n`,
+      ]);
+    }),
+  });
+
+  await expect(
+    p.complete([{ role: "user", content: "hi" }], {
+      onToken: (t) => tokens.push(t),
+      responseFormat: { type: "json_object" },
+    })
+  ).rejects.toThrow("not supported");
+
+  expect(requests).toBe(1);
+  expect(tokens.filter((t) => t === "prefix")).toHaveLength(1);
+});
+
+test("an unsupported-field rejection with ZERO tokens still auto-retries (behavior pinned)", async () => {
+  let requests = 0;
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchReturning(() => {
+      requests += 1;
+
+      if (requests === 1) {
+        return sseResponse([
+          `data: {"error":{"message":"response_format is not supported","code":400}}\n`,
+        ]);
+      }
+
+      return sseResponse([
+        `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+        `data: [DONE]\n`,
+      ]);
+    }),
+  });
+  const res = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+    responseFormat: { type: "json_object" },
+  });
+
+  expect(requests).toBe(2);
+  expect(res.content).toBe("ok");
 });

@@ -148,12 +148,81 @@ test("channels are tracked independently", () => {
   expect(tripped).toBe(false);
 });
 
-test("trips after three exact long-line repeats (not five)", () => {
-  expect(
-    feed([
-      "The gate flags src/time.ts itself. Let me check the config.",
-      "The gate flags src/time.ts itself. Let me check the config.",
-      "The gate flags src/time.ts itself. Let me check the config.",
-    ])
-  ).toBe(true);
+test("REASONING trips after three exact long-line repeats; CONTENT gets headroom (5)", () => {
+  // The 3-repeat bound was tuned for reasoning stutter ("Let me check…" ×3).
+  // On the content channel a real answer legitimately repeats a line (quote it,
+  // show it fixed, mention it in a summary) — tripping at 3 aborted good
+  // answers, so content trips at 5 instead (fenced code is exempt entirely).
+  const line = "The gate flags src/time.ts itself. Let me check the config.";
+  const reasoning = new StreamGuard();
+  let reasoningTrips = 0;
+
+  while (reasoningTrips < 10 && !reasoning.observe(`${line}\n`, "reasoning")) {
+    reasoningTrips += 1;
+  }
+
+  expect(reasoningTrips).toBe(2); // fired ON the 3rd observe
+
+  expect(feed([line, line, line])).toBe(false);
+  expect(feed([line, line, line, line, line])).toBe(true);
+});
+
+// ── I6: fence-aware content channel ─────────────────────────────────────────
+
+test("repeated code lines inside a ``` fence do NOT trip the content guard", () => {
+  const g = new StreamGuard();
+  const line = "  const memo = useMemo(() => compute(items), [items]);";
+  let fired = false;
+
+  g.observe("Here is the fix:\n```tsx\n", "content");
+
+  for (let i = 0; i < 8 && !fired; i += 1) {
+    fired = g.observe(`${line}\n`, "content");
+  }
+
+  g.observe("```\n", "content");
+
+  expect(fired).toBe(false);
+});
+
+test("the same repeats as bare prose still trip (outside a fence)", () => {
+  const g = new StreamGuard();
+  const line = "  const memo = useMemo(() => compute(items), [items]);";
+  let fired = false;
+
+  for (let i = 0; i < 8 && !fired; i += 1) {
+    fired = g.observe(`${line}\n`, "content");
+  }
+
+  expect(fired).toBe(true);
+});
+
+test("the reasoning channel keeps its tighter stutter limit (3), fences or not", () => {
+  const g = new StreamGuard();
+  const line = "Let me check the configuration file again carefully.";
+  let fired = false;
+  let reps = 0;
+
+  for (let i = 0; i < 6 && !fired; i += 1) {
+    reps += 1;
+    fired = g.observe(`${line}\n`, "reasoning");
+  }
+
+  expect(fired).toBe(true);
+  expect(reps).toBe(3);
+});
+
+test("prose AFTER a closed fence is guarded again", () => {
+  const g = new StreamGuard();
+
+  g.observe("```\ncode line that is long enough to count\n```\n", "content");
+
+  const line = "I will now ensure the component renders correctly.";
+  let fired = false;
+
+  for (let i = 0; i < 8 && !fired; i += 1) {
+    fired = g.observe(`${line}\n`, "content");
+  }
+
+  expect(fired).toBe(true);
 });
