@@ -634,6 +634,11 @@ export async function compactConversation(
   // half-transcript cap guarantees an older region whenever there is content),
   // but they are on the honest side of that guarantee rather than relying on it.
   const freed = prunedChars > 0 ? { prunedChars } : {};
+  // NON-LEADING system messages (a later persisted system instruction —
+  // delegation notes, scope directives) are PRESERVED, not summarized away:
+  // resumeMessages explicitly promises they survive, and compaction silently
+  // deleting a system-authority instruction is a behavior change mid-session.
+  const laterSystem = messages.filter((m, i) => i > 0 && m.role === "system");
   const conversation = messages.filter((m) => m.role !== "system");
 
   if (conversation.length === 0) {
@@ -664,8 +669,8 @@ export async function compactConversation(
   const retained = conversation.slice(start);
   const next: IChatMessage[] =
     system?.role === "system"
-      ? [system, summary, ...retained]
-      : [summary, ...retained];
+      ? [system, ...laterSystem, summary, ...retained]
+      : [...laterSystem, summary, ...retained];
 
   return { before, after: next.length, messages: next };
 }

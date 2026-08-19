@@ -295,3 +295,34 @@ describe("compactSummaryLine", () => {
     );
   });
 });
+
+// ── D3: a NON-LEADING system message survives compaction ─────────────────────
+// resumeMessages explicitly promises "a LATER persisted system instruction
+// (delegation, scope notes) is preserved" — compaction deleting it silently
+// removed a system-authority instruction mid-session.
+test("compaction preserves system messages at index > 0", async () => {
+  const provider: IProvider = {
+    async complete() {
+      return { content: "summary text", toolCalls: [] };
+    },
+  };
+  const messages: IChatMessage[] = [
+    { role: "system", content: "base prompt" },
+    { role: "system", content: "DELEGATION: later system instruction" },
+    ...Array.from({ length: 20 }, (_, i): IChatMessage[] => [
+      { role: "user", content: `question ${String(i)} ${"x".repeat(200)}` },
+      { role: "assistant", content: `answer ${String(i)} ${"y".repeat(200)}` },
+    ]).flat(),
+  ];
+
+  const result = await compactConversation(messages, provider);
+  const systems = result.messages.filter((m) => m.role === "system");
+
+  expect(systems).toHaveLength(2);
+  expect(systems[1]?.content).toContain("DELEGATION: later system instruction");
+  // Still compacted: the summary landed and the transcript shrank.
+  expect(result.after).toBeLessThan(result.before);
+  expect(
+    result.messages.some((m) => m.content.includes("[Summary of the earlier"))
+  ).toBe(true);
+});
