@@ -196,8 +196,10 @@ export function codePointWidth(cp: number): 0 | 1 | 2 {
 /** The column width of one grapheme cluster. Combining marks and VS16
  *  contribute nothing — iTerm/Terminal.app do not widen a Neutral base when
  *  VS16 requests emoji presentation. ZWJ sequences take the widest scalar
- *  (typically 2). Flag pairs are special-cased to 2. */
-function clusterWidth(cluster: string): number {
+ *  (typically 2). Flag pairs are special-cased to 2. Exported so per-cluster
+ *  loops (agent-rail word wrap) don't call displayWidth — which would
+ *  re-segment the single cluster through Intl.Segmenter per character. */
+export function clusterWidth(cluster: string): number {
   let width = 0;
   let riCount = 0;
   let hasNonRi = false;
@@ -222,8 +224,28 @@ function clusterWidth(cluster: string): number {
   return width;
 }
 
+/** True when every char is printable ASCII — one column each, no segmenting. */
+function isPlainAscii(str: string): boolean {
+  for (let i = 0; i < str.length; i += 1) {
+    const c = str.charCodeAt(i);
+
+    if (c < 0x20 || c > 0x7e) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 /** Total terminal columns `str` occupies, measured per grapheme cluster. */
 export function displayWidth(str: string): number {
+  // ASCII fast path: transcript text is overwhelmingly ASCII, and this runs
+  // several times per painted row — Intl.Segmenter + an array alloc per call
+  // was the render pipeline's dominant allocator.
+  if (isPlainAscii(str)) {
+    return str.length;
+  }
+
   let width = 0;
 
   for (const cluster of graphemes(str)) {

@@ -352,3 +352,47 @@ test("saveSession is a no-op when persistence is disabled", async () => {
 
   expect(await latestSession("/proj/np")).toBeNull();
 });
+
+test("redaction cache never serves a stale result for an edited message", async () => {
+  // Messages are redacted through a per-object cache (saves re-ran 13 regexes
+  // over the WHOLE transcript every turn). The cache must revalidate against
+  // the content field: an in-place edit that introduces a NEW secret has to be
+  // re-redacted — a stale hit here would leak it to disk.
+  const secretA = `sk-${"a1B2c3D4".repeat(3)}`;
+  const secretB = `sk-${"z9Y8x7W6".repeat(3)}`;
+  const message = { role: "user" as const, content: `first ${secretA}` };
+  const record = {
+    id: "redact-cache",
+    cwd: "/proj/r",
+    accept: "",
+    files: ["**/*"],
+    updatedAt: 1000,
+    messages: [message],
+  };
+
+  await saveSession(record);
+
+  const first = await latestSession("/proj/r");
+
+  expect(JSON.stringify(first)).not.toContain(secretA);
+
+  // Same object identity, mutated content — the cache must NOT reuse the old
+  // redaction.
+  message.content = `second ${secretB}`;
+  record.updatedAt = 2000;
+  await saveSession(record);
+
+  const second = await latestSession("/proj/r");
+
+  expect(JSON.stringify(second)).not.toContain(secretB);
+  expect(JSON.stringify(second)).toContain("second");
+
+  // Unchanged message on a THIRD save still round-trips correctly (cache hit).
+  record.updatedAt = 3000;
+  await saveSession(record);
+
+  const third = await latestSession("/proj/r");
+
+  expect(JSON.stringify(third)).not.toContain(secretB);
+  expect(JSON.stringify(third)).toContain("second");
+});

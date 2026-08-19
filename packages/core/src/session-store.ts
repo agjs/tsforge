@@ -94,7 +94,9 @@ export async function saveSession(record: ISessionRecord): Promise<void> {
   };
 
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  await Bun.write(path, JSON.stringify(safe, null, 2));
+  // Compact JSON: nothing diffs this file (only --continue reads it), and the
+  // pretty-printed form was ~30% larger on every per-turn rewrite.
+  await Bun.write(path, JSON.stringify(safe));
   await chmod(path, 0o600);
 }
 
@@ -360,6 +362,21 @@ export function redactText(text: string): string {
   return out;
 }
 
+/** Per-message redaction cache. The transcript is APPEND-only between saves,
+ *  yet every save re-ran 13 regex passes over EVERY message (quadratic across
+ *  a session — tens to hundreds of blocking ms per turn on a long transcript).
+ *  Keyed by message identity, revalidated against the content/toolCalls fields
+ *  so an in-place edit (compaction rewrites, gate-feedback slots) can never
+ *  serve a stale redaction — i.e. never let a new secret through. */
+const redactedCache = new WeakMap<
+  IChatMessage,
+  {
+    content: string;
+    toolCalls: readonly IToolCall[] | undefined;
+    redacted: IChatMessage;
+  }
+>();
+
 /**
  * Redact every message before persisting: its text (user prompts, assistant
  * answers, AND tool output — a `cat .env` dump is a real leak vector) AND the
@@ -367,13 +384,32 @@ export function redactText(text: string): string {
  * or `create` content). Structure is preserved; only string values are scrubbed.
  */
 function redactMessages(messages: readonly IChatMessage[]): IChatMessage[] {
-  return messages.map((message) => ({
-    ...message,
-    content: redactText(message.content),
-    ...(message.toolCalls === undefined
-      ? {}
-      : { toolCalls: redactToolCalls(message.toolCalls) }),
-  }));
+  return messages.map((message) => {
+    const hit = redactedCache.get(message);
+
+    if (
+      hit?.content === message.content &&
+      hit.toolCalls === message.toolCalls
+    ) {
+      return hit.redacted;
+    }
+
+    const redacted: IChatMessage = {
+      ...message,
+      content: redactText(message.content),
+      ...(message.toolCalls === undefined
+        ? {}
+        : { toolCalls: redactToolCalls(message.toolCalls) }),
+    };
+
+    redactedCache.set(message, {
+      content: message.content,
+      toolCalls: message.toolCalls,
+      redacted,
+    });
+
+    return redacted;
+  });
 }
 
 function redactToolCalls(calls: readonly IToolCall[]): IToolCall[] {

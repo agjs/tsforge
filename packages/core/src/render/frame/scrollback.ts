@@ -19,14 +19,21 @@ export interface IScrollAnchor {
  * Wrapped rows are cached — recomputing wrap over thousands of transcript lines
  * on every keystroke (via PaneScreen.paint) was multi‑tens-of-ms of lag.
  */
+/** Over-capacity slack before a trim batch runs (amortizes eviction cost). */
+const TRIM_SLACK = 256;
+
 export class Scrollback {
   private lines: string[] = [];
   /** Incomplete trailing line (not yet terminated by `\n`). */
   private partial = "";
   private offsetFromBottom = 0;
   private wrapCols = 80;
-  /** Invalidated on append / clear / wrap-width change. */
+  /** Invalidated on trim / clear / wrap-width change; APPENDED to on stream
+   *  appends (see append) so a scrolled-up view doesn't re-wrap the whole
+   *  transcript per token. */
   private cachedWrapped: string[] | null = null;
+  /** Wrapped rows the open partial contributes to cachedWrapped's tail. */
+  private partialWrapRows = 0;
   /** Overflow flag from the last following viewport walk (`view` keyed). */
   private followingOverflow = false;
   private followingOverflowView = -1;
@@ -103,12 +110,41 @@ export class Scrollback {
 
     let trimmed = false;
 
-    while (this.lines.length > this.capacity) {
-      this.lines.shift();
+    // Amortized trim: shift() per evicted line was O(capacity) per append once
+    // full; trimming a slack batch in one splice is amortized O(1) per line.
+    if (this.lines.length > this.capacity + TRIM_SLACK) {
+      this.lines.splice(0, this.lines.length - this.capacity);
       trimmed = true;
     }
 
-    this.invalidateWrap();
+    // Incremental cache maintenance: append wraps of the NEW lines instead of
+    // invalidating — a scrolled-up view otherwise re-wrapped the entire
+    // transcript per streamed token (the worst path in this file). A head trim
+    // still invalidates (we don't know how many wrapped rows the evicted
+    // lines occupied); so do clear/resize via invalidateWrap.
+    if (trimmed) {
+      this.invalidateWrap();
+    } else if (this.cachedWrapped !== null) {
+      if (this.partialWrapRows > 0) {
+        this.cachedWrapped.length -= this.partialWrapRows;
+      }
+
+      for (const line of parts) {
+        this.cachedWrapped.push(...wrapAnsiLines([line], this.wrapCols));
+      }
+
+      const partialRows =
+        this.partial.length > 0
+          ? wrapAnsiLines([this.partial], this.wrapCols)
+          : [];
+
+      this.cachedWrapped.push(...partialRows);
+      this.partialWrapRows = partialRows.length;
+    }
+
+    // The following-overflow memo keys on content — any append staled it,
+    // whether or not a wrap cache existed.
+    this.followingOverflowView = -1;
 
     // Following (offset 0) never needs a wrap pass to clamp. Rebuilding the
     // wrap cache on every streamed line was O(n²) and made typing after a long
@@ -171,7 +207,8 @@ export class Scrollback {
     };
   }
 
-  /** All complete lines plus the current partial, for viewport/dump. */
+  /** All complete lines plus the current partial, for viewport/dump. Copies
+   *  when a partial is open — use logicalCount/logicalAt on hot paths. */
   private allLines(): string[] {
     if (this.partial.length === 0) {
       return this.lines;
@@ -180,13 +217,30 @@ export class Scrollback {
     return [...this.lines, this.partial];
   }
 
+  /** Logical line count including the open partial — no array copy. */
+  private logicalCount(): number {
+    return this.lines.length + (this.partial.length > 0 ? 1 : 0);
+  }
+
+  /** Logical line by index including the open partial — no array copy. */
+  private logicalAt(i: number): string {
+    return i < this.lines.length ? (this.lines[i] ?? "") : this.partial;
+  }
+
   private invalidateWrap(): void {
     this.cachedWrapped = null;
+    this.partialWrapRows = 0;
     this.followingOverflowView = -1;
   }
 
   private wrapped(): string[] {
-    this.cachedWrapped ??= wrapAnsiLines(this.allLines(), this.wrapCols);
+    if (this.cachedWrapped === null) {
+      this.cachedWrapped = wrapAnsiLines(this.allLines(), this.wrapCols);
+      this.partialWrapRows =
+        this.partial.length > 0
+          ? wrapAnsiLines([this.partial], this.wrapCols).length
+          : 0;
+    }
 
     return this.cachedWrapped;
   }
@@ -235,12 +289,12 @@ export class Scrollback {
 
   /** Bottom-following viewport — O(viewport) wraps, not O(transcript). */
   private visibleFollowing(view: number): string[] {
-    const logical = this.allLines();
+    const count = this.logicalCount();
     const collected: string[] = [];
     let moreAbove = false;
 
-    for (let i = logical.length - 1; i >= 0; i -= 1) {
-      const parts = wrapAnsiLines([logical[i] ?? ""], this.wrapCols);
+    for (let i = count - 1; i >= 0; i -= 1) {
+      const parts = wrapAnsiLines([this.logicalAt(i)], this.wrapCols);
 
       for (let j = parts.length - 1; j >= 0; j -= 1) {
         if (collected.length >= view) {
@@ -282,11 +336,11 @@ export class Scrollback {
       return this.followingOverflow;
     }
 
-    const logical = this.allLines();
+    const total = this.logicalCount();
     let count = 0;
 
-    for (let i = logical.length - 1; i >= 0; i -= 1) {
-      const parts = wrapAnsiLines([logical[i] ?? ""], this.wrapCols);
+    for (let i = total - 1; i >= 0; i -= 1) {
+      const parts = wrapAnsiLines([this.logicalAt(i)], this.wrapCols);
 
       count += parts.length;
 
@@ -355,7 +409,7 @@ export class Scrollback {
   }
 
   get length(): number {
-    return this.allLines().length;
+    return this.logicalCount();
   }
 
   private clampOffset(): void {

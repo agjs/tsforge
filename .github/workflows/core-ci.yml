@@ -67,7 +67,20 @@ jobs:
 
       - name: Install ripgrep
         if: steps.filter.outputs.code == 'true'
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        # apt mirrors intermittently hang and burned two full 15m job timeouts
+        # before any test ran — bound the step and retry once. `install`
+        # without a prior `update` usually works from the runner's baked lists,
+        # so the update itself is best-effort.
+        timeout-minutes: 4
+        run: |
+          for attempt in 1 2; do
+            sudo timeout 90 apt-get update || true
+            if sudo timeout 60 apt-get install -y ripgrep; then
+              exit 0
+            fi
+            echo "apt attempt ${attempt} failed; retrying"
+          done
+          exit 1
 
       - name: Verify install.sh copies match
         if: steps.filter.outputs.code == 'true'

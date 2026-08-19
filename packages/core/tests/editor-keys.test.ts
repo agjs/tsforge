@@ -141,3 +141,14 @@ describe("decodeKeys", () => {
     }
   });
 });
+
+test("decodeKeys handles a 50KB paste in linear time", () => {
+  const paste = "abc def [x1] (y2) 👋 ".repeat(2500); // ~52K units, bracket-heavy
+  const t0 = performance.now();
+  const events = decodeKeys(paste);
+  const ms = performance.now() - t0;
+
+  expect(events.length).toBeGreaterThan(40_000);
+  expect(events.every((e) => e.name === "char")).toBe(true);
+  expect(ms).toBeLessThan(1_500);
+});

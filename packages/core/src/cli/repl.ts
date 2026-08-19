@@ -733,7 +733,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   // user sets a gate via /config.
   let gateLabel = initialGateLabel;
 
-  const persist = async (): Promise<void> => {
+  const writeSession = async (): Promise<void> => {
     await saveSession({
       id,
       cwd: args.dir,
@@ -757,6 +757,45 @@ export async function repl(args: ICliArgs): Promise<number> {
       activePlanId: session.getActivePlanId(),
       messages: [...session.messages],
     });
+  };
+
+  // Debounced persistence: the save serializes + redacts the WHOLE transcript,
+  // and awaiting it at turn end blocked the loop exactly when the user starts
+  // typing the next prompt. Writes are serialized through one in-flight chain
+  // (never two racing; last write wins), the FIRST save stays eager so the
+  // session file exists early, and exits flush via persistNow(). Tradeoff: a
+  // hard crash inside the debounce window loses ≤500ms of --continue state.
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  let persistChain: Promise<void> = Promise.resolve();
+  let persistedOnce = false;
+  const PERSIST_DEBOUNCE_MS = 500;
+
+  const persistNow = async (): Promise<void> => {
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+
+    persistChain = persistChain.then(writeSession, writeSession);
+    await persistChain;
+  };
+
+  const persist = async (): Promise<void> => {
+    if (!persistedOnce) {
+      persistedOnce = true;
+      await persistNow();
+
+      return;
+    }
+
+    if (persistTimer !== null) {
+      return;
+    }
+
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      void persistNow();
+    }, PERSIST_DEBOUNCE_MS);
   };
 
   // "update available" notice: read from the local cache (no network on the hot
@@ -1090,6 +1129,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       // inside it — which would break the rail. Idempotent.
       closeAgentTurn();
       resetTree(); // clear the live agent tree once the turn's delegation is done
+      // Coalescing flush guarantee: the turn's final streamed text must render
+      // now, not whenever the deferred paint timer would have fired.
+      paneScreen.flushPendingPaint();
     }
 
     await persist();
@@ -1851,11 +1893,14 @@ export async function repl(args: ICliArgs): Promise<number> {
       buf.push(segments[k] ?? "");
     }
 
-    agentOutput.set(agentId, buf.slice(-200));
+    // Amortized trim: slicing to 200 on EVERY chunk allocated a fresh array
+    // per token; trim only when the buffer doubles.
+    agentOutput.set(agentId, buf.length > 400 ? buf.slice(-200) : buf);
 
-    if (agentId === focusedAgentId) {
-      repaintTree();
-    }
+    // No repaint here: a full-screen tree repaint per streamed subagent token
+    // was the delegation repaint storm (2201 full paints / 2000 tokens in the
+    // bench). The 120ms spinner tick repaints the live tree, and agent_result /
+    // focus changes repaint immediately, so the final state is never stale.
   };
 
   const feedTree = (event: ILoopEvent): void => {
@@ -3066,6 +3111,8 @@ export async function repl(args: ICliArgs): Promise<number> {
   paneScreen.leave();
   process.stdout.off("resize", handleResize); // don't pin the REPL closure
   outputRouter.setParentSink(null); // later/headless writes go straight to stdout again
+  // Flush any debounced save — the exit path must never lose --continue state.
+  await persistNow();
 
   return exitCode;
 }

@@ -399,7 +399,11 @@ export function filterGateStream(
   const fn = (text: string): void => {
     buf += text;
 
-    let nl = buf.indexOf("\n");
+    // Cursor-based line walk: re-slicing the remaining buffer per line was
+    // O(n²) on chunks carrying many lines (tsc/vitest bursts). One slice at
+    // the end keeps only the trailing partial.
+    let start = 0;
+    let nl = buf.indexOf("\n", start);
 
     // Emit only COMPLETE (newline-terminated) lines; HOLD any trailing partial
     // until its newline (or flush()). This is what makes the JSON drop reliable:
@@ -407,9 +411,13 @@ export function filterGateStream(
     // the old partial flush leaked the JSON across chunk boundaries. Gate output
     // (vite/tsc/test) is line-based, so live progress isn't lost.
     while (nl !== -1) {
-      emit(buf.slice(0, nl + 1));
-      buf = buf.slice(nl + 1);
-      nl = buf.indexOf("\n");
+      emit(buf.slice(start, nl + 1));
+      start = nl + 1;
+      nl = buf.indexOf("\n", start);
+    }
+
+    if (start > 0) {
+      buf = buf.slice(start);
     }
   };
 

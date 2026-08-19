@@ -106,13 +106,29 @@ function capPayload(
   return out;
 }
 
+/** Terminal event types that force an immediate flush — a crash-adjacent tail
+ *  must not sit in the buffer. */
+const FLUSH_NOW_TYPES: ReadonlySet<LedgerEventType> = new Set([
+  "run_finished",
+  "tool_call_failed",
+]);
+
 /**
- * Append-only typed run ledger. Writes are synchronous (`appendFileSync`), so
- * lines never interleave and the file is always valid JSONL. Every payload is
- * secret-redacted and size-capped first; a write failure is swallowed so the
- * ledger can never break the run. A no-op when no log file is configured.
+ * Append-only typed run ledger, BATCHED: events buffer in memory and one
+ * `appendFileSync` per event-loop tick writes the batch. The old
+ * write-per-event shape cost an open/write/close syscall triple per streamed
+ * token (120-240 blocking syscalls/s under --log); batching keeps strict
+ * ordering and the always-valid-JSONL property with no async write ever in
+ * flight. Terminal events and process exit flush synchronously — worst case a
+ * hard crash loses under one tick of tail. Every payload is secret-redacted
+ * and size-capped; a write failure is swallowed so the ledger can never break
+ * the run. A no-op when no log file is configured.
  */
 export class LedgerWriter {
+  private buffer: string[] = [];
+  private flushScheduled = false;
+  private exitHooked = false;
+
   constructor(
     private readonly file: string,
     private readonly runId: string,
@@ -141,10 +157,50 @@ export class LedgerWriter {
       ),
     };
 
+    this.buffer.push(JSON.stringify(event));
+
+    if (FLUSH_NOW_TYPES.has(type)) {
+      this.flush();
+
+      return;
+    }
+
+    this.scheduleFlush();
+  }
+
+  /** Write everything buffered NOW (sync, ordered). Safe to call anywhere. */
+  flush(): void {
+    if (this.buffer.length === 0) {
+      return;
+    }
+
+    const lines = this.buffer;
+
+    this.buffer = [];
+
     try {
-      appendFileSync(this.file, `${JSON.stringify(event)}\n`);
+      appendFileSync(this.file, `${lines.join("\n")}\n`);
     } catch {
       // A logging failure must never interrupt the session.
     }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushScheduled) {
+      return;
+    }
+
+    if (!this.exitHooked) {
+      this.exitHooked = true;
+      process.on("exit", () => {
+        this.flush();
+      });
+    }
+
+    this.flushScheduled = true;
+    setImmediate(() => {
+      this.flushScheduled = false;
+      this.flush();
+    });
   }
 }

@@ -1,5 +1,6 @@
 import { join, extname } from "node:path";
 import { readdirSync, statSync, readFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import type { IMetaRuleContext } from "./meta-rules.types";
 
 /** Narrow `unknown` to a record without a type assertion. */
@@ -25,15 +26,18 @@ function collectSourceFiles(root: string): string[] {
   const out: string[] = [];
 
   const scanDir = (dir: string, relBase: string): void => {
-    let entries: string[];
+    // withFileTypes: the dirent carries file/dir kind, halving the syscalls of
+    // the old readdir + statSync-per-entry walk (which ran EVERY settle).
+    let entries: Dirent[];
 
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
 
-    for (const entry of entries) {
+    for (const dirent of entries) {
+      const entry = dirent.name;
       const full = join(dir, entry);
       const rel = join(relBase, entry);
 
@@ -43,11 +47,9 @@ function collectSourceFiles(root: string): string[] {
       }
 
       try {
-        const stat = statSync(full);
-
-        if (stat.isDirectory()) {
+        if (dirent.isDirectory()) {
           scanDir(full, rel);
-        } else if (stat.isFile()) {
+        } else if (dirent.isFile()) {
           const ext = extname(entry);
 
           // Skip generated output (*.gen.ts — e.g. TanStack's route tree). It
@@ -206,11 +208,21 @@ function parsePackageJson(root: string): Record<string, unknown> | null {
  * Build the rule context: list source/config/workflow files, parse package.json,
  * set up a cached file reader.
  */
+/** Cross-settle content cache keyed by mtimeMs+size: meta-rules re-read the
+ *  ENTIRE repo synchronously at every settle; most files never change between
+ *  settles, so a fresh stat validates the cached text without re-reading. */
+const contentCache = new Map<
+  string,
+  { mtimeMs: number; size: number; text: string }
+>();
+
 export function buildMetaRuleContext(
   root: string,
   activePacks: readonly string[],
   changedFiles: readonly string[] = []
 ): IMetaRuleContext {
+  // Per-context memo on top of the cross-settle cache: within one settle a
+  // path resolves at most once (including negative results).
   const fileCache = new Map<string, string | null>();
 
   const readFile = (relPath: string): string | null => {
@@ -228,8 +240,21 @@ export function buildMetaRuleContext(
         return null;
       }
 
+      const cached = contentCache.get(full);
+
+      if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+        fileCache.set(relPath, cached.text);
+
+        return cached.text;
+      }
+
       const text = readFileSync(full, "utf8");
 
+      contentCache.set(full, {
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        text,
+      });
       fileCache.set(relPath, text);
 
       return text;

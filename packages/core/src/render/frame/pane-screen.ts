@@ -3,7 +3,7 @@ import type { IStatusInfo } from "../render.types";
 import {
   BEGIN_SYNC,
   CLEAR_SCREEN,
-  CURSOR_BLINK_BLOCK,
+  CURSOR_STEADY_BLOCK,
   CURSOR_COLOR_DEFAULT,
   CURSOR_COLOR_GREEN,
   CURSOR_SHAPE_DEFAULT,
@@ -13,6 +13,7 @@ import {
   ENTER_ALT,
   EXIT_ALT,
   EL_EOL,
+  HIDE_CURSOR,
   SHOW_CURSOR,
   cup,
 } from "./codes";
@@ -55,6 +56,15 @@ import { paint } from "../style";
 import { displayWidth } from "../width";
 import { formatScrollbarColumn, overlayScrollbarCol } from "./scrollbar";
 import { frameContentRow, outerInsets, wrapOuterFrame } from "./outer-frame";
+import {
+  PERF_ENABLED,
+  armStallProbe,
+  countAppendMain,
+  countBytes,
+  countPaint,
+  countSetAgentTree,
+  emitPerfSummary,
+} from "./paint-stats";
 
 export interface IPaneScreenTerminal {
   readonly isTTY?: boolean;
@@ -76,6 +86,11 @@ export const FORGE_EDITOR_GUTTER = INPUT_EDITOR_GUTTER;
 const FORGE_PLACEHOLDER = "describe a task, or /help";
 
 const GUTTER = "│";
+/** Paint rate cap while streaming (~60fps) — see queueMainPaint. */
+const MAIN_PAINT_MIN_INTERVAL_MS = 16;
+/** Half-period of the harness-driven caret blink (visible 500ms, hidden
+ *  500ms — the classic editor cadence). */
+const CURSOR_BLINK_MS = 500;
 /** Fallback when no worklist lines are set — mirrors formatWorklistLines empty. */
 const EMPTY_PANEL_LINES = ["approve a plan", "to fill this list"] as const;
 
@@ -109,6 +124,18 @@ export class PaneScreen {
   private wheelAccum = 0;
   private wheelCol = 1;
   private wheelPaintQueued = false;
+  /** Appended-but-unpainted transcript text is pending (paint coalescing).
+   *  Scrollback state itself is NEVER stale — only the paint is deferred. */
+  private pendingMainPaint = false;
+  private mainPaintTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastMainPaintAt = 0;
+  /** Harness-driven caret blink. The terminal's native blink cannot survive
+   *  rendering (every frame repositions the cursor, resetting the blink
+   *  phase), so the pane uses a STEADY block and toggles visibility itself on
+   *  a fixed timer — a constant, even blink in every state: idle, streaming,
+   *  delegating. Typing snaps the phase to visible (standard editor feel). */
+  private blinkOn = true;
+  private blinkTimer: ReturnType<typeof setInterval> | null = null;
   private bodyViewportRows = 1;
   private entered = false;
   /** True after a successful enter — resize may re-enter after a shrink-leave. */
@@ -157,16 +184,23 @@ export class PaneScreen {
     // Alt screen + mouse capture: host terminal must NOT scroll its own buffer.
     // Wheel events become CSI reports; we scroll main/panel viewports only.
     // Green blinking block caret replaces any prompt text.
+    // STEADY block: the pane drives its own blink (restartBlink) — the
+    // terminal's native blink cannot survive frames repositioning the cursor.
     this.out.write(
       ENTER_ALT +
         ENABLE_MOUSE +
         CURSOR_COLOR_GREEN +
-        CURSOR_BLINK_BLOCK +
+        CURSOR_STEADY_BLOCK +
         SHOW_CURSOR
     );
     this.entered = true;
     this.everEntered = true;
     this.prevLines = null;
+
+    if (PERF_ENABLED) {
+      armStallProbe();
+    }
+
     this.cursor.reset();
     this.panelOffset = 0;
 
@@ -176,6 +210,7 @@ export class PaneScreen {
     }
 
     this.paint();
+    this.restartBlink();
 
     return true;
   }
@@ -186,6 +221,14 @@ export class PaneScreen {
     }
 
     this.stopBusyTimer();
+    this.stopBlink();
+
+    if (this.mainPaintTimer !== null) {
+      clearTimeout(this.mainPaintTimer);
+      this.mainPaintTimer = null;
+      this.pendingMainPaint = false;
+    }
+
     this.out.write(
       DISABLE_MOUSE +
         CURSOR_COLOR_DEFAULT +
@@ -197,6 +240,7 @@ export class PaneScreen {
     this.prevLines = null;
     this.cursor.reset();
     this.panelOffset = 0;
+    emitPerfSummary();
   }
 
   /** Full clear + redraw (e.g. `/clear`) — invalidates differential cache. */
@@ -265,19 +309,75 @@ export class PaneScreen {
   }
 
   appendMain(text: string): void {
+    if (PERF_ENABLED) {
+      countAppendMain();
+    }
+
     this.scrollback.append(text);
 
     if (!this.entered) {
       return;
     }
 
-    // Streaming hot path: following + no overlay — patch main viewport only.
+    this.queueMainPaint();
+  }
+
+  /**
+   * Coalesce streamed-token paints (same idea as queueWheel): a burst of
+   * appends in one event-loop turn paints once, and paints are rate-limited to
+   * ~60fps during a fast stream. Uncoalesced, EVERY SSE delta recomputed the
+   * whole visible viewport (bench: 5000 appends = 5000 paints, 14s of CPU).
+   */
+  private queueMainPaint(): void {
+    this.pendingMainPaint = true;
+
+    if (this.mainPaintTimer !== null) {
+      return;
+    }
+
+    const since = performance.now() - this.lastMainPaintAt;
+    const delay =
+      since >= MAIN_PAINT_MIN_INTERVAL_MS
+        ? 0
+        : Math.ceil(MAIN_PAINT_MIN_INTERVAL_MS - since);
+
+    this.mainPaintTimer = setTimeout(() => {
+      this.mainPaintTimer = null;
+      this.flushPendingPaint();
+    }, delay);
+  }
+
+  /**
+   * Render any coalesced appended text NOW. Called by the timer, by every
+   * full-paint entry (which renders scrollback anyway), and by the REPL at
+   * turn end — the flush guarantee that the final token is never left waiting
+   * on a timer when the loop goes quiet.
+   */
+  flushPendingPaint(): void {
+    if (this.mainPaintTimer !== null) {
+      clearTimeout(this.mainPaintTimer);
+      this.mainPaintTimer = null;
+    }
+
+    if (!this.pendingMainPaint || !this.entered) {
+      this.pendingMainPaint = false;
+
+      return;
+    }
+
+    this.pendingMainPaint = false;
+    this.lastMainPaintAt = performance.now();
+
+    // Streaming hot path: following, no menu overlay — patch main rows only.
+    // A STATIC agent-tree band is fine: chrome rows sit BELOW the main
+    // viewport (composeScreen fills them at bodyStart + mainRows), so patching
+    // main rows leaves them untouched; paintMainFollowOnly subtracts the same
+    // chrome budget paint() does.
     if (
       this.prevLines !== null &&
       !this.geometryDirty &&
       this.scrollback.following &&
       this.overlayLines.length === 0 &&
-      this.agentTreeLines.length === 0 &&
       this.lastWrapCols > 0
     ) {
       this.paintMainFollowOnly();
@@ -456,10 +556,9 @@ export class PaneScreen {
     }
 
     const layout = computeLayout(this.layoutOpts());
-    const nextTop =
-      layout.top.rows > 0
-        ? this.topbarLines(layout.top.cols, layout).join("\n")
-        : "";
+    const topLines =
+      layout.top.rows > 0 ? this.topbarLines(layout.top.cols, layout) : [];
+    const nextTop = topLines.join("\n");
     const nextShape = this.topStripShape(info);
 
     if (
@@ -480,10 +579,133 @@ export class PaneScreen {
       return;
     }
 
+    // Tick-only change (spinner glyph / elapsed clock): patch the top-strip
+    // rows alone. The old path composed the ENTIRE screen 8×/second, forever —
+    // the single biggest always-on paint cost.
+    if (
+      this.prevLines !== null &&
+      !this.geometryDirty &&
+      this.flashHeaderPaints === 0
+    ) {
+      this.paintTopOnly(layout, topLines);
+
+      return;
+    }
+
     this.paint();
   }
 
+  /** Start (or restart) the blink with the visible phase — a keystroke snaps
+   *  the caret on, then blinking resumes on the steady cadence. */
+  private restartBlink(): void {
+    this.blinkOn = true;
+
+    if (this.blinkTimer !== null) {
+      clearInterval(this.blinkTimer);
+    }
+
+    this.blinkTimer = setInterval(() => {
+      if (!this.entered) {
+        return;
+      }
+
+      this.blinkOn = !this.blinkOn;
+      this.out.write(
+        BEGIN_SYNC + (this.blinkOn ? SHOW_CURSOR : HIDE_CURSOR) + END_SYNC
+      );
+    }, CURSOR_BLINK_MS);
+    // Never keep the process (or a test runner) alive just to blink.
+    this.blinkTimer.unref();
+  }
+
+  private stopBlink(): void {
+    if (this.blinkTimer !== null) {
+      clearInterval(this.blinkTimer);
+      this.blinkTimer = null;
+    }
+
+    this.blinkOn = true;
+  }
+
+  /** Caret bytes for the end of a frame: position it, visible only when the
+   *  blink phase is on — frames render mid-blink without disturbing the beat. */
+  private frameCursorBytes(row: number, col: number): string {
+    return this.cursor.placeOnly(row, col) + (this.blinkOn ? SHOW_CURSOR : "");
+  }
+
+  /** Patch just the top-strip rows (mirrors paintInputOnly). */
+  private paintTopOnly(
+    layout: ReturnType<typeof computeLayout>,
+    topLines: string[]
+  ): void {
+    const screen = this.prevLines;
+
+    if (screen === null) {
+      this.paint();
+
+      return;
+    }
+
+    const insets = outerInsets(this.rows, this.cols);
+    const splitCol = layout.panel !== null ? layout.main.cols : undefined;
+    let dirty = "";
+
+    for (let i = 0; i < layout.top.rows; i += 1) {
+      const content = fitAnsiLine(topLines[i] ?? "", layout.top.cols);
+      const stamped = withOpaqueBg(
+        frameContentRow(content, this.cols, { splitCol }),
+        CONSOLE.bg
+      );
+      const row = insets.originRow + layout.top.row + i;
+
+      if (screen[row] !== stamped) {
+        screen[row] = stamped;
+        dirty +=
+          cup(row + 1, 1) +
+          lastRowSafe(stamped, row, this.rows, this.cols) +
+          EL_EOL;
+      }
+    }
+
+    this.lastTopLine = topLines.join("\n");
+
+    if (dirty.length === 0) {
+      return;
+    }
+
+    // Re-home the caret onto the input row (same contract as the other
+    // partial painters — a dirty write strands the hardware cursor).
+    const band = this.paintInputBand(layout);
+    const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
+    const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
+
+    this.cursor.reset();
+    const frame =
+      BEGIN_SYNC +
+      HIDE_CURSOR +
+      dirty +
+      this.frameCursorBytes(cursorRow, cursorCol) +
+      END_SYNC;
+
+    if (PERF_ENABLED) {
+      countBytes(frame.length);
+      countPaint("topOnly", 0);
+    }
+
+    this.out.write(frame);
+  }
+
   setOverlay(lines: readonly string[]): void {
+    // Dedupe: palette keystrokes that don't change the visible menu (same
+    // filter results) must not force a full compose per keypress.
+    if (
+      lines.length === this.overlayLines.length &&
+      lines.length > 0 &&
+      lines.every((l, i) => l === this.overlayLines[i])
+    ) {
+      return;
+    }
+
     this.overlayLines = lines;
 
     if (this.entered) {
@@ -504,6 +726,20 @@ export class PaneScreen {
   }
 
   setAgentTree(lines: readonly string[]): void {
+    if (PERF_ENABLED) {
+      countSetAgentTree();
+    }
+
+    // Dedupe: identical tree frames used to force a FULL compose per subagent
+    // token (the delegation repaint storm — bench: 2201 full paints for 2000
+    // streamed tokens).
+    if (
+      lines.length === this.agentTreeLines.length &&
+      lines.every((l, i) => l === this.agentTreeLines[i])
+    ) {
+      return;
+    }
+
     this.agentTreeLines = lines;
 
     if (this.entered) {
@@ -577,6 +813,19 @@ export class PaneScreen {
 
   /** Patch just the input band + caret — skips scrollback wrap/compose. */
   private paintInputOnly(): void {
+    if (!PERF_ENABLED) {
+      this.paintInputOnlyInner();
+
+      return;
+    }
+
+    const t0 = performance.now();
+
+    this.paintInputOnlyInner();
+    countPaint("inputOnly", performance.now() - t0);
+  }
+
+  private paintInputOnlyInner(): void {
     const insets = outerInsets(this.rows, this.cols);
     const layout = computeLayout(this.layoutOpts());
     const band = this.paintInputBand(layout);
@@ -628,12 +877,31 @@ export class PaneScreen {
     const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
-    this.cursor.reset();
+    if (dirty.length > 0) {
+      // Typing hot path: row writes moved the cursor — force the re-home and
+      // SHOW instantly with the blink phase snapped to visible (a keystroke
+      // always lands with the caret on, like every editor).
+      this.cursor.reset();
+      this.restartBlink();
+      this.out.write(
+        BEGIN_SYNC +
+          HIDE_CURSOR +
+          dirty +
+          this.cursor.move(cursorRow, cursorCol) +
+          END_SYNC
+      );
+
+      return;
+    }
+
+    // Nothing painted → nothing moved the physical cursor. Let CursorState
+    // dedupe suppress the CUP when the target is unchanged — every forced
+    // SHOW+CUP resets the terminal's blink timer, which made the caret blink
+    // erratically in step with rendering.
     const cursorBytes = this.cursor.move(cursorRow, cursorCol);
 
-    if (dirty.length > 0) {
-      this.out.write(BEGIN_SYNC + dirty + cursorBytes + END_SYNC);
-    } else {
+    if (cursorBytes.length > 0) {
+      this.restartBlink();
       this.out.write(BEGIN_SYNC + cursorBytes + END_SYNC);
     }
   }
@@ -643,6 +911,19 @@ export class PaneScreen {
    * Reuses top/input/panel from prevLines — no full compose/outer-frame rebuild.
    */
   private paintMainFollowOnly(): void {
+    if (!PERF_ENABLED) {
+      this.paintMainFollowOnlyInner();
+
+      return;
+    }
+
+    const t0 = performance.now();
+
+    this.paintMainFollowOnlyInner();
+    countPaint("mainOnly", performance.now() - t0);
+  }
+
+  private paintMainFollowOnlyInner(): void {
     const screen = this.prevLines;
 
     if (screen === null) {
@@ -654,7 +935,13 @@ export class PaneScreen {
     const insets = outerInsets(this.rows, this.cols);
     const layout = computeLayout(this.layoutOpts());
     const bodyGap = layout.main.rows >= BODY_GAP_ROWS + 2 ? BODY_GAP_ROWS : 0;
-    const mainRows = Math.max(0, layout.main.rows - bodyGap);
+    // Mirror paint()'s chrome budget: tree/overlay rows sit below the main
+    // viewport, so the patched band must shrink by the same amount or it would
+    // overwrite them.
+    const scrollBudget = Math.max(0, layout.main.rows - bodyGap);
+    const chromeCount = this.agentTreeLines.length + this.overlayLines.length;
+    const chromeRows = Math.min(chromeCount, Math.max(0, scrollBudget - 1));
+    const mainRows = scrollBudget - chromeRows;
     const wrapCols = insetInnerCols(layout.main.cols);
 
     if (wrapCols !== this.lastWrapCols || mainRows !== this.bodyViewportRows) {
@@ -686,9 +973,18 @@ export class PaneScreen {
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
-    this.out.write(
-      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC
-    );
+    const frame =
+      BEGIN_SYNC +
+      HIDE_CURSOR +
+      dirty +
+      this.frameCursorBytes(cursorRow, cursorCol) +
+      END_SYNC;
+
+    if (PERF_ENABLED) {
+      countBytes(frame.length);
+    }
+
+    this.out.write(frame);
   }
 
   /** Patch main-body terminal rows in `screen`; returns CSI dirty bytes. */
@@ -763,10 +1059,16 @@ export class PaneScreen {
       return "dump";
     }
 
+    // Lazy: computing the panel body (stripSgr + copies) per keystroke paid
+    // for a value most keys never read. Arrow captures lexical `this` (an
+    // object-literal getter would rebind it to the deps object).
+    const lazyPanelLen = (): number => this.panelSourceLen();
     const deps = {
       focus: this.focus,
       scrollback: this.scrollback,
-      panelLen: this.panelSourceLen(),
+      get panelLen(): number {
+        return lazyPanelLen();
+      },
       onWheel: (delta: number, col: number, _row: number): void => {
         this.queueWheel(delta, col);
       },
@@ -934,6 +1236,23 @@ export class PaneScreen {
     if (!this.entered) {
       return;
     }
+
+    if (!PERF_ENABLED) {
+      this.paintInner();
+
+      return;
+    }
+
+    const t0 = performance.now();
+
+    this.paintInner();
+    countPaint("full", performance.now() - t0);
+  }
+
+  private paintInner(): void {
+    // A full compose renders the whole scrollback viewport — any coalesced
+    // append is thereby painted; the queued timer becomes a no-op.
+    this.pendingMainPaint = false;
 
     const layout = computeLayout(this.layoutOpts());
     const inputBand = this.paintInputBand(layout);
@@ -1230,9 +1549,14 @@ export class PaneScreen {
     // on the footer. Pure no-op paints (no dirty) write nothing.
     if (dirty.length > 0) {
       this.cursor.reset();
-      const cursorBytes = this.cursor.move(cursorRow, cursorCol);
+      const cursorBytes = this.frameCursorBytes(cursorRow, cursorCol);
+      const frame = BEGIN_SYNC + HIDE_CURSOR + dirty + cursorBytes + END_SYNC;
 
-      this.out.write(BEGIN_SYNC + dirty + cursorBytes + END_SYNC);
+      if (PERF_ENABLED) {
+        countBytes(frame.length);
+      }
+
+      this.out.write(frame);
     }
 
     this.prevLines = screen;
@@ -1251,6 +1575,7 @@ export class PaneScreen {
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
+    this.restartBlink();
     this.out.write(
       BEGIN_SYNC + this.cursor.move(cursorRow, cursorCol) + END_SYNC
     );

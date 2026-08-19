@@ -1,4 +1,4 @@
-import { graphemes } from "../../editor/segments";
+import { firstGrapheme } from "../../editor/segments";
 
 const ESC = String.fromCharCode(27);
 
@@ -28,7 +28,7 @@ export function takeOneInputSequence(input: string): {
     return peelEscapeSequence(input);
   }
 
-  const cluster = graphemes(input)[0];
+  const cluster = firstGrapheme(input);
 
   if (cluster === undefined) {
     return { seq: "", rest: "" };
@@ -68,7 +68,7 @@ function peelEscapeSequence(input: string): {
 
   // Alt+key (ESC + next grapheme), including Alt+Enter (`\x1b\r`).
   if (input.length >= 2) {
-    const cluster = graphemes(input.slice(1))[0];
+    const cluster = firstGrapheme(input.slice(1, 1 + 32));
 
     if (cluster !== undefined) {
       return {
@@ -85,9 +85,12 @@ function peelEscapeSequence(input: string): {
  * Map Kitty CSI-u / xterm modifyOtherKeys encodings of Ctrl+G and Ctrl+O to
  * their legacy single-byte forms so pane chrome can match them.
  */
+const CSI_U_CTRL = new RegExp(`^${ESC}\\[(\\d+);(\\d+)u$`, "u");
+const XTERM_CTRL = new RegExp(`^${ESC}\\[27;(\\d+);(\\d+)~$`, "u");
+
 export function normalizePaneControlSeq(seq: string): string {
   // Kitty CSI-u: ESC [ codepoint ; mods u  (mods 5 = Ctrl)
-  const csiU = new RegExp(`^${ESC}\\[(\\d+);(\\d+)u$`, "u").exec(seq);
+  const csiU = CSI_U_CTRL.exec(seq);
 
   if (csiU !== null) {
     const codepoint = Number.parseInt(csiU[1] ?? "", 10);
@@ -103,7 +106,7 @@ export function normalizePaneControlSeq(seq: string): string {
   }
 
   // xterm modifyOtherKeys: ESC [ 27 ; mods ; codepoint ~
-  const xterm = new RegExp(`^${ESC}\\[27;(\\d+);(\\d+)~$`, "u").exec(seq);
+  const xterm = XTERM_CTRL.exec(seq);
 
   if (xterm !== null) {
     const mods = Number.parseInt(xterm[1] ?? "", 10);

@@ -88,6 +88,8 @@ describe("LedgerWriter", () => {
       w.record("run_started", { model: "x" });
       w.record("tool_call_finished", { file: "a.ts" });
 
+      w.flush();
+
       const events = await read();
 
       expect(events).toHaveLength(2);
@@ -109,6 +111,8 @@ describe("LedgerWriter", () => {
 
       w.record("tool_call_finished", { command: `deploy --token ${secret}` });
 
+      w.flush();
+
       const [event] = await read();
       const command = String(event?.payload.command ?? "");
 
@@ -120,8 +124,10 @@ describe("LedgerWriter", () => {
   test("preserves a non-plain object (Date → ISO string, not {})", async () => {
     await withLog(async (file, read) => {
       const when = new Date(0);
+      const w = new LedgerWriter(file, "r");
 
-      new LedgerWriter(file, "r").record("run_started", { at: when });
+      w.record("run_started", { at: when });
+      w.flush();
 
       const [event] = await read();
 
@@ -135,6 +141,8 @@ describe("LedgerWriter", () => {
       const w = new LedgerWriter(file, "r");
 
       w.record("tool_call_finished", { output: "x".repeat(10_000) });
+
+      w.flush();
 
       const [event] = await read();
       const output = String(event?.payload.output ?? "");
@@ -153,6 +161,8 @@ describe("LedgerWriter", () => {
 
       w.record("model_inject", { kind: "inject", message: wall });
 
+      w.flush();
+
       const [event] = await read();
       const message = String(event?.payload.message ?? "");
 
@@ -168,6 +178,8 @@ describe("LedgerWriter", () => {
       w.record("agent_spawned", { spec: "explore" }, "run-1:explore");
       w.record("model_call_started", {}); // parent event — no agentId
 
+      w.flush();
+
       const [spawned, parent] = await read();
 
       expect(spawned?.agentId).toBe("run-1:explore");
@@ -177,8 +189,10 @@ describe("LedgerWriter", () => {
 
   test("omits sessionId when not provided; no-op without a file", async () => {
     await withLog(async (file, read) => {
-      new LedgerWriter(file, "r").record("run_started", {});
+      const w = new LedgerWriter(file, "r");
 
+      w.record("run_started", {});
+      w.flush();
       expect((await read())[0]?.sessionId).toBeUndefined();
     });
 
@@ -223,6 +237,11 @@ describe("agent attribution write→read round-trip", () => {
       } finally {
         spy.mockRestore();
       }
+
+      // The ledger batches writes per event-loop tick — let the flush run.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       const events = parseEventLog(await readFile(file, "utf8"));
       const spawned = events.find((e) => e.kind === "agent_spawned");

@@ -35,8 +35,13 @@ def read_until(fd, marker, timeout, buf=""):
     """Accumulate the real byte stream until `marker(buf)` is true or timeout.
 
     Returns (matched, buffer). On EOF / closed PTY returns (False, buffer)
-    immediately rather than spinning out the timeout.
+    immediately rather than spinning out the timeout. The seeded `buf` is
+    checked up front: an idle TUI is now genuinely silent (no gratuitous
+    cursor writes), so a marker already present in the carried-over buffer
+    must not wait for unrelated new bytes to be noticed.
     """
+    if buf and marker(buf):
+        return True, buf
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
         r, _, _ = select.select([fd], [], [], 0.3)

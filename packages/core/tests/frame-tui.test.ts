@@ -334,6 +334,7 @@ describe("PaneScreen", () => {
     ).join("\n");
 
     panes.appendMain(`${bulk}\n`);
+    panes.flushPendingPaint();
 
     term.writes = [];
     const t0 = performance.now();
@@ -422,6 +423,7 @@ describe("PaneScreen", () => {
     expect(term.text()).toContain("[48;2;20;20;20m");
 
     panes.appendMain("hello main\n");
+    panes.flushPendingPaint();
     panes.setPanel(["worklist  0/2", "[>] First"]);
     panes.setInput({ lines: ["type"], cursorRow: 0, cursorCol: 4 });
 
@@ -450,6 +452,7 @@ describe("PaneScreen", () => {
 
     panes.enter();
     panes.appendMain("short\n");
+    panes.flushPendingPaint();
 
     let screen = new VirtualScreen(24, 100);
 
@@ -458,6 +461,7 @@ describe("PaneScreen", () => {
 
     for (let i = 0; i < 40; i += 1) {
       panes.appendMain(`scroll-line-${String(i)}\n`);
+      panes.flushPendingPaint();
     }
 
     screen = new VirtualScreen(24, 100);
@@ -497,6 +501,7 @@ describe("PaneScreen", () => {
       mode: "plan",
     });
     panes.appendMain("/help commands\n");
+    panes.flushPendingPaint();
     panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
 
     const screen = new VirtualScreen(24, 100);
@@ -581,7 +586,9 @@ describe("PaneScreen", () => {
 
     expect(panes.enter()).toBe(true);
     panes.appendMain(`${"word ".repeat(20)}\n`);
+    panes.flushPendingPaint();
     panes.appendMain("TAIL_MARKER\n");
+    panes.flushPendingPaint();
 
     // Scroll up: older wrapped chunks must still be reconstructable from dump,
     // and the viewport must still contain wrapped fragments (not a blank hole).
@@ -637,6 +644,7 @@ describe("PaneScreen", () => {
 
     panes.enter();
     panes.appendMain("a\nb\nc\nd\ne\n");
+    panes.flushPendingPaint();
 
     expect(panes.handleKey("\x0f")).toBe("dump");
     // Prompt keeps arrows; empty-prompt scroll uses scrollMain (REPL wiring).
@@ -673,6 +681,7 @@ describe("PaneScreen", () => {
 
     for (let i = 0; i < 40; i += 1) {
       panes.appendMain(`MAIN_${String(i)}\n`);
+      panes.flushPendingPaint();
     }
 
     panes.setPanel(
@@ -711,6 +720,7 @@ describe("PaneScreen", () => {
     ).join("\n");
 
     panes.appendMain(`${bulk}\n`);
+    panes.flushPendingPaint();
     panes.setPanel(
       Array.from({ length: 30 }, (_, i) =>
         i === 0 ? "worklist  0/29" : `PANEL_${String(i)}`
@@ -743,6 +753,7 @@ describe("PaneScreen", () => {
 
     panes.enter();
     panes.appendMain("\x1b[31mred\x1b[0m plain\n");
+    panes.flushPendingPaint();
 
     expect(term.text()).toContain("\x1b[31mred");
 
@@ -764,6 +775,7 @@ describe("PaneScreen", () => {
     panes.enter();
     // Wider than the main pane — old path let this punch through the gutter.
     panes.appendMain(`│ ${"W".repeat(200)}\n`);
+    panes.flushPendingPaint();
     panes.setPanel(["approve a plan"]);
 
     const screen = new VirtualScreen(24, 100);
@@ -1058,6 +1070,7 @@ describe("PaneScreen", () => {
       tokensPerSecond: 50,
     });
     panes.appendMain("◆ plan · reply to refine\n");
+    panes.flushPendingPaint();
 
     const screen = new VirtualScreen(24, 100);
 
@@ -1085,6 +1098,7 @@ describe("PaneScreen", () => {
 
     panes.enter();
     panes.appendMain("chat line unique-body-marker\n");
+    panes.flushPendingPaint();
     panes.setStatus({
       model: "deepseek",
       contextTokens: 0,
@@ -1141,10 +1155,12 @@ describe("PaneScreen", () => {
       mode: "plan",
     });
     panes.appendMain("seed\n");
+    panes.flushPendingPaint();
     term.writes = [];
 
     for (let i = 0; i < 20; i += 1) {
       panes.appendMain(`stream-chunk-${String(i)}\n`);
+      panes.flushPendingPaint();
     }
 
     const out = term.writes.join("");
@@ -1307,6 +1323,7 @@ describe("PaneScreen", () => {
 
     for (let i = 0; i < 30; i += 1) {
       panes.appendMain(`stream-line-${String(i)}\n`);
+      panes.flushPendingPaint();
     }
 
     // Streaming must not shove the grown band around.
@@ -1336,6 +1353,7 @@ describe("PaneScreen", () => {
       scope: "repo",
     });
     panes.appendMain("KEEP_ME\n");
+    panes.flushPendingPaint();
     panes.setInput({ lines: ["hi"], cursorRow: 0, cursorCol: 2 });
 
     term.writes = [];
@@ -1399,6 +1417,7 @@ describe("PaneScreen", () => {
       mode: "plan",
     });
     panes.appendMain("LOG_LINE\n");
+    panes.flushPendingPaint();
     panes.setInput({ lines: [""], cursorRow: 0, cursorCol: 0 });
 
     let screen = new VirtualScreen(24, 100);
@@ -1419,6 +1438,7 @@ describe("PaneScreen", () => {
 
     for (let i = 0; i < 50; i += 1) {
       panes.appendMain(`line-${String(i)}\n`);
+      panes.flushPendingPaint();
     }
 
     screen = new VirtualScreen(24, 100);
@@ -1451,5 +1471,197 @@ describe("PaneScreen", () => {
     expect(
       short.top.rows + short.main.rows + short.input.rows + short.footer.rows
     ).toBe(shortInsets.contentRows);
+  });
+});
+
+describe("paint coalescing (streaming)", () => {
+  class CoalesceTerm {
+    writes: string[] = [];
+    isTTY = true;
+    rows = 40;
+    columns = 120;
+
+    write(data: string): boolean {
+      this.writes.push(data);
+
+      return true;
+    }
+
+    text(): string {
+      return this.writes.join("");
+    }
+  }
+
+  test("a synchronous burst of appends paints once, with the full tail", () => {
+    const term = new CoalesceTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.flushPendingPaint();
+
+    const before = term.writes.length;
+
+    for (let i = 0; i < 200; i += 1) {
+      panes.appendMain(`burst-${String(i)}\n`);
+    }
+
+    // Nothing painted yet — the paint is coalesced, not the state.
+    expect(term.writes.length).toBe(before);
+
+    panes.flushPendingPaint();
+
+    // ONE frame write for the whole burst, and the tail is rendered.
+    expect(term.writes.length).toBe(before + 1);
+    expect(term.text()).toContain("burst-199");
+  });
+
+  test("a full paint renders pending appends (no double frame later)", () => {
+    const term = new CoalesceTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.appendMain("pending-tail\n");
+    // A full compose (e.g. overlay/status) must carry the pending text…
+    panes.setOverlay(["menu line"]);
+
+    expect(term.text()).toContain("pending-tail");
+
+    // …and the queued flush afterwards is a no-op (no extra frame).
+    const after = term.writes.length;
+
+    panes.flushPendingPaint();
+    expect(term.writes.length).toBe(after);
+  });
+
+  test("streaming with a STATIC agent tree patches main rows without full repaints", () => {
+    const term = new CoalesceTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.setAgentTree(["◐ explore agent", "└ detail row"]);
+    panes.appendMain("seed\n");
+    panes.flushPendingPaint();
+
+    const framesBefore = term.writes.length;
+
+    panes.appendMain("streamed-under-tree\n");
+    panes.flushPendingPaint();
+
+    // One incremental frame; the tree rows are still on screen.
+    expect(term.writes.length).toBe(framesBefore + 1);
+
+    const tail = term.writes[term.writes.length - 1] ?? "";
+
+    expect(term.text()).toContain("◐ explore agent");
+    expect(tail).toContain("streamed-under-tree");
+    // The incremental frame did NOT rewrite the tree row.
+    expect(tail).not.toContain("explore agent");
+  });
+
+  test("setAgentTree dedupes identical frames (no repaint storm)", () => {
+    const term = new CoalesceTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.setAgentTree(["row-a", "row-b"]);
+
+    const before = term.writes.length;
+
+    for (let i = 0; i < 50; i += 1) {
+      panes.setAgentTree(["row-a", "row-b"]);
+    }
+
+    expect(term.writes.length).toBe(before);
+
+    panes.setAgentTree(["row-a", "row-CHANGED"]);
+    expect(term.writes.length).toBe(before + 1);
+  });
+});
+
+describe("cursor blink hygiene", () => {
+  class CursorTerm {
+    writes: string[] = [];
+    isTTY = true;
+    rows = 40;
+    columns = 120;
+
+    write(data: string): boolean {
+      this.writes.push(data);
+
+      return true;
+    }
+  }
+
+  test("an unchanged input repaint emits NO bytes (no blink reset)", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.setInput({ lines: ["draft"], cursorRow: 0, cursorCol: 5 });
+
+    const before = term.writes.length;
+
+    // Same input, same cursor — the physical cursor never moved, so a forced
+    // SHOW+CUP here reset the terminal's blink timer on every event and made
+    // the caret blink erratically in step with rendering.
+    panes.setInput({ lines: ["draft"], cursorRow: 0, cursorCol: 5 });
+    expect(term.writes.length).toBe(before);
+  });
+
+  test("caret blinks on the harness timer, steadily, in every state", async () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+
+    // Idle: the blink interval alone toggles visibility — steady beat.
+    const before = term.writes.length;
+
+    await new Promise((resolve) => setTimeout(resolve, 1_150));
+
+    const toggles = term.writes
+      .slice(before)
+      .filter((w) => w.includes("\x1b[?25h") || w.includes("\x1b[?25l"));
+
+    // ~2 toggles in 1.15s at a 500ms half-period (timer jitter tolerated).
+    expect(toggles.length).toBeGreaterThanOrEqual(2);
+    expect(toggles.length).toBeLessThanOrEqual(3);
+  });
+
+  test("a streamed frame hides the caret for the row writes, then restores the blink phase", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter(); // restartBlink → phase ON
+
+    panes.appendMain("phase-on line\n");
+    panes.flushPendingPaint();
+
+    const frame = term.writes.at(-1) ?? "";
+    const hide = frame.indexOf("\x1b[?25l");
+    const show = frame.lastIndexOf("\x1b[?25h");
+
+    // Hidden while the rows write (no visible teleport on any terminal), and
+    // since the blink phase is ON, the frame ends by restoring visibility —
+    // the frame renders mid-blink without disturbing the beat.
+    expect(hide).toBeGreaterThan(-1);
+    expect(show).toBeGreaterThan(hide);
+  });
+
+  test("typing shows the caret instantly even mid-stream", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter();
+    panes.appendMain("streaming…");
+    panes.flushPendingPaint(); // caret now hidden, show deferred
+
+    panes.setInput({ lines: ["h"], cursorRow: 0, cursorCol: 1 });
+
+    // The input repaint ends with an immediate SHOW — typing never waits on
+    // the machine-frame debounce.
+    const frame = term.writes.at(-1) ?? "";
+
+    expect(frame).toContain("\x1b[?25h");
   });
 });

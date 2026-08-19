@@ -107,6 +107,11 @@ interface IStreamingCall {
   pathShown?: boolean;
   /** args length at the last progress heartbeat (throttle). */
   lastProgress?: number;
+  /** File path latched from the partial args ONCE — re-running the extraction
+   *  regex over the whole accumulated args on every delta was O(n²) per file
+   *  write (~200M char-scans for a 40KB create). The path sits in the first
+   *  bytes of the JSON and never changes. */
+  extractedPath?: string;
 }
 
 interface IStreamAcc {
@@ -333,7 +338,9 @@ function emitToolProgress(
     return;
   }
 
-  if (call.pathShown !== true) {
+  // Same bound as the TTSR latch: a pathless args body (or one where the path
+  // key never comes) must not be re-scanned in full on every delta forever.
+  if (call.pathShown !== true && call.args.length <= MAX_PATH_SCAN_CHARS) {
     const path = /"(?:file|filename|path)"\s*:\s*"([^"]+)"/.exec(
       call.args
     )?.[1];
@@ -414,14 +421,27 @@ function processToolCallDelta(
     acc.ttsrFired === null &&
     TTSR_WATCHED_TOOLS.has(existing.name)
   ) {
-    const currentFile = extractFilePath(existing.args);
+    // Latch the path once (mirrors pathShown): scan only until found, and stop
+    // trying once the args have grown past where a path key could still start.
+    if (
+      existing.extractedPath === undefined &&
+      existing.args.length <= MAX_PATH_SCAN_CHARS
+    ) {
+      existing.extractedPath = extractFilePath(existing.args);
+    }
 
     acc.ttsrFired = acc.ttsr.checkDelta(fn.arguments, {
       source: "tool-args",
-      ...(currentFile !== undefined ? { currentFile } : {}),
+      ...(existing.extractedPath !== undefined
+        ? { currentFile: existing.extractedPath }
+        : {}),
     });
   }
 }
+
+/** Path keys arrive in the first bytes of the args JSON; past this, stop
+ *  re-scanning (the write guard / run path re-parse the full args anyway). */
+const MAX_PATH_SCAN_CHARS = 2048;
 
 /** Extract file path from partial JSON args (e.g., "{"file":"src/app.ts",..."). */
 function extractFilePath(args: string): string | undefined {

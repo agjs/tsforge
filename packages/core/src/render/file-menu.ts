@@ -13,13 +13,37 @@ function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
+/** Lowercased path/basename per file list — computed once per list identity,
+ *  not per @-picker keystroke (lowercasing up to 10k paths per keypress). */
+const lowerIndexCache = new WeakMap<
+  readonly string[],
+  { full: string[]; base: string[] }
+>();
+
+function lowerIndex(files: readonly string[]): {
+  full: string[];
+  base: string[];
+} {
+  const hit = lowerIndexCache.get(files);
+
+  if (hit !== undefined) {
+    return hit;
+  }
+
+  const built = {
+    full: files.map((f) => f.toLowerCase()),
+    base: files.map((f) => baseName(f).toLowerCase()),
+  };
+
+  lowerIndexCache.set(files, built);
+
+  return built;
+}
+
 /** Lower rank = better match: basename-prefix beats path-prefix beats basename
  *  substring beats anywhere. Ties keep the caller's order (recency) — sort is
  *  stable — so the most-recently-touched match within a rank surfaces first. */
-function rank(path: string, q: string): number {
-  const base = baseName(path).toLowerCase();
-  const full = path.toLowerCase();
-
+function rankLowered(base: string, full: string, q: string): number {
   if (base.startsWith(q)) {
     return 0;
   }
@@ -45,10 +69,24 @@ export function filterFiles(files: readonly string[], query: string): string[] {
     return files.slice(0, MAX_VISIBLE);
   }
 
-  return files
-    .filter((f) => f.toLowerCase().includes(q))
-    .sort((a, b) => rank(a, q) - rank(b, q))
-    .slice(0, MAX_VISIBLE);
+  const { full, base } = lowerIndex(files);
+  const matched: { path: string; rank: number }[] = [];
+
+  for (let i = 0; i < files.length; i += 1) {
+    const f = full[i] ?? "";
+
+    if (f.includes(q)) {
+      matched.push({
+        path: files[i] ?? "",
+        rank: rankLowered(base[i] ?? "", f, q),
+      });
+    }
+  }
+
+  return matched
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, MAX_VISIBLE)
+    .map((m) => m.path);
 }
 
 /** Truncate a path to `max` columns keeping its TAIL (the filename matters most),
