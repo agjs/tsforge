@@ -92,6 +92,12 @@ test("static server: 404s missing assets, SPA-falls-back, blocks ../ traversal",
 
     expect(dotfile.status).toBe(200);
     expect(await dotfile.text()).toBe("ok-inside");
+
+    // S10: malformed %-encoding must be a clean 404, not a 500 from a thrown
+    // URIError inside the fetch handler.
+    const malformed = await fetch(`${base}/%E0%A4`);
+
+    expect(malformed.status).toBe(404);
   } finally {
     await server.stop(true);
     await rm(dir, { recursive: true, force: true });
@@ -185,11 +191,48 @@ browserTest("smoke: fails on a blank root (silent white screen)", async () => {
   const result = await renderCheck({
     html: `<div id="root"></div>`,
     smoke: true,
+    // A blank page always costs the full mount budget (the poll resolves early
+    // only on success), so keep it short — the 5s default collides with the
+    // test-runner timeout, making this regression test time out instead of assert.
+    mountTimeoutMs: 800,
   });
 
   expect(result.ok).toBe(false);
   expect(result.errors.join(" ")).toContain("did not mount");
 });
+
+// S3: a body that renders NOTHING visible but carries an inline <script> used to
+// green — document.body fell back as the mount root, its <script> counted as a
+// child, and textContent returned the script's SOURCE as "content". The mount
+// check now requires a non-script/style element child AND non-empty innerText.
+browserTest(
+  "smoke: a script-only body (no #root) is NOT mistaken for mounted",
+  async () => {
+    const result = await renderCheck({
+      html: `<body><script>const x = "not rendered"; void x;</script></body>`,
+      smoke: true,
+      mountTimeoutMs: 800,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("did not mount");
+  }
+);
+
+// S4: a content assertion must match RENDERED text, never text that lives only in
+// inline <script>/<style> source (which textContent would have concatenated).
+browserTest(
+  "expect.text does not match a string present only in <script> source",
+  async () => {
+    const result = await renderCheck({
+      html: `<body><div id="root"><h1>Hi</h1></div><script>const m = "Saved!"; void m;</script></body>`,
+      expect: { text: "Saved!" },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("missing expected text");
+  }
+);
 
 browserTest(
   "crawl: all routes render → ok (SPA fallback serves each path)",
@@ -214,7 +257,11 @@ browserTest("crawl: a route that throws is caught", async () => {
   const { file, cleanup } = await spaFixture();
 
   try {
-    const result = await renderCheck({ file, routes: ["/accounts", "/bad"] });
+    const result = await renderCheck({
+      file,
+      routes: ["/accounts", "/bad"],
+      mountTimeoutMs: 800,
+    });
 
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("boom on /bad");
@@ -227,7 +274,11 @@ browserTest("crawl: a route that renders blank is caught", async () => {
   const { file, cleanup } = await spaFixture();
 
   try {
-    const result = await renderCheck({ file, routes: ["/blank"] });
+    const result = await renderCheck({
+      file,
+      routes: ["/blank"],
+      mountTimeoutMs: 800,
+    });
 
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("/blank rendered blank");
