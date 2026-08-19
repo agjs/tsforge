@@ -136,6 +136,7 @@ import {
   type MetaBaseline,
 } from "../meta-rules";
 import { runWriteGuard } from "./write-guard";
+import { ExternalPackDriftError } from "../rule-packs/drift-error";
 import { upsertGateFeedback } from "./context-hygiene";
 
 /**
@@ -764,6 +765,12 @@ async function runOneToolCall(
   }
 
   let feedback = "";
+  // F19 plugin drift is a HARD failure the guard deliberately rethrows — but
+  // the tool has already executed by now, so the throw must not unwind before
+  // the tool RESPONSE message lands: an assistant tool_calls with no matching
+  // tool message is invalid history strict APIs 400 on ever after (and it gets
+  // persisted). Capture, push the response, THEN rethrow.
+  let driftError: ExternalPackDriftError | null = null;
 
   if (wrote.size > 0) {
     touchedEditable = true;
@@ -773,7 +780,17 @@ async function runOneToolCall(
     recordTouched(ctx, written);
 
     for (const path of written) {
-      feedback += await runWriteGuard(ctx, path);
+      try {
+        feedback += await runWriteGuard(ctx, path);
+      } catch (err) {
+        if (err instanceof ExternalPackDriftError) {
+          driftError = err;
+          feedback += `\n[write-guard] ${err.message}`;
+          break;
+        }
+
+        throw err;
+      }
     }
   }
 
@@ -792,6 +809,10 @@ async function runOneToolCall(
 
   // Write-guard appendices age out in pruneEphemeralToolResidue; create/edit
   // args stay full on the wire (stubbing them taught empty resubmits).
+
+  if (driftError !== null) {
+    throw driftError;
+  }
 
   return touchedEditable;
 }
