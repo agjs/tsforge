@@ -3,7 +3,7 @@ import type { IStatusInfo } from "../render.types";
 import {
   BEGIN_SYNC,
   CLEAR_SCREEN,
-  CURSOR_BLINK_BLOCK,
+  CURSOR_STEADY_BLOCK,
   CURSOR_COLOR_DEFAULT,
   CURSOR_COLOR_GREEN,
   CURSOR_SHAPE_DEFAULT,
@@ -88,10 +88,9 @@ const FORGE_PLACEHOLDER = "describe a task, or /help";
 const GUTTER = "│";
 /** Paint rate cap while streaming (~60fps) — see queueMainPaint. */
 const MAIN_PAINT_MIN_INTERVAL_MS = 16;
-/** Quiet time after the last machine frame before the caret re-shows. Must
- *  exceed the 120ms status tick — at or below it, shows leak through between
- *  ticks and the caret still flickers during a busy turn. */
-const CURSOR_SHOW_DELAY_MS = 250;
+/** Half-period of the harness-driven caret blink (visible 500ms, hidden
+ *  500ms — the classic editor cadence). */
+const CURSOR_BLINK_MS = 500;
 /** Fallback when no worklist lines are set — mirrors formatWorklistLines empty. */
 const EMPTY_PANEL_LINES = ["approve a plan", "to fill this list"] as const;
 
@@ -130,11 +129,13 @@ export class PaneScreen {
   private pendingMainPaint = false;
   private mainPaintTimer: ReturnType<typeof setTimeout> | null = null;
   private lastMainPaintAt = 0;
-  /** Caret is hidden by a machine-driven frame; a debounced SHOW restores it
-   *  once frames go quiet. A SHOW per frame made the caret strobe in step
-   *  with rendering (~7×/s measured during streaming). */
-  private cursorHidden = false;
-  private cursorShowTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Harness-driven caret blink. The terminal's native blink cannot survive
+   *  rendering (every frame repositions the cursor, resetting the blink
+   *  phase), so the pane uses a STEADY block and toggles visibility itself on
+   *  a fixed timer — a constant, even blink in every state: idle, streaming,
+   *  delegating. Typing snaps the phase to visible (standard editor feel). */
+  private blinkOn = true;
+  private blinkTimer: ReturnType<typeof setInterval> | null = null;
   private bodyViewportRows = 1;
   private entered = false;
   /** True after a successful enter — resize may re-enter after a shrink-leave. */
@@ -183,11 +184,13 @@ export class PaneScreen {
     // Alt screen + mouse capture: host terminal must NOT scroll its own buffer.
     // Wheel events become CSI reports; we scroll main/panel viewports only.
     // Green blinking block caret replaces any prompt text.
+    // STEADY block: the pane drives its own blink (restartBlink) — the
+    // terminal's native blink cannot survive frames repositioning the cursor.
     this.out.write(
       ENTER_ALT +
         ENABLE_MOUSE +
         CURSOR_COLOR_GREEN +
-        CURSOR_BLINK_BLOCK +
+        CURSOR_STEADY_BLOCK +
         SHOW_CURSOR
     );
     this.entered = true;
@@ -207,6 +210,7 @@ export class PaneScreen {
     }
 
     this.paint();
+    this.restartBlink();
 
     return true;
   }
@@ -217,7 +221,7 @@ export class PaneScreen {
     }
 
     this.stopBusyTimer();
-    this.cancelCursorShow();
+    this.stopBlink();
 
     if (this.mainPaintTimer !== null) {
       clearTimeout(this.mainPaintTimer);
@@ -591,36 +595,42 @@ export class PaneScreen {
     this.paint();
   }
 
-  /**
-   * Restore the caret ~120ms after machine frames go quiet. During a stream
-   * the caret stays hidden (calm) instead of strobing once per frame; between
-   * bursts and at turn end it reappears at the input row. Typing bypasses
-   * this — paintInputOnly shows instantly.
-   */
-  private scheduleCursorShow(): void {
-    this.cursorHidden = true;
+  /** Start (or restart) the blink with the visible phase — a keystroke snaps
+   *  the caret on, then blinking resumes on the steady cadence. */
+  private restartBlink(): void {
+    this.blinkOn = true;
 
-    if (this.cursorShowTimer !== null) {
-      clearTimeout(this.cursorShowTimer);
+    if (this.blinkTimer !== null) {
+      clearInterval(this.blinkTimer);
     }
 
-    this.cursorShowTimer = setTimeout(() => {
-      this.cursorShowTimer = null;
-
-      if (this.entered && this.cursorHidden) {
-        this.cursorHidden = false;
-        this.out.write(BEGIN_SYNC + SHOW_CURSOR + END_SYNC);
+    this.blinkTimer = setInterval(() => {
+      if (!this.entered) {
+        return;
       }
-    }, CURSOR_SHOW_DELAY_MS);
+
+      this.blinkOn = !this.blinkOn;
+      this.out.write(
+        BEGIN_SYNC + (this.blinkOn ? SHOW_CURSOR : HIDE_CURSOR) + END_SYNC
+      );
+    }, CURSOR_BLINK_MS);
+    // Never keep the process (or a test runner) alive just to blink.
+    this.blinkTimer.unref();
   }
 
-  private cancelCursorShow(): void {
-    if (this.cursorShowTimer !== null) {
-      clearTimeout(this.cursorShowTimer);
-      this.cursorShowTimer = null;
+  private stopBlink(): void {
+    if (this.blinkTimer !== null) {
+      clearInterval(this.blinkTimer);
+      this.blinkTimer = null;
     }
 
-    this.cursorHidden = false;
+    this.blinkOn = true;
+  }
+
+  /** Caret bytes for the end of a frame: position it, visible only when the
+   *  blink phase is on — frames render mid-blink without disturbing the beat. */
+  private frameCursorBytes(row: number, col: number): string {
+    return this.cursor.placeOnly(row, col) + (this.blinkOn ? SHOW_CURSOR : "");
   }
 
   /** Patch just the top-strip rows (mirrors paintInputOnly). */
@@ -674,7 +684,7 @@ export class PaneScreen {
       BEGIN_SYNC +
       HIDE_CURSOR +
       dirty +
-      this.cursor.placeOnly(cursorRow, cursorCol) +
+      this.frameCursorBytes(cursorRow, cursorCol) +
       END_SYNC;
 
     if (PERF_ENABLED) {
@@ -683,7 +693,6 @@ export class PaneScreen {
     }
 
     this.out.write(frame);
-    this.scheduleCursorShow();
   }
 
   setOverlay(lines: readonly string[]): void {
@@ -870,10 +879,10 @@ export class PaneScreen {
 
     if (dirty.length > 0) {
       // Typing hot path: row writes moved the cursor — force the re-home and
-      // SHOW instantly (the user is watching the caret), hiding it only for
-      // the duration of the band rewrite.
+      // SHOW instantly with the blink phase snapped to visible (a keystroke
+      // always lands with the caret on, like every editor).
       this.cursor.reset();
-      this.cancelCursorShow();
+      this.restartBlink();
       this.out.write(
         BEGIN_SYNC +
           HIDE_CURSOR +
@@ -892,7 +901,7 @@ export class PaneScreen {
     const cursorBytes = this.cursor.move(cursorRow, cursorCol);
 
     if (cursorBytes.length > 0) {
-      this.cancelCursorShow();
+      this.restartBlink();
       this.out.write(BEGIN_SYNC + cursorBytes + END_SYNC);
     }
   }
@@ -968,7 +977,7 @@ export class PaneScreen {
       BEGIN_SYNC +
       HIDE_CURSOR +
       dirty +
-      this.cursor.placeOnly(cursorRow, cursorCol) +
+      this.frameCursorBytes(cursorRow, cursorCol) +
       END_SYNC;
 
     if (PERF_ENABLED) {
@@ -976,7 +985,6 @@ export class PaneScreen {
     }
 
     this.out.write(frame);
-    this.scheduleCursorShow();
   }
 
   /** Patch main-body terminal rows in `screen`; returns CSI dirty bytes. */
@@ -1541,7 +1549,7 @@ export class PaneScreen {
     // on the footer. Pure no-op paints (no dirty) write nothing.
     if (dirty.length > 0) {
       this.cursor.reset();
-      const cursorBytes = this.cursor.placeOnly(cursorRow, cursorCol);
+      const cursorBytes = this.frameCursorBytes(cursorRow, cursorCol);
       const frame = BEGIN_SYNC + HIDE_CURSOR + dirty + cursorBytes + END_SYNC;
 
       if (PERF_ENABLED) {
@@ -1549,7 +1557,6 @@ export class PaneScreen {
       }
 
       this.out.write(frame);
-      this.scheduleCursorShow();
     }
 
     this.prevLines = screen;
@@ -1568,7 +1575,7 @@ export class PaneScreen {
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
-    this.cancelCursorShow();
+    this.restartBlink();
     this.out.write(
       BEGIN_SYNC + this.cursor.move(cursorRow, cursorCol) + END_SYNC
     );

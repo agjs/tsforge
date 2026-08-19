@@ -25,6 +25,9 @@ export const SHOW_CURSOR = `${ESC}[?25h`;
 
 /** Blinking block cursor (DECSCUSR). */
 export const CURSOR_BLINK_BLOCK = `${ESC}[1 q`;
+/** Steady (non-blinking) block — the pane TUI drives its own blink by toggling
+ *  visibility, so the terminal's native blink must not fight it. */
+export const CURSOR_STEADY_BLOCK = `${ESC}[2 q`;
 
 /** Restore default cursor shape. */
 export const CURSOR_SHAPE_DEFAULT = `${ESC}[0 q`;

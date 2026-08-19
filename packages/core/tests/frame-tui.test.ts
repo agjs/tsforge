@@ -1608,33 +1608,44 @@ describe("cursor blink hygiene", () => {
     expect(term.writes.length).toBe(before);
   });
 
-  test("streaming frames hide the caret; ONE deferred show after quiet", async () => {
+  test("caret blinks on the harness timer, steadily, in every state", async () => {
     const term = new CursorTerm();
     const panes = new PaneScreen(term, 40, 120);
 
     panes.enter();
 
-    for (let i = 0; i < 5; i += 1) {
-      panes.appendMain(`streamed line ${String(i)}\n`);
-      panes.flushPendingPaint();
-    }
-
-    // Every machine frame hides; NONE re-shows inline — a SHOW per frame made
-    // the caret strobe in step with rendering (~7×/s measured).
-    const frames = term.writes.filter((w) => w.includes("\x1b[?25l"));
-
-    expect(frames.length).toBeGreaterThanOrEqual(5);
-    expect(frames.every((w) => !w.includes("\x1b[?25h"))).toBe(true);
-
-    // After the stream goes quiet, exactly one debounced SHOW restores it.
+    // Idle: the blink interval alone toggles visibility — steady beat.
     const before = term.writes.length;
 
-    await new Promise((resolve) => setTimeout(resolve, 330));
+    await new Promise((resolve) => setTimeout(resolve, 1_150));
 
-    const tail = term.writes.slice(before).join("");
+    const toggles = term.writes
+      .slice(before)
+      .filter((w) => w.includes("\x1b[?25h") || w.includes("\x1b[?25l"));
 
-    expect(tail).toContain("\x1b[?25h");
-    expect(term.writes.length).toBe(before + 1);
+    // ~2 toggles in 1.15s at a 500ms half-period (timer jitter tolerated).
+    expect(toggles.length).toBeGreaterThanOrEqual(2);
+    expect(toggles.length).toBeLessThanOrEqual(3);
+  });
+
+  test("a streamed frame hides the caret for the row writes, then restores the blink phase", () => {
+    const term = new CursorTerm();
+    const panes = new PaneScreen(term, 40, 120);
+
+    panes.enter(); // restartBlink → phase ON
+
+    panes.appendMain("phase-on line\n");
+    panes.flushPendingPaint();
+
+    const frame = term.writes.at(-1) ?? "";
+    const hide = frame.indexOf("\x1b[?25l");
+    const show = frame.lastIndexOf("\x1b[?25h");
+
+    // Hidden while the rows write (no visible teleport on any terminal), and
+    // since the blink phase is ON, the frame ends by restoring visibility —
+    // the frame renders mid-blink without disturbing the beat.
+    expect(hide).toBeGreaterThan(-1);
+    expect(show).toBeGreaterThan(hide);
   });
 
   test("typing shows the caret instantly even mid-stream", () => {
