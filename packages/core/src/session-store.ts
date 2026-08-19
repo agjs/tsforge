@@ -58,6 +58,10 @@ export interface ISessionRecord {
    *  so task_* tools, turn inject, and the Tasks rail stay scoped to this session's
    *  plan (concurrent sessions in one project each bind their own id). */
   activePlanId?: string | null;
+  /** Last server-reported prompt size (tokens). Seeds the resumed session's
+   *  auto-compaction gauge so the FIRST send after --continue can compact a
+   *  near-full transcript instead of firing blind at full size. */
+  lastPromptTokens?: number;
   /** The full conversation, including the system message. */
   messages: IChatMessage[];
 }
@@ -228,6 +232,9 @@ function optionalSessionFields(
     ...(data.activePlanId === null || typeof data.activePlanId === "string"
       ? { activePlanId: data.activePlanId }
       : {}),
+    ...(typeof data.lastPromptTokens === "number" && data.lastPromptTokens > 0
+      ? { lastPromptTokens: data.lastPromptTokens }
+      : {}),
   };
 }
 
@@ -306,8 +313,10 @@ const CONNECTION_PASSWORD = /(:\/\/[^\s:/@]*:)[^\s:/@]+(@)/g;
 // `<key>: <value>` / `<key> = <value>` where the key NAME contains a secret word.
 // The value is only redacted when it actually looks like a secret (see
 // valueLooksSecret) — so `password: string` (a type annotation) survives.
+// `[:=](?!=)`: an assignment/pair separator, never the first char of a
+// comparison — `opts.onToken === undefined` is code, not a secret binding.
 const SECRET_KEYWORD =
-  /\b([\w.]*(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|private[_-]?key)[\w.]*)(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;{}()]+)/gi;
+  /\b([\w.]*(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|private[_-]?key)[\w.]*)([ \t]*["']?[ \t]*[:=](?!=)[ \t]*)("[^"]*"|'[^']*'|[^\s,;{}()]+)/gi;
 
 // Standalone secret SHAPES — the whole match is the secret, replaced wholesale.
 const SECRET_SHAPES: readonly RegExp[] = [
@@ -323,19 +332,54 @@ const SECRET_SHAPES: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, // Authorization: Bearer …
 ];
 
-/** Does a `key=` value look like a real secret (vs a type/identifier)? */
+/** Characters that mark a bare value as a CODE EXPRESSION, not a literal
+ *  credential: property access, calls, template/env interpolation, regex/path
+ *  slashes, generics. `config.apiKey`, `process.env.API_KEY`,
+ *  `localStorage.getItem("t")`, `/x/` are code the model must be able to
+ *  round-trip from its own history — redacting them persisted a transcript in
+ *  which the model "wrote" files it never wrote, and `--continue` replayed
+ *  that as fact (edit oldString copied from redacted history → no match →
+ *  repair spin, or "[redacted]" pasted back into a file). */
+const CODE_EXPRESSION = /[.()[\]{}$<>/\\]/;
+
+/** Does a `key=` value look like a real secret (vs a type/identifier/expression)? */
 function valueLooksSecret(value: string): boolean {
   const quoted =
     (value.startsWith('"') && value.endsWith('"')) ||
     (value.startsWith("'") && value.endsWith("'"));
 
   if (quoted) {
-    return value.length - 2 >= 3; // a non-trivial quoted literal
+    const inner = value.slice(1, -1);
+
+    // A quoted literal credential: non-trivial, a single token (real secrets
+    // have no spaces), not a code expression ("${TOKEN}"), and actually
+    // credential-SHAPED — symbols beyond identifier chars, or the classic
+    // mixed letters+digits blob. A plain quoted word or snake_case identifier
+    // (`tokenCap: "max_tokens"`) is ordinary code and must round-trip.
+    if (inner.length < 6 || /\s/.test(inner) || CODE_EXPRESSION.test(inner)) {
+      return false;
+    }
+
+    return (
+      /[^A-Za-z0-9_-]/.test(inner) ||
+      (/[0-9]/.test(inner) && /[A-Za-z]/.test(inner) && inner.length >= 8)
+    );
   }
 
-  // A bare token: secret-looking if it has non-letters (digits/symbols) or is
-  // long. A short pure-letter word (`string`, `number`, `getInput`) is kept.
-  return /[^A-Za-z]/.test(value) || value.length >= 16;
+  // A bare value that reads as code is an expression, never a literal secret.
+  if (CODE_EXPRESSION.test(value)) {
+    return false;
+  }
+
+  // A bare literal: secret-looking if it carries symbols beyond identifier
+  // chars, or mixes letters and digits (the classic credential shape). A pure
+  // camelCase identifier of ANY length is code — `parseCachedPromptTokens`
+  // assigned to a `…Tokens` variable is not a secret (a length-only arm
+  // redacted exactly that).
+  return (
+    /[^A-Za-z0-9_-]/.test(value) ||
+    (/[0-9]/.test(value) && /[A-Za-z]/.test(value) && value.length >= 8)
+  );
 }
 
 /**
@@ -345,15 +389,31 @@ function valueLooksSecret(value: string): boolean {
  * known token shapes (OpenAI/Stripe/GitHub/AWS/Google/Slack/npm/JWT/Bearer).
  */
 export function redactText(text: string): string {
-  let out = text.replace(PRIVATE_KEY_BLOCK, REDACTED);
-
-  out = out.replace(CONNECTION_PASSWORD, `$1${REDACTED}$2`);
+  let out = redactPreciseSecrets(text);
 
   out = out.replace(
     SECRET_KEYWORD,
     (match: string, key: string, sep: string, value: string) =>
       valueLooksSecret(value) ? `${key}${sep}${REDACTED}` : match
   );
+
+  return out;
+}
+
+/** Only the HIGH-PRECISION patterns (PEM blocks, connection-string passwords,
+ *  known token shapes) — no fuzzy `key: value` heuristics. Used for tool-call
+ *  args that carry CODE (`create`/`edit` bodies): those are round-tripped
+ *  verbatim on resume, so a heuristic false positive there corrupts what the
+ *  model believes it wrote. The precise shapes still catch a real token typed
+ *  into a file. */
+export function redactCodeText(text: string): string {
+  return redactPreciseSecrets(text);
+}
+
+function redactPreciseSecrets(text: string): string {
+  let out = text.replace(PRIVATE_KEY_BLOCK, REDACTED);
+
+  out = out.replace(CONNECTION_PASSWORD, `$1${REDACTED}$2`);
 
   for (const shape of SECRET_SHAPES) {
     out = out.replace(shape, REDACTED);
@@ -373,9 +433,33 @@ const redactedCache = new WeakMap<
   {
     content: string;
     toolCalls: readonly IToolCall[] | undefined;
+    /** Cheap structural stamp over the args — hygiene passes mutate
+     *  `tc.arguments` IN PLACE without replacing the array, which array
+     *  identity alone cannot see. */
+    argsStamp: number;
     redacted: IChatMessage;
   }
 >();
+
+/** Total serialized length of the calls' names + string arg values — changes
+ *  whenever any in-place args mutation (stubbing, scrubbing) lands. */
+function argsStamp(calls: readonly IToolCall[] | undefined): number {
+  if (calls === undefined) {
+    return -1;
+  }
+
+  let n = 0;
+
+  for (const call of calls) {
+    n += call.name.length;
+
+    for (const value of Object.values(call.arguments)) {
+      n += typeof value === "string" ? value.length : 1;
+    }
+  }
+
+  return n;
+}
 
 /**
  * Redact every message before persisting: its text (user prompts, assistant
@@ -389,7 +473,8 @@ function redactMessages(messages: readonly IChatMessage[]): IChatMessage[] {
 
     if (
       hit?.content === message.content &&
-      hit.toolCalls === message.toolCalls
+      hit.toolCalls === message.toolCalls &&
+      hit.argsStamp === argsStamp(message.toolCalls)
     ) {
       return hit.redacted;
     }
@@ -405,12 +490,18 @@ function redactMessages(messages: readonly IChatMessage[]): IChatMessage[] {
     redactedCache.set(message, {
       content: message.content,
       toolCalls: message.toolCalls,
+      argsStamp: argsStamp(message.toolCalls),
       redacted,
     });
 
     return redacted;
   });
 }
+
+/** Arg keys that carry CODE round-tripped verbatim on resume (`create`/`edit`
+ *  bodies and anchors) — heuristic redaction there corrupts the transcript the
+ *  model replays; only the precise token shapes apply. */
+const CODE_ARG_KEYS = new Set(["content", "oldString", "newString"]);
 
 function redactToolCalls(calls: readonly IToolCall[]): IToolCall[] {
   return calls.map((call) => ({
@@ -423,7 +514,14 @@ function redactArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(args)) {
-    out[key] = typeof value === "string" ? redactText(value) : value;
+    if (typeof value !== "string") {
+      out[key] = value;
+      continue;
+    }
+
+    out[key] = CODE_ARG_KEYS.has(key)
+      ? redactCodeText(value)
+      : redactText(value);
   }
 
   return out;

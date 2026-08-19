@@ -61,7 +61,7 @@ import {
 import { makeSpawnAgentFn } from "./spawn-runner";
 import { scopeOf, WHOLE_REPO, resolveCliProfile, type ICliArgs } from "./args";
 import { isProfileId } from "../config/profiles";
-import { isPolicyMode } from "../policy";
+import { isPolicyMode, type PolicyMode } from "../policy";
 import { startEditor, type IEditorHandle } from "../editor";
 import { renderEditor } from "../editor/view";
 import { flags } from "../config/flags";
@@ -601,6 +601,9 @@ async function initReplSession(args: ICliArgs): Promise<{
       ? { executionMode: "drive-to-green" as const, offerCheck: true as const }
       : {}),
     ...(resumed === null ? {} : { history: resumed.messages }),
+    ...(resumed?.lastPromptTokens !== undefined
+      ? { lastPromptTokens: resumed.lastPromptTokens }
+      : {}),
     // Opt into the SCOPED format janitor (replaces the old whole-repo `fix`): the loop's
     // autoFixStep runs a strict eslint --fix + prettier over the files the model wrote
     // this session (ctx.tool.touched — NOT task.files, which defaults to ["**/*"] here),
@@ -654,6 +657,23 @@ async function initReplSession(args: ICliArgs): Promise<{
  *  it is present AND still driving (`active`). Kept module-level so the `/clear` handler
  *  stays branch-free: after a manual `/gate` override the resolver is withheld, so the
  *  rebuild never silently re-arms the auto gate over the user's command. */
+/** Session settings the /clear rebuild must carry — the env-knob and
+ *  --policy-mode trio that used to silently revert to defaults (D2). */
+export function clearCarrySettings(policyModeArg: string): {
+  thinkingTokenBudget?: number;
+  autoCompactAt?: number;
+  policyMode?: PolicyMode;
+} {
+  const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
+  const autoCompactAt = envNumber("TSFORGE_COMPACT_AT");
+
+  return {
+    ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+    ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
+    ...(isPolicyMode(policyModeArg) ? { policyMode: policyModeArg } : {}),
+  };
+}
+
 export function autoGateCarry(
   autoGate: AutoGateResolver | undefined,
   active: boolean
@@ -755,6 +775,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       pausedWithEdit: session.hasDeferredGate,
       touched: session.touchedFiles,
       activePlanId: session.getActivePlanId(),
+      ...(session.lastPromptTokens > 0
+        ? { lastPromptTokens: session.lastPromptTokens }
+        : {}),
       messages: [...session.messages],
     });
   };
@@ -1355,6 +1378,11 @@ export async function repl(args: ICliArgs): Promise<number> {
       ...(profile === undefined ? {} : { profile }),
       ...(args.strictFloorOnly ? { strictFloorOnly: true as const } : {}),
       ...(carryPlanId !== null ? { activePlanId: carryPlanId } : {}),
+      // D2: settings the rebuild silently DROPPED (each reverted to its default
+      // for the rest of the session): the explicit --policy-mode, the
+      // TSFORGE_COMPACT_AT / TSFORGE_THINKING_BUDGET env knobs (re-read here —
+      // the init-time consts live in the boot scope).
+      ...clearCarrySettings(args.policyMode),
     });
     wireDelegation(); // re-offer spawn_agent on the rebuilt session
     wireImages(); // re-offer read_image/generate_image + preview on the rebuild

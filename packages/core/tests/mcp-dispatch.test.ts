@@ -74,3 +74,43 @@ test("executeTool: an unknown non-MCP tool is still rejected", async () => {
 
   expect(out).toContain("unknown tool");
 });
+
+// ── C2: a throwing MCP tool must return an error STRING, never throw ─────────
+// If an MCP rejection ever escaped, it would unwind runToolCalls before the
+// tool RESPONSE message was pushed — an assistant tool_calls with no tool
+// responses, which strict APIs 400 on every later request, and which got
+// persisted for --continue. The registry catches transport errors and
+// executeTool now has its own boundary around the dispatch (defense in depth:
+// a registry regression must not become invalid history).
+class CrashingTransport implements IMcpTransport {
+  connect(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  listTools(): Promise<IMcpToolInfo[]> {
+    return Promise.resolve([ECHO_TOOL]);
+  }
+
+  callTool(): Promise<string> {
+    return Promise.reject(new Error("MCP server timed out"));
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+test("executeTool: a rejecting MCP server yields a tool-error string (no throw)", async () => {
+  const registry = new McpRegistry();
+
+  await registry.addServer("ctx7", new CrashingTransport());
+
+  const ctx = baseCtx(registry, false);
+  const out = await executeTool(
+    { name: "mcp__ctx7__echo", arguments: {} },
+    ctx
+  );
+
+  expect(out).toContain("failed");
+  expect(out).toContain("MCP server timed out");
+});

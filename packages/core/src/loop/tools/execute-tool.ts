@@ -138,9 +138,20 @@ export async function executeTool(
   }
 
   // MCP tools (mcp__<server>__<tool>) are dispatched to their server. They are
-  // external context sources — never workspace mutations.
+  // external context sources — never workspace mutations. INSIDE the error
+  // boundary: a crashed/timed-out MCP server used to throw out of executeTool,
+  // unwinding runToolCalls before the tool RESPONSE message was pushed — an
+  // assistant tool_calls with no tool responses, which strict APIs 400 on
+  // every later request, and which got PERSISTED so --continue reloaded the
+  // wedged transcript.
   if (ctx.mcpRegistry?.has(call.name) === true) {
-    return ctx.mcpRegistry.callTool(call.name, call.arguments);
+    try {
+      return await ctx.mcpRegistry.callTool(call.name, call.arguments);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      return reject(ctx, call.name, `${call.name} FAILED: ${message}`);
+    }
   }
 
   if (!isToolName(call.name)) {

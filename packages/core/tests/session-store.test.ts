@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveSession, latestSession, redactText } from "../src/session-store";
@@ -395,4 +395,94 @@ test("redaction cache never serves a stale result for an edited message", async 
 
   expect(JSON.stringify(third)).not.toContain(secretB);
   expect(JSON.stringify(third)).toContain("second");
+});
+
+// ── C1: redaction must not rewrite CODE ──────────────────────────────────────
+// The persisted transcript is replayed verbatim on --continue; heuristic
+// redaction of ordinary code made the model's history show files it never
+// wrote ("apiKey: [redacted]"), so edits anchored on that history missed and
+// resumed sessions "restored" [redacted] into real files.
+test("redactText round-trips real code unchanged (property over repo sources)", async () => {
+  const dirs = ["src/gate", "src/inference", "src/loop"];
+  let checked = 0;
+
+  for (const dir of dirs) {
+    // ALL files, sorted: an unsorted 8-file slice let readdir order decide
+    // coverage — CI sampled a file local runs missed.
+    const files = (await readdir(join(import.meta.dir, "..", dir)))
+      .filter((f) => f.endsWith(".ts"))
+      .sort();
+
+    for (const f of files) {
+      const src = await readFile(join(import.meta.dir, "..", dir, f), "utf8");
+
+      expect(redactText(src)).toBe(src);
+      checked += 1;
+    }
+  }
+
+  expect(checked).toBeGreaterThan(10);
+});
+
+test("code expressions survive; literal credentials still redact", () => {
+  const keep = [
+    "const apiKey = process.env.API_KEY;",
+    "token = req.headers.authorization",
+    "const SECRET_KEYWORD = /x/;",
+    "apiKey: config.apiKey,",
+    "const authToken = localStorage.getItem('t')",
+    "password: string;",
+    "apiKey: `${prefix}-key`,",
+  ];
+
+  for (const line of keep) {
+    expect(redactText(line)).toBe(line);
+  }
+
+  const redact = [
+    ["password = hunter2xyz9", "password = [redacted]"],
+    ['api_key: "d34dbeefcafe01"', "api_key: [redacted]"],
+    ["token: SGVsbG8gV29ybGQhIQ", "token: [redacted]"],
+  ];
+
+  for (const [input, want] of redact) {
+    expect(redactText(input ?? "")).toBe(want ?? "");
+  }
+});
+
+test("create/edit code args get only precise-shape redaction (save→resume round trip)", async () => {
+  const code = 'const apiKey = process.env.API_KEY;\nconst t = "abc123xyz";\n';
+  const withToken = `${code}const k = "sk-${"a1B2c3D4".repeat(3)}";\n`;
+
+  await saveSession({
+    id: "code-args",
+    cwd: "/proj/code",
+    accept: "true",
+    files: [],
+    updatedAt: 1000,
+    messages: [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "1",
+            name: "create",
+            arguments: { file: "a.ts", content: withToken },
+          },
+        ],
+      },
+    ],
+  });
+
+  const resumed = await latestSession("/proj/code");
+  const content = String(
+    resumed?.messages[0]?.toolCalls?.[0]?.arguments.content ?? ""
+  );
+
+  // The heuristic key:value redaction does NOT touch code args…
+  expect(content).toContain("process.env.API_KEY");
+  expect(content).toContain('"abc123xyz"');
+  // …but a real token SHAPE is still scrubbed.
+  expect(content).not.toContain("sk-a1B2c3D4");
 });

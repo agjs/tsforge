@@ -3,8 +3,10 @@ import type {
   IModelResponse,
   IProvider,
   ITokenUsage,
+  TokenChannel,
 } from "../inference";
 import { StreamInterruptedError } from "../inference";
+import { isContextOverflow } from "../agent/agent-runner";
 import type { ITask } from "../spec";
 import {
   makeFileLinter,
@@ -230,6 +232,11 @@ export interface ISessionConfig {
   /** Resume from a saved conversation (incl. its system message) instead of
    *  starting fresh — used by `--continue`. */
   history?: IChatMessage[];
+  /** The last server-reported prompt size (tokens) from the persisted session —
+   *  seeds the auto-compaction check so the FIRST resumed send can compact a
+   *  near-full transcript instead of firing blind at full size (before this, a
+   *  95%-full resume overflowed on its first call and, with no recovery, died). */
+  lastPromptTokens?: number;
   /** Extra opinionated guidance appended to the system prompt (e.g. a scaffold's
    *  conventions: "this is a web app, the entry is app.ts…"). */
   guidance?: string;
@@ -905,18 +912,42 @@ function systemPrompt(
   return `${base}\n\n${freshness}${tdd}${conv}${decisions}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
+/** The system content minus its VOLATILE blocks, for resume comparison: the
+ *  workspace-map staleness line ("Map built <ts>; N file(s) changed since…")
+ *  is recomputed from live file hashes — a resumed build has, by construction,
+ *  changed files, so it always differs — and the recalled decision brief comes
+ *  from an external provider (network-variable, fail-soft to absent). Neither
+ *  affects which tools/flags the prompt advertises. */
+function stableSystemKey(content: string): string {
+  return (
+    content
+      .replace(/<project-decisions>[\s\S]*?<\/project-decisions>\s*/u, "")
+      .replace(/^Map built .*$/mu, "")
+      // The delegation roster is INSERTED before the task contract (guide()),
+      // not appended — so it breaks the prefix relation between the persisted
+      // prompt (which has it) and a fresh rebuild (which doesn't yet; it
+      // re-ensures itself after resume). Idempotent by marker either way.
+      .replace(/DELEGATION:[\s\S]*?(?:\n+(?=## )|$)/u, "")
+  );
+}
+
 /** Build the initial message list. A FRESH session gets one freshly-built system
- *  prompt. A RESUMED session (`cfg.history`) has its LEADING base-prompt system message
- *  refreshed to the current prompt, keeping every later message in order. Refreshing is
- *  unconditional and idempotent: the prompt is deterministic from `cfg`, so an unchanged
- *  config rebuilds the identical string, while a config that toggled a flag either way
- *  (`offerCheck`/`pullConventions` on OR off) gets a prompt consistent with what
- *  `toolsFor` now advertises — so a resumed build can never carry a prompt that requires
- *  or advertises a tool the session no longer exposes (the flag↔prompt invariant, both
- *  directions). Only the LEADING system message is replaced; a LATER persisted system
- *  instruction (delegation, scope notes) is preserved. This assumes `history[0]` is the
- *  generated base prompt — true for every caller here, since `create` always seeds it
- *  with `systemPrompt(cfg)` and later system text is APPENDED, never prepended. */
+ *  prompt. A RESUMED session (`cfg.history`) keeps its persisted system message
+ *  VERBATIM whenever the fresh prompt's stable parts are a prefix of it — the
+ *  persisted copy is the fresh prompt plus idempotent appended blocks
+ *  (delegation roster, checklist rules) and the possibly-rebuilt task contract,
+ *  all of which re-ensure themselves after resume. Keeping the persisted bytes
+ *  preserves the SERVER-SIDE prefix cache across `--continue`: the cache
+ *  outlives the client process, and unconditionally substituting a rebuilt
+ *  string (whose staleness note always differs) cold-prefilled the entire
+ *  resumed transcript every time (592ms vs 92,787ms at 130k tokens, measured).
+ *
+ *  When the stable parts DON'T match — a flag toggled (`offerCheck`,
+ *  `pullConventions`), the map rebuilt, conventions changed — the fresh prompt
+ *  wins, preserving the flag↔prompt lockstep invariant in both directions.
+ *  This assumes `history[0]` is the generated base prompt — true for every
+ *  caller here, since `create` always seeds it with `systemPrompt(cfg)` and
+ *  later system text is APPENDED, never prepended. */
 function resumeMessages(
   cfg: ISessionConfig,
   freshSystem: string
@@ -929,9 +960,33 @@ function resumeMessages(
 
   const [first, ...rest] = cfg.history;
 
-  return first?.role === "system"
-    ? [systemMsg, ...rest]
-    : [systemMsg, ...cfg.history];
+  if (first?.role !== "system") {
+    return [systemMsg, ...cfg.history];
+  }
+
+  const reuse = stableSystemKey(first.content).startsWith(
+    stableSystemKey(freshSystem)
+  );
+
+  return [reuse ? first : systemMsg, ...rest];
+}
+
+/** The highest `revision N` stamped on a checklist snapshot in `history` — the
+ *  seed for a resumed session's revision counter (see the constructor). */
+function maxChecklistRevision(history: readonly IChatMessage[]): number {
+  let max = 0;
+
+  for (const m of history) {
+    for (const match of m.content.matchAll(/\(revision (\d+)\)/g)) {
+      const n = Number(match[1]);
+
+      if (Number.isFinite(n) && n > max) {
+        max = n;
+      }
+    }
+  }
+
+  return max;
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
@@ -975,7 +1030,19 @@ function buildSyntheticHandoff(
   };
 }
 
-/** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`. */
+/** Rebuild the dynamic task-contract block (scope + check) from LIVE `ctx.task`.
+ *
+ *  Replaces ONLY the contract section. The old form truncated everything from
+ *  the marker to the END of the system message — deleting any block appended
+ *  after it (the `## Active plan rules` text that binds on plan approval).
+ *  The next turn re-appended the rules, so with a plan bound and the auto gate
+ *  firing every cycle, message 0 OSCILLATED between two byte strings — every
+ *  flip invalidating the entire server-side prefix cache (592ms vs 92,787ms
+ *  prefill, measured) and dropping/restoring a governance block mid-drive.
+ *
+ *  Also a strict no-op when the rebuilt content is byte-identical: callers run
+ *  on every gate cycle, and an equal-string reassignment should never even
+ *  look like a mutation of the prompt prefix. */
 function rebuildTaskContract(
   ctx: Pick<ILoopCtx, "messages" | "task">,
   offerCheck = false
@@ -989,10 +1056,23 @@ function rebuildTaskContract(
   const fresh = taskContract(ctx.task.files, ctx.task.accept, offerCheck);
   const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
 
-  system.content =
-    idx === -1
-      ? `${system.content}\n\n${fresh}`
-      : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
+  if (idx === -1) {
+    system.content = `${system.content}\n\n${fresh}`;
+
+    return;
+  }
+
+  // The contract body (Scope:/Check: lines) contains no `## ` headings, so the
+  // first heading after the marker starts the NEXT section — keep it and
+  // everything that follows, byte-for-byte (including its newline run).
+  const afterMarker = system.content.slice(idx + TASK_CONTRACT_MARKER.length);
+  const nextSection = /\n+## /.exec(afterMarker);
+  const tail = nextSection === null ? "" : afterMarker.slice(nextSection.index);
+  const next = `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}${tail}`;
+
+  if (system.content !== next) {
+    system.content = next;
+  }
 }
 
 /** Gate identity for a workspace-container cycle: the packs that actually ran, over the
@@ -1300,6 +1380,18 @@ export class Session {
       cfg.autoGate !== undefined ||
       (cfg.accept !== undefined && cfg.accept.length > 0);
     this.incrementalCheck = cfg.incrementalCheck ?? "";
+
+    // Seed the auto-compaction gauge from the persisted session so the FIRST
+    // resumed send can proactively compact a near-full transcript (see
+    // ISessionConfig.lastPromptTokens).
+    if (cfg.lastPromptTokens !== undefined && cfg.lastPromptTokens > 0) {
+      this.lastUsage = {
+        promptTokens: cfg.lastPromptTokens,
+        completionTokens: 0,
+        totalTokens: cfg.lastPromptTokens,
+      };
+    }
+
     // Start with the 4 BASE tools (read/run/edit/create). Measured: the bigger
     // 11-tool list pushes this model onto a malformed-tool-call boundary (it
     // emits unparseable formats the server leaves in content) — see
@@ -1318,6 +1410,13 @@ export class Session {
     // not advertise check in a chat session whose prompt would omit + contradict it.
     // (`resumeMessages` keeps the persisted prompt in lockstep with this on resume, so
     // the advertised tool set and the prompt can never disagree in either direction.)
+    // C3: the checklist snapshot revision counter is in-memory; a resumed
+    // history already contains snapshots stamped `revision N`. Starting back
+    // at 0 made the next change stamp `revision 1`, and the HISTORY FRESHNESS
+    // rule then pointed the model at the STALE higher-numbered tree for the
+    // next N changes. Seed from the highest revision already in history.
+    this.checklistRevision = maxChecklistRevision(cfg.history ?? []);
+
     const offerCheck = isOfferCheckActive(cfg);
 
     this.offerCheckActive = offerCheck;
@@ -1591,6 +1690,13 @@ export class Session {
   }
 
   /** The current gate command (empty when none). */
+  /** The last server-reported prompt size (tokens), for persistence: --continue
+   *  seeds it back so the FIRST resumed send can proactively compact a near-full
+   *  transcript instead of firing blind at full size. 0 = none recorded. */
+  get lastPromptTokens(): number {
+    return this.lastUsage?.promptTokens ?? 0;
+  }
+
   get gate(): string {
     return this.ctx.task.accept;
   }
@@ -2460,7 +2566,7 @@ export class Session {
     // into the next successful call (exception-safe one-shot semantics).
     this.state.pendingModelOverride = null;
 
-    const res = await this.provider.complete(ctx.messages, {
+    const callOpts = {
       tools: offeredTools,
       temperature,
       toolChoice,
@@ -2471,7 +2577,7 @@ export class Session {
         : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
       ...this.ttsrCallOption(),
       ...(signal === undefined ? {} : { signal }),
-      onToken: (token, channel) => {
+      onToken: (token: string, channel: TokenChannel) => {
         // Stamp the first token so tokens/sec measures generation rate (excluding
         // prompt-processing / time-to-first-token), not total wall time.
         if (firstTokenAt === 0) {
@@ -2485,7 +2591,9 @@ export class Session {
         // below stays as the log's record (the interactive renderer dedupes it).
         report({ kind: "token", task: SESSION_ID, message: token, channel });
       },
-    });
+    };
+
+    const res = await this.completeWithOverflowRecovery(callOpts, signal);
 
     if (res.usage !== undefined) {
       const ended = performance.now();
@@ -2526,6 +2634,41 @@ export class Session {
     }
 
     return res;
+  }
+
+  /** One provider call with REACTIVE overflow recovery (the subagent loop has
+   *  had this for a while; the main loop only had the PROACTIVE lastUsage
+   *  check, which is blind after any turn that returned no usage —
+   *  aborted/TTSR/degenerated streams routinely don't). Without this, one
+   *  context-length 400 ended the send as stuck, nothing ever shrank the
+   *  transcript, and every later send re-overflowed: a dead session that
+   *  --continue faithfully restored. */
+  private async completeWithOverflowRecovery(
+    callOpts: Parameters<IProvider["complete"]>[1],
+    signal?: AbortSignal
+  ): Promise<IModelResponse> {
+    try {
+      return await this.provider.complete(this.ctx.messages, callOpts);
+    } catch (err) {
+      if (
+        signal?.aborted === true ||
+        !isContextOverflow(err) ||
+        this.ctx.messages.length <= 2
+      ) {
+        throw err;
+      }
+
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message:
+          "⊙ request overflowed the context window — compacting and retrying",
+      });
+      await this.compact(signal);
+      this.lastUsage = undefined;
+
+      return this.provider.complete(this.ctx.messages, callOpts);
+    }
   }
 
   /**
