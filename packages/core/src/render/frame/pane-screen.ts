@@ -55,6 +55,15 @@ import { paint } from "../style";
 import { displayWidth } from "../width";
 import { formatScrollbarColumn, overlayScrollbarCol } from "./scrollbar";
 import { frameContentRow, outerInsets, wrapOuterFrame } from "./outer-frame";
+import {
+  PERF_ENABLED,
+  armStallProbe,
+  countAppendMain,
+  countBytes,
+  countPaint,
+  countSetAgentTree,
+  emitPerfSummary,
+} from "./paint-stats";
 
 export interface IPaneScreenTerminal {
   readonly isTTY?: boolean;
@@ -167,6 +176,11 @@ export class PaneScreen {
     this.entered = true;
     this.everEntered = true;
     this.prevLines = null;
+
+    if (PERF_ENABLED) {
+      armStallProbe();
+    }
+
     this.cursor.reset();
     this.panelOffset = 0;
 
@@ -197,6 +211,7 @@ export class PaneScreen {
     this.prevLines = null;
     this.cursor.reset();
     this.panelOffset = 0;
+    emitPerfSummary();
   }
 
   /** Full clear + redraw (e.g. `/clear`) — invalidates differential cache. */
@@ -265,6 +280,10 @@ export class PaneScreen {
   }
 
   appendMain(text: string): void {
+    if (PERF_ENABLED) {
+      countAppendMain();
+    }
+
     this.scrollback.append(text);
 
     if (!this.entered) {
@@ -504,6 +523,10 @@ export class PaneScreen {
   }
 
   setAgentTree(lines: readonly string[]): void {
+    if (PERF_ENABLED) {
+      countSetAgentTree();
+    }
+
     this.agentTreeLines = lines;
 
     if (this.entered) {
@@ -577,6 +600,19 @@ export class PaneScreen {
 
   /** Patch just the input band + caret — skips scrollback wrap/compose. */
   private paintInputOnly(): void {
+    if (!PERF_ENABLED) {
+      this.paintInputOnlyInner();
+
+      return;
+    }
+
+    const t0 = performance.now();
+
+    this.paintInputOnlyInner();
+    countPaint("inputOnly", performance.now() - t0);
+  }
+
+  private paintInputOnlyInner(): void {
     const insets = outerInsets(this.rows, this.cols);
     const layout = computeLayout(this.layoutOpts());
     const band = this.paintInputBand(layout);
@@ -643,6 +679,19 @@ export class PaneScreen {
    * Reuses top/input/panel from prevLines — no full compose/outer-frame rebuild.
    */
   private paintMainFollowOnly(): void {
+    if (!PERF_ENABLED) {
+      this.paintMainFollowOnlyInner();
+
+      return;
+    }
+
+    const t0 = performance.now();
+
+    this.paintMainFollowOnlyInner();
+    countPaint("mainOnly", performance.now() - t0);
+  }
+
+  private paintMainFollowOnlyInner(): void {
     const screen = this.prevLines;
 
     if (screen === null) {
@@ -686,9 +735,14 @@ export class PaneScreen {
     const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
 
     this.cursor.reset();
-    this.out.write(
-      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC
-    );
+    const frame =
+      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC;
+
+    if (PERF_ENABLED) {
+      countBytes(frame.length);
+    }
+
+    this.out.write(frame);
   }
 
   /** Patch main-body terminal rows in `screen`; returns CSI dirty bytes. */
@@ -935,6 +989,19 @@ export class PaneScreen {
       return;
     }
 
+    if (!PERF_ENABLED) {
+      this.paintInner();
+
+      return;
+    }
+
+    const t0 = performance.now();
+
+    this.paintInner();
+    countPaint("full", performance.now() - t0);
+  }
+
+  private paintInner(): void {
     const layout = computeLayout(this.layoutOpts());
     const inputBand = this.paintInputBand(layout);
     const topLines = this.composeTop(layout);
@@ -1231,8 +1298,13 @@ export class PaneScreen {
     if (dirty.length > 0) {
       this.cursor.reset();
       const cursorBytes = this.cursor.move(cursorRow, cursorCol);
+      const frame = BEGIN_SYNC + dirty + cursorBytes + END_SYNC;
 
-      this.out.write(BEGIN_SYNC + dirty + cursorBytes + END_SYNC);
+      if (PERF_ENABLED) {
+        countBytes(frame.length);
+      }
+
+      this.out.write(frame);
     }
 
     this.prevLines = screen;
