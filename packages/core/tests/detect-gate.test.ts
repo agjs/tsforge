@@ -7,6 +7,7 @@ import {
   buildGate,
   makeFileLinter,
   discoverTestCommand,
+  discoverTestGate,
   isWatchTestScript,
   buildCoreFix,
   formatFile,
@@ -580,4 +581,53 @@ test("buildCoreFix returns eslint --fix and prettier commands", () => {
   expect(fix).toContain("--fix");
   expect(fix).toContain("strict.eslint.config.mjs");
   expect(fix).toContain("prettier");
+});
+
+test("a watch-only test script surfaces a SKIPPED notice instead of a silent drop", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-watchonly-"));
+
+  try {
+    // `jest --watch` under a runner is watch-only and NOT rewritable to one-shot
+    // — before, the suite silently vanished from the gate (trace-only).
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "x",
+        scripts: { test: "npm run build && jest --watch" },
+      })
+    );
+
+    const t = await discoverTestGate(dir);
+
+    expect(t.command).toBeNull();
+    expect(t.notice).toContain("tests SKIPPED");
+    expect(t.notice).toContain("test:ci");
+
+    // …and the notice reaches the gate label, where GREEN is announced.
+    const gate = await buildGate(dir, [], undefined, { includeTests: true });
+
+    expect(gate.label).toContain("tests SKIPPED");
+    // The notice is a label, never a command part.
+    expect(gate.command).not.toContain("SKIPPED");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a runnable test script yields a command and NO notice", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-runnable-"));
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "x", scripts: { test: "vitest run" } })
+    );
+
+    const t = await discoverTestGate(dir);
+
+    expect(t.command).toBe("bun run test");
+    expect(t.notice).toBeNull();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

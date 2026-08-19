@@ -6,7 +6,7 @@ import type { ICliArgs } from "./args";
 import type { ISessionRecord } from "../session-store";
 import {
   buildGate,
-  discoverTestCommand,
+  discoverTestGate,
   makeFileLinter,
   type FileLinter,
 } from "../gate";
@@ -56,6 +56,10 @@ interface IGatePolicy {
    *  tests to stay meaningful — a launcher like `bun run test` still reads the live
    *  `scripts.test`; that limitation is inherent and unchanged.) */
   testCommand: string | null;
+  /** User-visible notice when tests exist but are deliberately left out of the
+   *  gate (watch-only `test` script) — appended to the gate label so "green"
+   *  never silently means typecheck+lint only. */
+  testNotice: string | null;
 }
 
 /**
@@ -133,7 +137,12 @@ async function captureGatePolicy(
     conventions: resolveConventions(config.conventions),
     baselinePacks: resolveActivePacks(stackProfile.packs, config),
     // Discover the test command ONCE and freeze it — see IGatePolicy.testCommand.
-    testCommand: strictFloorOnly ? null : await discoverTestCommand(dir),
+    ...(strictFloorOnly
+      ? { testCommand: null, testNotice: null }
+      : await discoverTestGate(dir).then((t) => ({
+          testCommand: t.command,
+          testNotice: t.notice,
+        }))),
   };
 }
 
@@ -165,7 +174,14 @@ async function eslintFor(
     }
   );
 
-  return { command: auto.command, label: auto.label };
+  // Surface a tests-skipped notice in the frozen label — the silent drop was
+  // invisible exactly where GREEN is announced.
+  const label =
+    policy.testNotice === null
+      ? auto.label
+      : `${auto.label} + ${policy.testNotice}`;
+
+  return { command: auto.command, label };
 }
 
 /** Build the per-write lint moat for a pack-set under a frozen policy. */

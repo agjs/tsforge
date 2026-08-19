@@ -14,7 +14,7 @@ import {
 import { packEnvPrefix } from "./shell";
 import { shellQuote } from "../lib/fs";
 import { tscPart, PROJECT_TSCONFIG } from "./tsconfig";
-import { discoverTestCommand } from "./test-discovery";
+import { discoverTestGate } from "./test-discovery";
 import { isWorkspaceContainer } from "./workspace-root";
 import type { IConventions } from "../infer-rules/conventions.types";
 
@@ -125,12 +125,16 @@ export async function buildGate(
   if (options?.includeTests === true) {
     const test =
       options.testCommand === undefined
-        ? await discoverTestCommand(cwd)
-        : options.testCommand;
+        ? await discoverTestGate(cwd)
+        : { command: options.testCommand, notice: null };
 
-    if (test !== null) {
-      parts.push(test);
+    if (test.command !== null) {
+      parts.push(test.command);
       labels.push("tests");
+    } else if (test.notice !== null) {
+      // Tests exist but are deliberately left out (watch-only script) — say so
+      // in the gate identity instead of silently narrowing what "green" means.
+      labels.push(test.notice);
     }
   }
 

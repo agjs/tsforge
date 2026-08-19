@@ -6,7 +6,12 @@ export {
   formatFiles,
   prettierWriteCommand,
 } from "./linter";
-export { discoverTestCommand, isWatchTestScript } from "./test-discovery";
+export {
+  discoverTestCommand,
+  discoverTestGate,
+  isWatchTestScript,
+  type ITestGate,
+} from "./test-discovery";
 export {
   isWorkspaceContainer,
   listChildPackageRoots,
