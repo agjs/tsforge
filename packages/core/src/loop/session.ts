@@ -905,18 +905,35 @@ function systemPrompt(
   return `${base}\n\n${freshness}${tdd}${conv}${decisions}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
+/** The system content minus its VOLATILE blocks, for resume comparison: the
+ *  workspace-map staleness line ("Map built <ts>; N file(s) changed since…")
+ *  is recomputed from live file hashes — a resumed build has, by construction,
+ *  changed files, so it always differs — and the recalled decision brief comes
+ *  from an external provider (network-variable, fail-soft to absent). Neither
+ *  affects which tools/flags the prompt advertises. */
+function stableSystemKey(content: string): string {
+  return content
+    .replace(/<project-decisions>[\s\S]*?<\/project-decisions>\s*/u, "")
+    .replace(/^Map built .*$/mu, "");
+}
+
 /** Build the initial message list. A FRESH session gets one freshly-built system
- *  prompt. A RESUMED session (`cfg.history`) has its LEADING base-prompt system message
- *  refreshed to the current prompt, keeping every later message in order. Refreshing is
- *  unconditional and idempotent: the prompt is deterministic from `cfg`, so an unchanged
- *  config rebuilds the identical string, while a config that toggled a flag either way
- *  (`offerCheck`/`pullConventions` on OR off) gets a prompt consistent with what
- *  `toolsFor` now advertises — so a resumed build can never carry a prompt that requires
- *  or advertises a tool the session no longer exposes (the flag↔prompt invariant, both
- *  directions). Only the LEADING system message is replaced; a LATER persisted system
- *  instruction (delegation, scope notes) is preserved. This assumes `history[0]` is the
- *  generated base prompt — true for every caller here, since `create` always seeds it
- *  with `systemPrompt(cfg)` and later system text is APPENDED, never prepended. */
+ *  prompt. A RESUMED session (`cfg.history`) keeps its persisted system message
+ *  VERBATIM whenever the fresh prompt's stable parts are a prefix of it — the
+ *  persisted copy is the fresh prompt plus idempotent appended blocks
+ *  (delegation roster, checklist rules) and the possibly-rebuilt task contract,
+ *  all of which re-ensure themselves after resume. Keeping the persisted bytes
+ *  preserves the SERVER-SIDE prefix cache across `--continue`: the cache
+ *  outlives the client process, and unconditionally substituting a rebuilt
+ *  string (whose staleness note always differs) cold-prefilled the entire
+ *  resumed transcript every time (592ms vs 92,787ms at 130k tokens, measured).
+ *
+ *  When the stable parts DON'T match — a flag toggled (`offerCheck`,
+ *  `pullConventions`), the map rebuilt, conventions changed — the fresh prompt
+ *  wins, preserving the flag↔prompt lockstep invariant in both directions.
+ *  This assumes `history[0]` is the generated base prompt — true for every
+ *  caller here, since `create` always seeds it with `systemPrompt(cfg)` and
+ *  later system text is APPENDED, never prepended. */
 function resumeMessages(
   cfg: ISessionConfig,
   freshSystem: string
@@ -929,9 +946,15 @@ function resumeMessages(
 
   const [first, ...rest] = cfg.history;
 
-  return first?.role === "system"
-    ? [systemMsg, ...rest]
-    : [systemMsg, ...cfg.history];
+  if (first?.role !== "system") {
+    return [systemMsg, ...cfg.history];
+  }
+
+  const reuse = stableSystemKey(first.content).startsWith(
+    stableSystemKey(freshSystem)
+  );
+
+  return [reuse ? first : systemMsg, ...rest];
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
