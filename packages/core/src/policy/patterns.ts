@@ -459,3 +459,45 @@ export function commandReadsPrivateKey(command: string): boolean {
     return path.length > 0 && isPrivateKeyPath(path);
   });
 }
+
+/** Credential/secret file paths a CODE body (the `script` tool) reads directly
+ *  via fs — a superset of the SSH-key shapes, since a script can `readFileSync`
+ *  any of them without a shell. Best-effort literal-string match. */
+const CODE_SECRET_PATH =
+  /(?:\.ssh\/|id_rsa|id_ed25519|\.aws\/credentials|\.npmrc|\.netrc|\.config\/gh\/|\.docker\/config|\.kube\/config|\.gnupg\/)/u;
+
+/** Destructive filesystem calls in a CODE body aimed at an ABSOLUTE or
+ *  parent-traversal path (i.e. outside cwd) — the JS-native equivalent of a
+ *  shell `rm -rf /foo`, which `isDestructiveShell` cannot see. */
+const CODE_DESTRUCTIVE =
+  /\b(?:rmSync|rmdirSync|unlinkSync|rm|rmdir|unlink)\s*\(\s*[`'"](?:\/|~|\.\.\/)/u;
+
+/** Spawning a shell interpreter from a CODE body — the escape hatch back to an
+ *  unpoliced shell (`child_process.exec("…")`, `Bun.spawn(["sh","-c",…])`). */
+const CODE_SHELL_OUT =
+  /\b(?:exec|execSync|spawnSync)\s*\(|Bun\.\$|\bspawn\s*\(\s*\[?\s*[`'"](?:sh|bash|zsh|\/bin\/sh)\b/u;
+
+/**
+ * Best-effort critical scan of a `script` tool CODE body — the JS-native
+ * dangers that shell-shaped scans miss: reading credential files, removing
+ * paths outside cwd, and shelling out to an interpreter. Matches literal
+ * source shapes only (a body that assembles the path/command dynamically slips
+ * through — the env filter in script-tool.ts is the real protection); the goal
+ * is to stop the obvious `readFileSync(process.env.HOME + "/.ssh/id_rsa")` and
+ * `rmSync("/", …)` shapes the policy previously never looked at.
+ */
+export function codeBodyIsDangerous(code: string): string | null {
+  if (CODE_SECRET_PATH.test(code)) {
+    return "reads a credential/secret file";
+  }
+
+  if (CODE_DESTRUCTIVE.test(code)) {
+    return "removes a filesystem path outside the workspace";
+  }
+
+  if (CODE_SHELL_OUT.test(code)) {
+    return "shells out to an interpreter (unpoliced)";
+  }
+
+  return null;
+}

@@ -25,12 +25,14 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // `script` runs a program that can call other tools — classify as shell so the
   // policy treats it like `run` (its stub calls are each re-classified on dispatch).
   [TOOL_NAME.script]: "shell",
-  // `check` (WS-G) runs the acceptance gate on demand (bun/eslint/tsc + meta-rules)
-  // — command execution with side effects, exactly like `run`/`script`, so it's
-  // `shell`: allowed in the build's default mode, and plan mode still blocks it via
-  // executeTool's non-read-only hard guard. WITHOUT this it classifies `unknown` →
-  // deny, and every check call dies before doCheck (the spawn_agent/script regression).
-  [TOOL_NAME.check]: "shell",
+  // `check` (WS-G) runs the FROZEN gate command and ignores its args entirely
+  // (doCheck takes `_args`), so it has ZERO model-chosen input — classifying it
+  // `shell` conflated "spawns a process" with "model wrote the command line" and
+  // got it DENIED in ci/dontAsk (and ask→deny in non-interactive acceptEdits),
+  // killing every check call in exactly the unattended runs that need it. It is a
+  // `harness_tool`: allowed everywhere except plan, where executeTool's
+  // non-read-only hard guard still blocks it.
+  [TOOL_NAME.check]: "harness_tool",
   // `ask_user` (WS-C1) asks the human a question and mutates nothing → zero-risk,
   // classified `read_file` so it's allowed in every mode (incl. plan). Absent here it
   // would classify `unknown` → deny before the handler runs (the check/script DOA class).
@@ -120,6 +122,17 @@ function extractCommand(
     return `bun add ${str(args, "packages")}`.trim();
   }
 
+  // `script` runs the model's `code` verbatim — surface the body AS the command
+  // so the critical denies (destructive-shell, pipe-to-shell, private-key) at
+  // least scan it. Before this, `script` had no `command`, so EVERY
+  // command-gated critical was structurally skipped: the body could `rm -rf`
+  // outside cwd or read `~/.ssh/id_rsa` with the policy never looking. The scan
+  // is best-effort (a JS body's `rmSync` isn't a shell `rm`); the env filter in
+  // script-tool.ts is the load-bearing protection.
+  if (toolName === TOOL_NAME.script) {
+    return str(args, "code");
+  }
+
   return undefined;
 }
 
@@ -159,6 +172,12 @@ export function classifyAction(call: IToolCall, cwd: string): IProposedAction {
 
   if (command !== undefined) {
     action.command = command;
+  }
+
+  // Mark the `script` body so the policy scans it with CODE-native critical
+  // patterns (rmSync/child_process/credential reads), not just shell shapes.
+  if (call.name === TOOL_NAME.script) {
+    action.metadata = { codeExec: true };
   }
 
   return action;

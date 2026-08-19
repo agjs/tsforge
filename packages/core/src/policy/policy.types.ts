@@ -24,6 +24,12 @@ export type ActionKind =
   | "network"
   | "mcp_tool"
   | "plugin_tool"
+  /** A harness-controlled tool whose ENTIRE argument surface is ignored or
+   *  fixed by the harness — `check` runs the frozen gate command and ignores
+   *  its args. Zero model-chosen input, so it carries none of `shell`'s risk;
+   *  allowed in every mode except `plan` (where `executeTool`'s read-only guard
+   *  still blocks a non-read-only tool). */
+  | "harness_tool"
   /** Delegating a read-only investigation to a subagent (`spawn_agent`). The
    *  spawn itself mutates nothing; the child is read-only-enforced separately.
    *  Its own action class so a repo can deny/ask delegation specifically. */

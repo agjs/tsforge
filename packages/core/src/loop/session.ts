@@ -1697,6 +1697,13 @@ export class Session {
     return this.lastUsage?.promptTokens ?? 0;
   }
 
+  /** The session's CURRENT policy mode — `plan` while plan mode is on, else the
+   *  base mode. Read by the spawn runner so a child inherits the parent's live
+   *  mode (B9), not the value captured at REPL start. */
+  get effectivePolicyMode(): PolicyMode {
+    return this.planMode ? "plan" : this.baseMode;
+  }
+
   get gate(): string {
     return this.ctx.task.accept;
   }

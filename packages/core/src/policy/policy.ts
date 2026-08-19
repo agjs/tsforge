@@ -1,4 +1,7 @@
+import { isRecord } from "../lib/guards";
+import { isHarnessGovernedPath } from "../lib/scope";
 import {
+  codeBodyIsDangerous,
   commandReadsPrivateKey,
   isDestructiveShell,
   isPrivateKeyPath,
@@ -119,6 +122,7 @@ const MODE_MATRIX: Readonly<
     network: "allow",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    harness_tool: "allow",
     spawn_agent: "allow",
     unknown: "ask",
   },
@@ -133,6 +137,7 @@ const MODE_MATRIX: Readonly<
     network: "allow",
     mcp_tool: "deny",
     plugin_tool: "deny",
+    harness_tool: "deny",
     spawn_agent: "allow",
     unknown: "deny",
   },
@@ -147,8 +152,12 @@ const MODE_MATRIX: Readonly<
     delete_file: "allow",
     shell: "ask",
     network: "deny",
-    mcp_tool: "allow",
+    // An MCP call is arbitrary remote code/egress — a SUPERSET of web_fetch,
+    // which this mode denies. Ask (→ deny when non-interactive); a per-server
+    // allow rule ({kind:"mcp_tool",mcpServer:"…"}) is the escape hatch.
+    mcp_tool: "ask",
     plugin_tool: "allow",
+    harness_tool: "allow",
     spawn_agent: "allow",
     unknown: "deny",
   },
@@ -163,8 +172,12 @@ const MODE_MATRIX: Readonly<
     delete_file: "allow",
     shell: "deny",
     network: "deny",
-    mcp_tool: "allow",
+    // Denied to match `network` (web_fetch): an MCP call is arbitrary remote
+    // code/egress and this mode is non-interactive. Per-server allow rules are
+    // the escape hatch.
+    mcp_tool: "deny",
     plugin_tool: "allow",
+    harness_tool: "allow",
     spawn_agent: "allow",
     unknown: "deny",
   },
@@ -179,8 +192,12 @@ const MODE_MATRIX: Readonly<
     delete_file: "allow",
     shell: "deny",
     network: "deny",
-    mcp_tool: "allow",
+    // Denied to match `network` (web_fetch): an MCP call is arbitrary remote
+    // code/egress and this mode is non-interactive. Per-server allow rules are
+    // the escape hatch.
+    mcp_tool: "deny",
     plugin_tool: "allow",
+    harness_tool: "allow",
     spawn_agent: "allow",
     unknown: "deny",
   },
@@ -193,6 +210,7 @@ const MODE_MATRIX: Readonly<
     network: "allow",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    harness_tool: "allow",
     spawn_agent: "allow",
     unknown: "allow",
   },
@@ -283,6 +301,41 @@ function criticalDeny(
       reason: `private-key file access blocked: ${preview(action.command)}`,
       rule: "critical:private-key-read",
     };
+  }
+
+  // A write to a harness-governed file (tsforge.config.* / .tsforge/**) is a
+  // PERSISTENT escalation — the config carries policy.rules, so editing it now
+  // relaxes the policy on the next session. `writable()` already blocks the
+  // edit tools + shell redirects; this is the policy-layer belt-and-suspenders,
+  // enforced in EVERY mode (incl. bypassPermissions).
+  const governed =
+    WRITE_KINDS.has(action.kind) && action.paths !== undefined
+      ? action.paths.find((p) => isHarnessGovernedPath(p))
+      : undefined;
+
+  if (governed !== undefined) {
+    return {
+      reason: `write to a harness-governed file blocked (policy/gate config is not model-editable): ${governed}`,
+      rule: "critical:governed-config-write",
+    };
+  }
+
+  // A `script` CODE body (marked codeExec at classify time) scanned for
+  // JS-native dangers the shell shapes above can't see. Best-effort; the env
+  // filter in script-tool.ts is the load-bearing protection.
+  if (
+    isRecord(action.metadata) &&
+    action.metadata.codeExec === true &&
+    action.command !== undefined
+  ) {
+    const danger = codeBodyIsDangerous(action.command);
+
+    if (danger !== null) {
+      return {
+        reason: `script body blocked — ${danger}: ${preview(action.command)}`,
+        rule: "critical:script-body",
+      };
+    }
   }
 
   if (

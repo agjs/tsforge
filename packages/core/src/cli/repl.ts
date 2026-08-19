@@ -587,7 +587,11 @@ async function initReplSession(args: ICliArgs): Promise<{
     // Offer `ask_user` (WS-C) only when a human is actually at the keyboard (TTY): the
     // model can pause for a bounded question and the human's next line answers it. Piped /
     // non-TTY input has no one to answer, so it stays unattended (ask_user proceeds).
-    interactive: humanAtKeyboard(),
+    // No per-action approval UI exists yet, so `ask` must resolve to DENY with
+    // an honest reason — passing `true` here kept the verdict `ask`, which
+    // executeTool then rejected anyway but with a message claiming a human was
+    // consulted. Flip back to humanAtKeyboard() only when a real prompt lands.
+    interactive: false,
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
@@ -932,6 +936,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     policyMode: isPolicyMode(args.policyMode)
       ? args.policyMode
       : (delegationConfig.policy?.mode ?? "default"),
+    // Read the parent's CURRENT mode at spawn time (B9): plan mode / a mid-
+    // session cycle must reach the child, not the startup value.
+    getPolicyMode: () => session.effectivePolicyMode,
     ...(delegationConfig.policy?.rules === undefined
       ? {}
       : { policyRules: delegationConfig.policy.rules }),
@@ -1356,7 +1363,11 @@ export async function repl(args: ICliArgs): Promise<number> {
       // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
       // on the TTY like the init session, so a piped REPL doesn't advertise a pause
       // nobody can answer.
-      interactive: humanAtKeyboard(),
+      // No per-action approval UI exists yet, so `ask` must resolve to DENY with
+      // an honest reason — passing `true` here kept the verdict `ask`, which
+      // executeTool then rejected anyway but with a message claiming a human was
+      // consulted. Flip back to humanAtKeyboard() only when a real prompt lands.
+      interactive: false,
       // Keep the SCOPED format janitor on across /clear — else the rebuilt session
       // silently reverts to no formatting for the rest of the session.
       coreFormat: true,

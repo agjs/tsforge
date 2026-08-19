@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -221,5 +221,109 @@ describe("read/run confinement", () => {
 
     expect(out).not.toContain("REJECTED");
     expect(out.toLowerCase()).toContain("secret");
+  });
+});
+
+describe("confinement — quote-aware segmentation + word scan (F1/B2/B3/B4)", () => {
+  const CWD = "/ws";
+
+  test("F1: sed/grep expression args are NOT read as paths (the false-red)", () => {
+    for (const cmd of [
+      "sed -i 's|/old|/new|g' src/x.ts",
+      "sed -n '/foo/,/bar/p' src/x.ts",
+      "sed -i '/^import/d' src/x.ts",
+      "grep -E '^(a|/tmp)' src/x.ts",
+      "awk '/start/,/end/' src/x.ts",
+      "rg 'foo/bar' src",
+    ]) {
+      expect(outsideWorkspacePaths(CWD, cmd)).toEqual([]);
+    }
+  });
+
+  test("F1: a REAL foreign path under an expression command still trips (quoted or bare)", () => {
+    expect(outsideWorkspacePaths(CWD, "sed -i s/a/b/ /foreign/secret")).toEqual(
+      ["/foreign/secret"]
+    );
+    expect(outsideWorkspacePaths(CWD, "rg leak '/foreign/tree'")).toEqual([
+      "/foreign/tree",
+    ]);
+  });
+
+  test("B2: unquoted ~ and $HOME paths are caught (fail closed)", () => {
+    expect(outsideWorkspacePaths(CWD, "cat ~/.aws/credentials")).toEqual([
+      "~/.aws/credentials",
+    ]);
+    expect(outsideWorkspacePaths(CWD, "cat $HOME/.npmrc").length).toBe(1);
+    expect(outsideWorkspacePaths(CWD, "rg secret $HOME/other").length).toBe(1);
+  });
+
+  test("B3: a ../ component anywhere in a token escapes cwd", () => {
+    expect(outsideWorkspacePaths(CWD, "cat ./../foreign/x")).toEqual([
+      "./../foreign/x",
+    ]);
+    expect(outsideWorkspacePaths(CWD, "cat src/../../foreign/x").length).toBe(
+      1
+    );
+  });
+
+  test("B4: echo + newline no longer exempts a following real command", () => {
+    expect(
+      outsideWorkspacePaths(CWD, "echo start\ncat /foreign/secret")
+    ).toEqual(["/foreign/secret"]);
+    expect(
+      outsideWorkspacePaths(CWD, "echo $(cat /foreign/secret)").length
+    ).toBe(1);
+  });
+
+  test("benign idioms stay allowed", () => {
+    for (const cmd of [
+      "date +%Y/%m/%d",
+      "curl https://host/x",
+      "git log --format=%H",
+      "rg secret src/lib",
+    ]) {
+      expect(outsideWorkspacePaths(CWD, cmd)).toEqual([]);
+    }
+  });
+});
+
+describe("symlink confinement (B6)", () => {
+  test("reading a workspace symlink that points OUT of the tree is rejected", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tsforge-sym-cwd-"));
+    const foreign = await mkdtemp(join(tmpdir(), "tsforge-sym-foreign-"));
+
+    try {
+      await writeFile(join(foreign, "secret.txt"), "SECRET");
+      await symlink(join(foreign, "secret.txt"), join(cwd, "link.txt"));
+      await writeFile(join(cwd, "ok.ts"), "export const x = 1;\n");
+
+      const viaLink = await readFile({ file: "link.txt" }, toolCtx(cwd));
+      const viaReal = await readFile({ file: "ok.ts" }, toolCtx(cwd));
+
+      // The lexical check passed link.txt (under cwd); the realpath re-check
+      // catches that it resolves outside.
+      expect(viaLink).toContain("REJECTED");
+      expect(viaLink).not.toContain("SECRET");
+      // A real in-tree file still reads.
+      expect(viaReal).toContain("export const x");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(foreign, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlink pointing INSIDE the tree still reads (not over-blocked)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "tsforge-sym-in-"));
+
+    try {
+      await writeFile(join(cwd, "real.ts"), "export const y = 2;\n");
+      await symlink(join(cwd, "real.ts"), join(cwd, "alias.ts"));
+
+      const out = await readFile({ file: "alias.ts" }, toolCtx(cwd));
+
+      expect(out).toContain("export const y");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });

