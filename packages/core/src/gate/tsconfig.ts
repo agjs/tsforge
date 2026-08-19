@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { TSC_BIN } from "./tool-paths";
+import { shellQuote } from "../lib/fs";
 
 // The strict tsconfig tsforge brings to a greenfield project — strict + the
 // index-safety the local model is weakest at, with DOM + JSX libs so browser /
@@ -38,10 +39,23 @@ const STRICT_TSCONFIG = `{
  *  own config, and `include`/`exclude` are re-stated relative to the subdir
  *  because `extends` does not inherit them (they default to the config's own
  *  directory otherwise — which under `.tsforge/` would compile nothing). */
+/* `extends` merges compilerOptions PER FIELD, and `strict` is only a DEFAULT for
+ * its sub-flags: a base config's explicit `"strictNullChecks": false` beats the
+ * overlay's `"strict": true`. So every strict-family sub-flag is enumerated
+ * explicitly — otherwise a loosely-configured (or model-loosened) project
+ * tsconfig silently disables parts of the floor the gate claims to enforce. */
 const STRICT_TSCONFIG_OVERLAY = `{
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "strictBuiltinIteratorReturn": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
@@ -120,7 +134,7 @@ export async function tscPart(cwd: string): Promise<string | null> {
     );
     await ignoreGateArtifact(cwd);
 
-    return `"${TSC_BIN}" --noEmit ${INCREMENTAL_FLAGS} -p ${GATE_TSCONFIG_DIR}/${GATE_TSCONFIG_FILE}`;
+    return `${shellQuote(TSC_BIN)} --noEmit ${INCREMENTAL_FLAGS} -p ${GATE_TSCONFIG_DIR}/${GATE_TSCONFIG_FILE}`;
   }
 
   // Greenfield: bring a strict tsconfig so tsc can gate — but only when this is
@@ -132,7 +146,7 @@ export async function tscPart(cwd: string): Promise<string | null> {
     // tsconfig — so incremental never leaks a cache file into the user's tree.
     await ignoreGateArtifact(cwd);
 
-    return `"${TSC_BIN}" --noEmit ${INCREMENTAL_FLAGS} -p tsconfig.json`;
+    return `${shellQuote(TSC_BIN)} --noEmit ${INCREMENTAL_FLAGS} -p tsconfig.json`;
   }
 
   return null;

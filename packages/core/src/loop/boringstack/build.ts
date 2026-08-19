@@ -19,6 +19,7 @@ import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
 import { greenfieldDir, hasState } from "../greenfield/state";
 import { composeBoringstackGate } from "./gate-stages";
+import type { SpecFetcher } from "./openapi-routes";
 import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures, invalidEntityIds } from "./plan-resources";
 import { toCamelCase } from "./case";
@@ -615,6 +616,10 @@ export function boringstackDeps(opts: {
    *  per-slice acceptance. When provided, seeding code can reference parent field
    *  metadata from the full plan rather than fallback placeholders. */
   fullSpec?: IAcceptanceSpec;
+  /** Fetch the running API's OpenAPI spec for the reachability stage. Omitted →
+   *  the default live `fetch`. Tests inject a stub so the composed gate never
+   *  touches the network. */
+  specFetcher?: SpecFetcher;
 }): IGreenfieldDeps {
   const {
     host,
@@ -626,6 +631,7 @@ export function boringstackDeps(opts: {
     sliceFor,
     acceptanceRunner,
     fullSpec,
+    specFetcher,
   } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
@@ -693,6 +699,7 @@ export function boringstackDeps(opts: {
           feature,
           entity,
           siblingEntities,
+          specFetcher,
         })
       );
 

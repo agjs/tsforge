@@ -2,7 +2,11 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runShellCommand, runArgvCommand } from "../src/lib/fs/process";
+import {
+  runShellCommand,
+  runArgvCommand,
+  createBoundedCapture,
+} from "../src/lib/fs/process";
 
 // P2 (review): a timed-out command killed only the `sh -c` wrapper, so a
 // `&`-backgrounded grandchild survived and could still mutate the workspace AFTER
@@ -128,6 +132,70 @@ test("pipefail keeps a failing left-hand command's exit through | cat", async ()
     const ok = await runShellCommand(dir, "true | cat", { timeoutMs: 5000 });
 
     expect(ok.exitCode).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("createBoundedCapture: under-cap output is byte-identical (parsers see the exact stream)", () => {
+  const cap = createBoundedCapture(8, 8);
+
+  cap.append("abc");
+  cap.append("defgh");
+
+  expect(cap.text()).toBe("abcdefgh");
+});
+
+test("createBoundedCapture: over-cap keeps head + tail with an elision notice and count", () => {
+  const cap = createBoundedCapture(4, 4);
+
+  // 4 head + 20 into the tail window (cap 4) → 16 elided.
+  cap.append("HEAD");
+
+  for (let i = 0; i < 5; i += 1) {
+    cap.append("0123");
+  }
+
+  const text = cap.text();
+
+  expect(text.startsWith("HEAD")).toBe(true);
+  expect(text.endsWith("0123")).toBe(true);
+  expect(text).toContain("output truncated: 16 characters elided");
+  // Idempotent: a second read reports the same thing.
+  expect(cap.text()).toBe(text);
+});
+
+test("createBoundedCapture: tail trimming is amortized, not O(n²)", () => {
+  const cap = createBoundedCapture(16, 1024);
+  const chunk = "x".repeat(64);
+  const started = performance.now();
+
+  for (let i = 0; i < 50_000; i += 1) {
+    cap.append(chunk);
+  }
+
+  // ~3.2MB appended; O(n²) would take seconds here.
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(cap.text().length).toBeLessThanOrEqual(16 + 1024 + 120);
+});
+
+test("a multi-megabyte command output is captured bounded end-to-end", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-boundedcap-"));
+
+  try {
+    // ~6MB of stdout: beyond head(512KB)+tail(4MB) → elision must kick in,
+    // while both ends survive for the parsers.
+    const r = await runShellCommand(
+      dir,
+      `bun -e 'const line = "y".repeat(1023); for (let i = 0; i < 6144; i++) console.log(line);'`,
+      { timeoutMs: 60_000 }
+    );
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.length).toBeLessThan(5 * 1024 * 1024);
+    expect(r.stdout).toContain("output truncated");
+    expect(r.stdout.startsWith("y")).toBe(true);
+    expect(r.stdout.trimEnd().endsWith("y")).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

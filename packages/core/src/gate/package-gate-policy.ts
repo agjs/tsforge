@@ -13,7 +13,7 @@ import { loadAndRegisterPlugins } from "../config/external-plugins";
 import { detectStack } from "../stack-detection";
 import { buildGate } from "./core-gate";
 import { makeFileLinter } from "./linter";
-import { discoverTestCommand } from "./test-discovery";
+import { discoverTestGate } from "./test-discovery";
 import type { FileLinter, IGateSpec } from "./types";
 
 /**
@@ -84,7 +84,9 @@ export async function capturePackageGatePolicy(
     baselinePacks,
     externalPackIds,
     testCommand:
-      opts.strictFloorOnly === true ? null : await discoverTestCommand(pkgDir),
+      opts.strictFloorOnly === true
+        ? null
+        : (await discoverTestGate(pkgDir)).command,
     activePacks: new Set(baselinePacks),
   };
 }

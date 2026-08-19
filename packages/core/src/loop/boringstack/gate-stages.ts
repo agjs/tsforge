@@ -445,8 +445,8 @@ function dbPushError(result: IExecResult): IErrorItem {
   // Postgres output; `value1` vs `value2` are distinct), and NO cwd stripping (that would collapse
   // `value=<cwd>` and `value=` to the same key). `JSON.stringify([stdout, stderr])` is an
   // UNFORGEABLE serialization: it escapes every byte (incl. NUL) and encodes the array boundary,
-  // so a byte can't slide between the two streams to forge a collision (`["a ","b"]` !==
-  // `["a"," b"]`) — unlike any single-delimiter join, since the streams can contain the
+  // so a byte can't slide between the two streams to forge a collision (`["a\x00","b"]` !==
+  // `["a","\x00b"]`) — unlike any single-delimiter join, since the streams can contain the
   // delimiter too. A db:push FAILURE is deterministic, so this is a stable key across cycles for
   // the same error while ANY real difference changes it.
   const fingerprint = Bun.hash(
@@ -577,22 +577,30 @@ export function reachabilityStage(
       // but absent from the live spec means the resource isn't mounted → 404 at runtime.
       // INCONCLUSIVE (spec unreachable) is non-blocking (build-start pre-flight fail-closes
       // a genuinely down API; a transient blip must not red a feature).
-      const apiPort = hostPortOr(readHostPorts(cwd), "API_HOST_PORT");
-      const served = await fetchServedPaths(
-        resolveOpenApiUrl(process.env.OPENAPI_URL, apiPort),
-        fetcher
-      );
+      //
+      // The probe only fires when the STATIC checks are clean AND at least one
+      // static input existed: already-red ⇒ the probe adds nothing but a stall
+      // (up to 10s against a down API), and all-inputs-absent ⇒ this isn't a
+      // boringstack tree (a unit-test cwd, a variant layout) where a live fetch
+      // is pure noise — and, unguarded, a network dependency inside unit tests.
+      if (problems.length === 0 && reach.inputsPresent) {
+        const apiPort = hostPortOr(readHostPorts(cwd), "API_HOST_PORT");
+        const served = await fetchServedPaths(
+          resolveOpenApiUrl(process.env.OPENAPI_URL, apiPort),
+          fetcher
+        );
 
-      if (served !== null) {
-        const routes = checkRoutesServed(served, toCamelCase(featureId));
+        if (served !== null) {
+          const routes = checkRoutesServed(served, toCamelCase(featureId));
 
-        if (!routes.ok) {
-          problems.push(
-            `API routes NOT served by the running API — present in routes.ts source but ` +
-              `ABSENT from the live /swagger/json: ${routes.missing.join(", ")}. The resource ` +
-              `isn't actually mounted, so its create/list/edit/delete would 404 at runtime. ` +
-              `Register + mount the resource so these paths appear in the served spec.`
-          );
+          if (!routes.ok) {
+            problems.push(
+              `API routes NOT served by the running API — present in routes.ts source but ` +
+                `ABSENT from the live /swagger/json: ${routes.missing.join(", ")}. The resource ` +
+                `isn't actually mounted, so its create/list/edit/delete would 404 at runtime. ` +
+                `Register + mount the resource so these paths appear in the served spec.`
+            );
+          }
         }
       }
 

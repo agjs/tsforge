@@ -264,6 +264,11 @@ describe("boringstackDeps.implement", () => {
       evaluator,
       generate: async () => {},
       generateUi: async () => {},
+      // Hermetic: the reachability stage must never reach for a live API from a
+      // unit test (the default fetcher's 10s timeout exceeds bun's 5s test cap).
+      specFetcher: async () => {
+        throw new Error("no live API in unit tests");
+      },
     });
 
     await deps.implement(feature("Supplier"), st);
@@ -308,12 +313,72 @@ describe("boringstackDeps.implement", () => {
       evaluator,
       generate: async () => {},
       generateUi: async () => {},
+      specFetcher: async () => {
+        throw new Error("no live API in unit tests");
+      },
     });
 
     await deps.implement(feature("Supplier"), st);
     await gate?.run("/repo");
 
+    // The judge must have actually run — a gate short-circuit before the judge
+    // stage would make the negative assertion below pass vacuously.
+    expect(seen.length).toBeGreaterThan(0);
     expect(seen.join("\n")).not.toContain("separate slices");
+  });
+
+  test("forwards specFetcher into the composed gate's reachability stage", async () => {
+    // Proves the deps→gate plumbing: the injected fetcher must be the one the
+    // reachability probe uses (it was silently unplumbed once — the composed gate
+    // fell back to a live 10s fetch inside unit tests).
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-deps-fetch-"));
+    const routesDir = join(dir, "apps/api/src/config/routes");
+
+    await mkdir(routesDir, { recursive: true });
+    // Statically-clean clone: the route table mounts supplierRoutes, so the
+    // probe precondition (inputsPresent + zero static problems) holds.
+    await writeFile(
+      join(routesDir, "routes.ts"),
+      `import { supplierRoutes } from "../../api/supplier/supplier.routes";\n` +
+        `export const routes = { supplier: supplierRoutes };\n`
+    );
+
+    const base = createHost();
+    let gate: IGate | undefined;
+    const host = {
+      ...base,
+      setGate: (g: IGate) => {
+        gate = g;
+      },
+    };
+    let probes = 0;
+
+    const deps = boringstackDeps({
+      host,
+      cwd: dir,
+      exec: createExec(0),
+      evaluator: createEvaluator(),
+      generate: async () => {},
+      generateUi: async () => {},
+      specFetcher: async () => {
+        probes += 1;
+
+        return {
+          openapi: "3.0.0",
+          info: { title: "x", version: "1" },
+          paths: { "/api/v1/supplier/": {}, "/api/v1/supplier/{id}": {} },
+        };
+      },
+    });
+
+    try {
+      await deps.implement(feature("Supplier"), state());
+      await gate?.run(dir);
+
+      expect(probes).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("delegates the DB sync to generate — no redundant, result-ignoring harness-level db:push", async () => {

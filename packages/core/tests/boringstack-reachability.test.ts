@@ -19,6 +19,22 @@ function wiredInputs(): IReachabilityInputs {
 }
 
 describe("checkFeatureReachable", () => {
+  test("inputsPresent reflects whether ANY static input existed", () => {
+    // All-absent ⇒ vacuously ok, and inputsPresent=false tells callers this
+    // isn't a boringstack tree (the live-spec probe keys off it).
+    const empty = checkFeatureReachable("Bookmark", {
+      uiRoutes: null,
+      apiRoutes: null,
+      localeJsons: [],
+    });
+
+    expect(empty.ok).toBe(true);
+    expect(empty.inputsPresent).toBe(false);
+    expect(checkFeatureReachable("Bookmark", wiredInputs()).inputsPresent).toBe(
+      true
+    );
+  });
+
   test("ok when route, API, and i18n keys are all present", () => {
     const r = checkFeatureReachable("Bookmark", wiredInputs());
 

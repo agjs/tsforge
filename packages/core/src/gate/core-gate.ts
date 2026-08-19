@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { currentVersion } from "../update-check";
 import type { IGateSpec } from "./types";
 import {
   ESLINT_BIN,
@@ -11,8 +12,9 @@ import {
   PROPTEST_CHECK,
 } from "./tool-paths";
 import { packEnvPrefix } from "./shell";
+import { shellQuote } from "../lib/fs";
 import { tscPart, PROJECT_TSCONFIG } from "./tsconfig";
-import { discoverTestCommand } from "./test-discovery";
+import { discoverTestGate } from "./test-discovery";
 import { isWorkspaceContainer } from "./workspace-root";
 import type { IConventions } from "../infer-rules/conventions.types";
 
@@ -20,15 +22,47 @@ import type { IConventions } from "../infer-rules/conventions.types";
  *  buildinfo). The syntactic-lint result cache lives here. */
 const GATE_CACHE_DIR = ".tsforge";
 
-/** The eslint result cache path, KEYED BY the active ruleset. eslint caches on file
- *  content + the static config PATH — NOT the packs/overrides/conventions we inject via
- *  env (TSFORGE_PACKS, …). The auto gate can change packs mid-session (a greenfield project
- *  gains `react`), so a single fixed cache path would let files cached under the weaker
- *  ruleset keep passing without the newly activated rules. Hashing the env prefix (the
- *  exact ruleset) into the filename means a ruleset change → a fresh cache → a real re-lint,
- *  while an unchanged ruleset still hits the cache. */
+/** Stage-label constants — exported so the auto gate's stage FLOOR
+ *  (gate/stage-floor.ts) observes stages from the label without string drift. */
+export const TSC_STAGE_LABEL = "tsc --strict";
+export const TYPE_AWARE_STAGE_LABEL = "type-aware async (tsforge)";
+
+/** Content hash of the bundled strict config, read once per process. Folded into
+ *  the cache key so editing/upgrading the shipped config file invalidates caches
+ *  even when the tsforge version is unchanged (a dev iterating on the config). */
+let strictConfigHash: string | null = null;
+
+function configIdentity(): string {
+  if (strictConfigHash === null) {
+    let text = "missing";
+
+    try {
+      text = readFileSync(STRICT_CONFIG, "utf8");
+    } catch {
+      // Unresolvable config → the gate command will fail loudly on its own;
+      // the sentinel just keeps the cache key stable and distinct.
+    }
+
+    strictConfigHash = Bun.hash(text).toString(36);
+  }
+
+  return strictConfigHash;
+}
+
+/** The eslint result cache path, KEYED BY the active ruleset + the toolchain
+ *  identity. eslint caches on file content + the static config PATH — NOT the
+ *  packs/overrides/conventions we inject via env (TSFORGE_PACKS, …), and not the
+ *  rule IMPLEMENTATIONS. The auto gate can change packs mid-session (a greenfield
+ *  project gains `react`), and a tsforge upgrade can change what a rule flags with
+ *  an identical serialized config — either would let files cached under the weaker
+ *  ruleset keep passing. Hashing the env prefix + tsforge version (which pins the
+ *  bundled eslint) + the strict-config content into the filename means any of
+ *  those changing → a fresh cache → a real re-lint, while an unchanged toolchain
+ *  still hits the cache. */
 function eslintCachePath(envPrefix: string): string {
-  const key = Bun.hash(`v1:${envPrefix}`).toString(36);
+  const key = Bun.hash(
+    `v2:${currentVersion()}:${configIdentity()}:${envPrefix}`
+  ).toString(36);
 
   return `${GATE_CACHE_DIR}/eslint-gate-${key}.cache`;
 }
@@ -65,7 +99,7 @@ export async function buildGate(
 
   if (tsc !== null) {
     parts.push(tsc);
-    labels.push("tsc --strict");
+    labels.push(TSC_STAGE_LABEL);
   }
 
   // The syntactic lint pass caches per-file results under .tsforge/ (see
@@ -96,12 +130,16 @@ export async function buildGate(
   if (options?.includeTests === true) {
     const test =
       options.testCommand === undefined
-        ? await discoverTestCommand(cwd)
-        : options.testCommand;
+        ? await discoverTestGate(cwd)
+        : { command: options.testCommand, notice: null };
 
-    if (test !== null) {
-      parts.push(test);
+    if (test.command !== null) {
+      parts.push(test.command);
       labels.push("tests");
+    } else if (test.notice !== null) {
+      // Tests exist but are deliberately left out (watch-only script) — say so
+      // in the gate identity instead of silently narrowing what "green" means.
+      labels.push(test.notice);
     }
   }
 
@@ -135,17 +173,17 @@ function appendOptInOracles(
   env: Record<string, string | undefined>
 ): void {
   if (env.TSFORGE_COVERAGE !== undefined && env.TSFORGE_COVERAGE.length > 0) {
-    parts.push(`bun "${TEST_COVERAGE_CHECK}"`);
+    parts.push(`bun ${shellQuote(TEST_COVERAGE_CHECK)}`);
     labels.push("test coverage");
   }
 
   if (env.TSFORGE_BOOT !== undefined && env.TSFORGE_BOOT.trim().length > 0) {
-    parts.push(`bun "${BOOT_CHECK}"`);
+    parts.push(`bun ${shellQuote(BOOT_CHECK)}`);
     labels.push("boot smoke");
   }
 
   if (env.TSFORGE_PROPTEST === "1") {
-    parts.push(`bun "${PROPTEST_CHECK}"`);
+    parts.push(`bun ${shellQuote(PROPTEST_CHECK)}`);
     labels.push("property tests");
   }
 }
@@ -157,11 +195,11 @@ function appendOptInOracles(
  */
 export function buildCoreFix(): string {
   const lintFix =
-    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --fix .`.replace(
+    `${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(STRICT_CONFIG)} --fix .`.replace(
       /\s+/g,
       " "
     );
-  const format = `"${PRETTIER_BIN}" --write .`;
+  const format = `${shellQuote(PRETTIER_BIN)} --write .`;
 
   return `${lintFix} ; ${format}`;
 }
@@ -188,7 +226,10 @@ function lintPart(
   const envPrefix = packEnvPrefix(packs, ruleOverrides, conventions);
 
   return {
-    command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location "${eslintCachePath(envPrefix)}" --format json .`,
+    // --cache-strategy content: the default (mtime+size) can serve a stale CLEAN
+    // entry when the gate runs right after `--fix` + prettier rewrite files —
+    // same-size same-mtime-tick rewrites are exactly this pipeline's hot path.
+    command: `${envPrefix}bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(STRICT_CONFIG)} --cache --cache-strategy content --cache-location ${shellQuote(eslintCachePath(envPrefix))} --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }
@@ -202,7 +243,7 @@ async function typeAwareLintPart(cwd: string): Promise<IGateSpec | null> {
   }
 
   return {
-    command: `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" --format json .`,
-    label: "type-aware async (tsforge)",
+    command: `bun ${shellQuote(ESLINT_BIN)} --no-config-lookup -c ${shellQuote(TYPE_AWARE_CONFIG)} --format json .`,
+    label: TYPE_AWARE_STAGE_LABEL,
   };
 }

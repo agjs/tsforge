@@ -39,6 +39,75 @@ export interface IShellRun {
 
 /** Conventional exit code for a process terminated by SIGKILL (128 + 9). */
 const SIGKILL_EXIT = 137;
+
+/** Captured-output bounds. Before these, a runaway gate command (a `yes`-style
+ *  loop, a 100MB tsc/vitest log) was buffered WHOLE in memory — twice, since
+ *  runAccept concatenates stdout+stderr — and every downstream cap only applied
+ *  after the memory was already spent. Tail-biased on purpose: eslint's
+ *  `--format json` emits its entire result as ONE huge line at the END of the
+ *  gate output, and the tsc/test summaries also trail — the tail is what the
+ *  parsers must see intact; the head keeps the banner identifying which stage
+ *  ran. `onChunk` consumers still receive every chunk uncapped (live view). */
+const CAPTURE_HEAD_CAP = 512 * 1024;
+const CAPTURE_TAIL_CAP = 4 * 1024 * 1024;
+
+export interface IBoundedCapture {
+  append(text: string): void;
+  /** The captured text — byte-identical to the input when under the caps,
+   *  head + elision notice + tail otherwise. Idempotent. */
+  text(): string;
+}
+
+/** A head+tail accumulator with an elision notice. Tail trimming is amortized
+ *  (trim at 2× the cap back down to the cap) so appending N chars is O(N)
+ *  total, not O(N²). The notice reuses the capWithNotice vocabulary
+ *  ("output truncated") so downstream message-cap logic recognizes the family. */
+export function createBoundedCapture(
+  headCap = CAPTURE_HEAD_CAP,
+  tailCap = CAPTURE_TAIL_CAP
+): IBoundedCapture {
+  let head = "";
+  let tail = "";
+  let elided = 0;
+
+  const trimTail = (limit: number): void => {
+    if (tail.length > limit) {
+      elided += tail.length - tailCap;
+      tail = tail.slice(-tailCap);
+    }
+  };
+
+  return {
+    append(text: string): void {
+      let rest = text;
+
+      if (head.length < headCap) {
+        const take = Math.min(headCap - head.length, rest.length);
+
+        head += rest.slice(0, take);
+        rest = rest.slice(take);
+      }
+
+      if (rest.length > 0) {
+        tail += rest;
+        trimTail(2 * tailCap);
+      }
+    },
+    text(): string {
+      trimTail(tailCap);
+
+      if (elided === 0) {
+        return head + tail;
+      }
+
+      return (
+        `${head}\n… (output truncated: ${String(elided)} characters elided — ` +
+        `the full stream was forwarded live) …\n${tail}`
+      );
+    },
+  };
+}
+
 /** After a kill is signalled, how long to wait for the process to actually be
  *  reaped before giving up — covers a child that escaped its group (e.g. called
  *  `setsid`) and so survives the group SIGKILL. Without this bound, `proc.exited`
@@ -178,7 +247,10 @@ export async function runArgvCommand(
   }
 
   const decoder = new TextDecoder();
-  const buf: { out: string; err: string } = { out: "", err: "" };
+  const buf: { out: IBoundedCapture; err: IBoundedCapture } = {
+    out: createBoundedCapture(),
+    err: createBoundedCapture(),
+  };
 
   const pump = async (
     stream: ReadableStream<Uint8Array>,
@@ -187,7 +259,7 @@ export async function runArgvCommand(
     for await (const bytes of stream) {
       const text = decoder.decode(bytes, { stream: true });
 
-      buf[key] += text;
+      buf[key].append(text);
 
       if (onChunk !== undefined) {
         onChunk(text);
@@ -228,7 +300,12 @@ export async function runArgvCommand(
       clearTimeout(flush.timer);
     }
 
-    return { stdout: buf.out, stderr: buf.err, exitCode, timedOut };
+    return {
+      stdout: buf.out.text(),
+      stderr: buf.err.text(),
+      exitCode,
+      timedOut,
+    };
   } finally {
     if (timer !== null) {
       clearTimeout(timer);

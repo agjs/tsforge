@@ -7,6 +7,8 @@ import {
   readFileSync,
   existsSync,
   realpathSync,
+  statSync,
+  utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +16,7 @@ import { buildGate } from "../src/gate";
 // Use the gate's OWN resolved compiler (TS7 via resolveTs7Tsc), not a hardcoded
 // .bin/tsc — so this incremental proof runs the exact binary the gate embeds.
 import { TSC_BIN } from "../src/gate/tool-paths";
+import { runShellCommand } from "../src/lib/fs";
 
 const TSCONFIG = JSON.stringify({
   compilerOptions: {
@@ -67,7 +70,7 @@ test("buildGate caches the syntactic eslint pass, dir made in-process + git-igno
     // KEYED by the active ruleset (eslint-gate-<hash>.cache) so a mid-session pack change
     // invalidates it instead of reusing entries linted under a weaker ruleset.
     expect(gate.command).toMatch(
-      /--cache --cache-location "\.tsforge\/eslint-gate-[a-z0-9]+\.cache"/
+      /--cache --cache-strategy content --cache-location '\.tsforge\/eslint-gate-[a-z0-9]+\.cache'/
     );
     // …the type-aware pass must NOT (editing one file changes another's errors).
     expect(gate.command).not.toContain("type-aware");
@@ -158,7 +161,7 @@ test("buildGate keys the eslint cache path by the active ruleset", async () => {
   const dir = project();
 
   const cacheOf = (command: string): string => {
-    const m = /--cache-location "([^"]+)"/.exec(command);
+    const m = /--cache-location '([^']+)'/.exec(command);
 
     return m?.[1] ?? "";
   };
@@ -222,3 +225,46 @@ test("buildGate honors an explicit testCommand override", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The stale-clean hole: eslint's default cache strategy is mtime+size, and the
+// gate runs immediately after `--fix` + prettier REWRITE files — a same-size
+// rewrite in the same mtime tick serves the previous (clean) result for a file
+// that now has an error. The gate must key entries on CONTENT.
+test("warm eslint cache: a same-size same-mtime re-introduced error still reds (content strategy)", async () => {
+  const dir = project();
+
+  try {
+    const gate = await buildGate(dir, []);
+    const lint = (gate.parts ?? []).find((p) => p.includes("--cache")) ?? "";
+
+    expect(lint).toContain("--cache-strategy content");
+
+    const file = join(dir, "src", "m.ts");
+    // Two SAME-SIZE variants (34 bytes each): `let` never reassigned is a
+    // prefer-const error under the strict config; the const spelling is clean.
+    const bad = "let nn = 1;\n\nexport const m = nn;\n";
+    const good = "const n = 1;\n\nexport const m = n;\n";
+
+    expect(bad.length).toBe(good.length);
+
+    // Cold run on the CLEAN variant → green, cache warmed with a clean entry.
+    writeFileSync(file, good);
+
+    const cold = await runShellCommand(dir, lint, { timeoutMs: 120_000 });
+
+    expect(cold.exitCode).toBe(0);
+
+    // Re-introduce the same-size error and pin mtime+size to the cached entry's.
+    const { mtime, atime } = statSync(file);
+
+    writeFileSync(file, bad);
+    utimesSync(file, atime, mtime);
+
+    const warm = await runShellCommand(dir, lint, { timeoutMs: 120_000 });
+
+    // metadata strategy would serve the stale CLEAN entry here (false green).
+    expect(warm.exitCode).not.toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);

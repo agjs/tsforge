@@ -6,10 +6,16 @@ import type { ICliArgs } from "./args";
 import type { ISessionRecord } from "../session-store";
 import {
   buildGate,
-  discoverTestCommand,
+  discoverTestGate,
   makeFileLinter,
   type FileLinter,
 } from "../gate";
+import {
+  EMPTY_STAGE_FLOOR,
+  observeStageFloor,
+  raiseStageFloor,
+  stageFloorViolation,
+} from "../gate/stage-floor";
 import type { IStackProfile } from "../stack-detection";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { ITsforgeProjectConfig } from "../config/tsforge-config";
@@ -23,6 +29,11 @@ export type AutoGateResolver = () => Promise<{
   command: string;
   stackProfile: IStackProfile;
   lintFile?: FileLinter;
+  /** Set when this re-resolution would DOWNGRADE the gate below the session's
+   *  stage floor (a stage the gate once had is gone — e.g. tsconfig.json was
+   *  deleted mid-session). The runner turns this into a red gate result and
+   *  must NOT adopt the weaker command. */
+  downgrade?: string;
 }>;
 
 export interface IResolvedGate {
@@ -56,6 +67,10 @@ interface IGatePolicy {
    *  tests to stay meaningful — a launcher like `bun run test` still reads the live
    *  `scripts.test`; that limitation is inherent and unchanged.) */
   testCommand: string | null;
+  /** User-visible notice when tests exist but are deliberately left out of the
+   *  gate (watch-only `test` script) — appended to the gate label so "green"
+   *  never silently means typecheck+lint only. */
+  testNotice: string | null;
 }
 
 /**
@@ -133,7 +148,12 @@ async function captureGatePolicy(
     conventions: resolveConventions(config.conventions),
     baselinePacks: resolveActivePacks(stackProfile.packs, config),
     // Discover the test command ONCE and freeze it — see IGatePolicy.testCommand.
-    testCommand: strictFloorOnly ? null : await discoverTestCommand(dir),
+    ...(strictFloorOnly
+      ? { testCommand: null, testNotice: null }
+      : await discoverTestGate(dir).then((t) => ({
+          testCommand: t.command,
+          testNotice: t.notice,
+        }))),
   };
 }
 
@@ -165,7 +185,14 @@ async function eslintFor(
     }
   );
 
-  return { command: auto.command, label: auto.label };
+  // Surface a tests-skipped notice in the frozen label — the silent drop was
+  // invisible exactly where GREEN is announced.
+  const label =
+    policy.testNotice === null
+      ? auto.label
+      : `${auto.label} + ${policy.testNotice}`;
+
+  return { command: auto.command, label };
 }
 
 /** Build the per-write lint moat for a pack-set under a frozen policy. */
@@ -193,6 +220,10 @@ function lintFileFor(
  *  noop package script. */
 function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
   const activePacks = new Set<string>(policy.baselinePacks);
+  // The STAGE floor, monotonic like the packs set: a stage the session's gate
+  // has ever had (tsc, type-aware) can't silently vanish from a re-resolution
+  // — see gate/stage-floor.ts.
+  let floor = EMPTY_STAGE_FLOOR;
 
   return async () => {
     const { detectStack } = await import("../stack-detection");
@@ -206,6 +237,18 @@ function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
 
     const packs = Array.from(activePacks).sort();
     const auto = await eslintFor(policy, packs);
+    const observed = observeStageFloor(auto.label);
+    const downgrade = stageFloorViolation(floor, observed);
+
+    if (downgrade !== null) {
+      return {
+        command: auto.command,
+        stackProfile: { ...stack, packs },
+        downgrade,
+      };
+    }
+
+    floor = raiseStageFloor(floor, observed);
 
     return {
       command: auto.command,

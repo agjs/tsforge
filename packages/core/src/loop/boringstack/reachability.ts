@@ -21,6 +21,11 @@ export interface IReachabilityInputs {
 export interface IReachabilityResult {
   readonly ok: boolean;
   readonly problems: readonly string[];
+  /** True when at least one static input existed (router / API routes / locales).
+   *  All-absent means this isn't a boringstack tree at all — every check was
+   *  null-skipped, so `ok` is vacuous and callers must not treat it as evidence
+   *  (e.g. the live-spec probe keys off this to avoid probing a void). */
+  readonly inputsPresent: boolean;
 }
 
 /**
@@ -74,7 +79,12 @@ export function checkFeatureReachable(
     }
   }
 
-  return { ok: problems.length === 0, problems };
+  const inputsPresent =
+    inputs.uiRoutes !== null ||
+    inputs.apiRoutes !== null ||
+    inputs.localeJsons.length > 0;
+
+  return { ok: problems.length === 0, problems, inputsPresent };
 }
 
 /**

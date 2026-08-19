@@ -120,6 +120,15 @@ function commandFromScripts(
   return { command: null, unrunnable: true };
 }
 
+/** The gate's test discovery result: the command to run (or null), plus a
+ *  user-visible NOTICE when tests exist but are deliberately left out —
+ *  before this, a watch-only `test` script silently dropped the whole suite
+ *  from the gate and "green" quietly meant typecheck+lint only. */
+export interface ITestGate {
+  readonly command: string | null;
+  readonly notice: string | null;
+}
+
 /**
  * The project's test command for the gate, or null when there's nothing to run.
  * Prefers `test:ci` when present (exit-once CI script). Else uses `test`, but
@@ -127,11 +136,11 @@ function commandFromScripts(
  * hang. Falls back to `bun test` when test files exist without a script — but
  * NOT when a test script exists that we refuse to run (see `unrunnable`).
  */
-export async function discoverTestCommand(cwd: string): Promise<string | null> {
+export async function discoverTestGate(cwd: string): Promise<ITestGate> {
   // A multi-package workspace root is not a test project — nested suites belong
   // to child packages (gated there when those packages are edited).
   if (isWorkspaceContainer(cwd)) {
-    return null;
+    return { command: null, notice: null };
   }
 
   const pkgFile = Bun.file(join(cwd, "package.json"));
@@ -145,16 +154,15 @@ export async function discoverTestCommand(cwd: string): Promise<string | null> {
         const fromScripts = commandFromScripts(scripts);
 
         if (fromScripts.command !== null) {
-          return fromScripts.command;
+          return { command: fromScripts.command, notice: null };
         }
 
         if (fromScripts.unrunnable) {
-          trace(
-            "discoverTestCommand",
-            `watch-only test script in ${cwd} — tests left out of the gate (add a one-shot "test:ci" script to include them)`
-          );
-
-          return null;
+          return {
+            command: null,
+            notice:
+              'tests SKIPPED: watch-only "test" script — add a one-shot "test:ci" script to include tests in the gate',
+          };
         }
       }
     } catch (err) {
@@ -163,7 +171,15 @@ export async function discoverTestCommand(cwd: string): Promise<string | null> {
     }
   }
 
-  return (await hasTestFiles(cwd)) ? "bun test" : null;
+  return {
+    command: (await hasTestFiles(cwd)) ? "bun test" : null,
+    notice: null,
+  };
+}
+
+/** Back-compat wrapper over `discoverTestGate` — command only. */
+export async function discoverTestCommand(cwd: string): Promise<string | null> {
+  return (await discoverTestGate(cwd)).command;
 }
 
 /** True when the project has at least one *.test.* / *.spec.* file (outside

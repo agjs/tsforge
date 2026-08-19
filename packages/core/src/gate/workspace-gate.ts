@@ -45,6 +45,11 @@ export interface IWorkspaceGateOpts extends IAcceptOptions {
   readonly policies?: Map<string, IPackageGatePolicy>;
   /** CLI overlays applied when a package policy is first captured. */
   readonly capture?: IPackageGateCaptureOpts;
+  /** Package roots (absolute) detected dirty OUTSIDE the tool path (git-status
+   *  baseline diff — shell writes, scripts, git apply). Unioned with the
+   *  touched-derived set: `touched` only sees edit/create TOOL events, so
+   *  without this a `sed -i` change green-skipped the whole gate. */
+  readonly extraPackageRoots?: readonly string[];
 }
 
 /**
@@ -68,7 +73,14 @@ export async function runWorkspaceContainerGate(
   }
 
   const ungated = ungatedCodeFailure(sessionCwd, touched);
-  const packages = activePackageRoots(sessionCwd, touched);
+  const touchedPackages = activePackageRoots(sessionCwd, touched);
+  // Union git-detected dirty roots with the tool-touched set — ALWAYS, not only
+  // when touched is empty: a session that tool-edited app/ but shell-edited
+  // api/ must gate both.
+  const detectedOnly = (opts.extraPackageRoots ?? []).filter(
+    (pkg) => !touchedPackages.includes(pkg)
+  );
+  const packages = [...touchedPackages, ...detectedOnly].sort();
   const policies = opts.policies ?? new Map<string, IPackageGatePolicy>();
 
   if (packages.length === 0) {
@@ -92,7 +104,8 @@ export async function runWorkspaceContainerGate(
     parse,
     opts,
     policies,
-    opts.capture ?? {}
+    opts.capture ?? {},
+    new Set(detectedOnly)
   );
   const sections =
     ungated === null ? fan.outputs : [...fan.outputs, ungated.output];
@@ -125,7 +138,8 @@ async function gateEachPackage(
   parse: ErrorParser | undefined,
   opts: IWorkspaceGateOpts,
   policies: Map<string, IPackageGatePolicy>,
-  capture: IPackageGateCaptureOpts
+  capture: IPackageGateCaptureOpts,
+  detectedOnly: ReadonlySet<string> = new Set()
 ): Promise<IFanOut> {
   const outputs: string[] = [];
   const errors: ErrorSet = [];
@@ -154,8 +168,11 @@ async function gateEachPackage(
     opts.onChunk?.(`\ngate → ${label}\n`);
 
     const r = await validate(pkgTask, pkg, parse, opts);
+    const via = detectedOnly.has(pkg)
+      ? " (included via git-detected changes — files were written outside the edit tools)"
+      : "";
 
-    outputs.push(`── ${label} ──\n${r.output}`.trimEnd());
+    outputs.push(`── ${label} ──${via}\n${r.output}`.trimEnd());
 
     if (!r.passed) {
       passed = false;
