@@ -1,5 +1,5 @@
 import { STYLE, paint } from "./style";
-import { displayWidth, graphemes } from "./width";
+import { clusterWidth, displayWidth, graphemes } from "./width";
 import { stripSgr } from "./frame/ansi-plain";
 
 /** A stateful, streaming rail-wrapper for the agent card body. `feed()` is called
@@ -56,7 +56,7 @@ function takeHardBreak(
       continue;
     }
 
-    const w = displayWidth(cluster);
+    const w = clusterWidth(cluster);
 
     if (rest.length === 0 && headCol + w <= wrapAt) {
       head += cluster;
@@ -69,7 +69,7 @@ function takeHardBreak(
 
   if (head.length === 0 && word.length > 0) {
     const first = graphemes(word)[0] ?? "";
-    const w = displayWidth(first);
+    const w = clusterWidth(first);
 
     return {
       head: first,
@@ -287,7 +287,7 @@ export function makeAgentRail(
         }
 
         word += cluster;
-        wordCol += displayWidth(cluster);
+        wordCol += clusterWidth(cluster);
 
         if (wordCol > wrapAt) {
           out = flushWord(out, wrapAt);

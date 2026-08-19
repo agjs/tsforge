@@ -541,10 +541,9 @@ export class PaneScreen {
     }
 
     const layout = computeLayout(this.layoutOpts());
-    const nextTop =
-      layout.top.rows > 0
-        ? this.topbarLines(layout.top.cols, layout).join("\n")
-        : "";
+    const topLines =
+      layout.top.rows > 0 ? this.topbarLines(layout.top.cols, layout) : [];
+    const nextTop = topLines.join("\n");
     const nextShape = this.topStripShape(info);
 
     if (
@@ -565,10 +564,91 @@ export class PaneScreen {
       return;
     }
 
+    // Tick-only change (spinner glyph / elapsed clock): patch the top-strip
+    // rows alone. The old path composed the ENTIRE screen 8×/second, forever —
+    // the single biggest always-on paint cost.
+    if (
+      this.prevLines !== null &&
+      !this.geometryDirty &&
+      this.flashHeaderPaints === 0
+    ) {
+      this.paintTopOnly(layout, topLines);
+
+      return;
+    }
+
     this.paint();
   }
 
+  /** Patch just the top-strip rows (mirrors paintInputOnly). */
+  private paintTopOnly(
+    layout: ReturnType<typeof computeLayout>,
+    topLines: string[]
+  ): void {
+    const screen = this.prevLines;
+
+    if (screen === null) {
+      this.paint();
+
+      return;
+    }
+
+    const insets = outerInsets(this.rows, this.cols);
+    const splitCol = layout.panel !== null ? layout.main.cols : undefined;
+    let dirty = "";
+
+    for (let i = 0; i < layout.top.rows; i += 1) {
+      const content = fitAnsiLine(topLines[i] ?? "", layout.top.cols);
+      const stamped = withOpaqueBg(
+        frameContentRow(content, this.cols, { splitCol }),
+        CONSOLE.bg
+      );
+      const row = insets.originRow + layout.top.row + i;
+
+      if (screen[row] !== stamped) {
+        screen[row] = stamped;
+        dirty +=
+          cup(row + 1, 1) +
+          lastRowSafe(stamped, row, this.rows, this.cols) +
+          EL_EOL;
+      }
+    }
+
+    this.lastTopLine = topLines.join("\n");
+
+    if (dirty.length === 0) {
+      return;
+    }
+
+    // Re-home the caret onto the input row (same contract as the other
+    // partial painters — a dirty write strands the hardware cursor).
+    const band = this.paintInputBand(layout);
+    const cursorRow = insets.originRow + layout.input.row + band.cursor.row + 1;
+    const cursorCol = insets.originCol + layout.input.col + band.cursor.col + 1;
+
+    this.cursor.reset();
+    const frame =
+      BEGIN_SYNC + dirty + this.cursor.move(cursorRow, cursorCol) + END_SYNC;
+
+    if (PERF_ENABLED) {
+      countBytes(frame.length);
+      countPaint("topOnly", 0);
+    }
+
+    this.out.write(frame);
+  }
+
   setOverlay(lines: readonly string[]): void {
+    // Dedupe: palette keystrokes that don't change the visible menu (same
+    // filter results) must not force a full compose per keypress.
+    if (
+      lines.length === this.overlayLines.length &&
+      lines.length > 0 &&
+      lines.every((l, i) => l === this.overlayLines[i])
+    ) {
+      return;
+    }
+
     this.overlayLines = lines;
 
     if (this.entered) {
@@ -899,10 +979,16 @@ export class PaneScreen {
       return "dump";
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- object-literal getter below rebinds `this`
+    const self = this;
     const deps = {
       focus: this.focus,
       scrollback: this.scrollback,
-      panelLen: this.panelSourceLen(),
+      // Lazy: computing the panel body (stripSgr + copies) per keystroke paid
+      // for a value most keys never read.
+      get panelLen(): number {
+        return self.panelSourceLen();
+      },
       onWheel: (delta: number, col: number, _row: number): void => {
         this.queueWheel(delta, col);
       },

@@ -1,9 +1,18 @@
+/** Hoisted: this runs on the innermost per-row paint loop (~200×/frame), and
+ *  compiling a fresh RegExp per call was a measurable share of frame cost.
+ *  Global-flag `lastIndex` is reset by String.replace, so sharing is safe. */
+const SGR_CODES = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "gu");
+
 /** Strip SGR color codes so cell-grid paint never treats escapes as glyphs. */
 export function stripSgr(text: string): string {
-  const esc = String.fromCharCode(27);
-
-  return text.replace(new RegExp(`${esc}\\[[0-9;]*m`, "gu"), "");
+  return text.replace(SGR_CODES, "");
 }
+
+const MOUSE_REPORT_G = new RegExp(
+  `${String.fromCharCode(27)}\\[<\\d+;\\d+;\\d+[Mm]`,
+  "gu"
+);
+const ORPHAN_MOUSE_REPORT_G = /\[<\d+;\d+;\d+[Mm]/gu;
 
 /**
  * Drop SGR mouse-report sequences (`CSI < btn ; x ; y M/m`). Used when mouse
@@ -12,11 +21,7 @@ export function stripSgr(text: string): string {
  * leading ESC was already consumed by a prior chunk.
  */
 export function stripMouseReports(text: string): string {
-  const esc = String.fromCharCode(27);
-
-  return text
-    .replace(new RegExp(`${esc}\\[<\\d+;\\d+;\\d+[Mm]`, "gu"), "")
-    .replace(/\[<\d+;\d+;\d+[Mm]/gu, "");
+  return text.replace(MOUSE_REPORT_G, "").replace(ORPHAN_MOUSE_REPORT_G, "");
 }
 
 /** One SGR mouse report (`CSI < btn ; col ; row M|m`), 1-based col/row. */
@@ -27,10 +32,14 @@ export interface IMouseReport {
   readonly release: boolean;
 }
 
+const ONE_MOUSE_REPORT = new RegExp(
+  `^${String.fromCharCode(27)}\\[<(\\d+);(\\d+);(\\d+)([Mm])$`,
+  "u"
+);
+
 /** Parse a single SGR mouse report; null if `seq` is not exactly one. */
 export function parseMouseReport(seq: string): IMouseReport | null {
-  const esc = String.fromCharCode(27);
-  const m = new RegExp(`^${esc}\\[<(\\d+);(\\d+);(\\d+)([Mm])$`, "u").exec(seq);
+  const m = ONE_MOUSE_REPORT.exec(seq);
 
   if (m === null) {
     return null;
@@ -44,13 +53,16 @@ export function parseMouseReport(seq: string): IMouseReport | null {
   };
 }
 
+const ALL_MOUSE_REPORTS = new RegExp(
+  `${String.fromCharCode(27)}\\[<(\\d+);(\\d+);(\\d+)([Mm])`,
+  "gu"
+);
+
 /** Extract every SGR mouse report from a chunk (order preserved). */
 export function extractMouseReports(text: string): IMouseReport[] {
-  const esc = String.fromCharCode(27);
-  const re = new RegExp(`${esc}\\[<(\\d+);(\\d+);(\\d+)([Mm])`, "gu");
   const out: IMouseReport[] = [];
 
-  for (const m of text.matchAll(re)) {
+  for (const m of text.matchAll(ALL_MOUSE_REPORTS)) {
     out.push({
       button: Number(m[1]),
       col: Number(m[2]),
