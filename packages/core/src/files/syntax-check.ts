@@ -4,6 +4,9 @@ import { isRecord, isArray } from "../lib/guards";
 /** TS/JS source files a single-file parse is meaningful for. */
 const TS_LIKE = /\.(?:m|c)?[tj]sx?$/u;
 
+/** JSON files whose structural validity a cheap `JSON.parse` can check. */
+const JSON_LIKE = /\.jsonc?$/u;
+
 function scriptKind(file: string): ts.ScriptKind {
   if (file.endsWith(".tsx")) {
     return ts.ScriptKind.TSX;
@@ -28,6 +31,26 @@ function scriptKind(file: string): ts.ScriptKind {
  * mis-addressed line edit introduces. Non-TS/JS files (.md, .json, …) → 0.
  */
 export function syntaxErrorCount(file: string, text: string): number {
+  // JSON validity is the analogue of a parse error for config files: without
+  // this, a mis-addressed hashline edit that broke package.json committed
+  // unconditionally (before=0, after=0 → never an "increase"). 1 when the file
+  // is now unparseable JSON, else 0. A .jsonc with comments already reads as
+  // invalid — so before=1/after=1 stays net-zero (no false revert on a genuine
+  // edit); only a valid→invalid transition (0→1) trips the guard.
+  if (JSON_LIKE.test(file)) {
+    if (text.trim().length === 0) {
+      return 0;
+    }
+
+    try {
+      JSON.parse(text);
+
+      return 0;
+    } catch {
+      return 1;
+    }
+  }
+
   if (!TS_LIKE.test(file)) {
     return 0;
   }

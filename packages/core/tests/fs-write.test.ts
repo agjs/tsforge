@@ -2,7 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeFilesOrRollback } from "../src/lib/fs";
+import { writeFilesOrRollback, writeFileAtomic } from "../src/lib/fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 test("writeFilesOrRollback writes every file on success (new + overwrite)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-batch-"));
@@ -62,6 +63,68 @@ test("a mid-batch failure rolls back: overwritten file RESTORED, new file remove
     expect(await Bun.file(join(dir, "b/y.ts")).exists()).toBe(false);
   } finally {
     await chmod(join(dir, "b"), 0o755).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── D2: writeFileAtomic — crash-atomic write via temp+rename ─────────────────
+test("writeFileAtomic replaces a file without a torn intermediate + leaves no temp", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-atomic-"));
+
+  try {
+    const f = join(dir, "x.ts");
+
+    await writeFileAtomic(f, "const a = 1;\n");
+    expect(readFileSync(f, "utf8")).toBe("const a = 1;\n");
+
+    await writeFileAtomic(f, "const a = 2;\n");
+    expect(readFileSync(f, "utf8")).toBe("const a = 2;\n");
+
+    // No leftover .tmp sibling from either write.
+    expect(readdirSync(dir).some((n) => n.endsWith(".tmp"))).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeFileAtomic creates missing parent dirs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-atomic-nested-"));
+
+  try {
+    await writeFileAtomic(join(dir, "a/b/c.ts"), "nested");
+    expect(readFileSync(join(dir, "a/b/c.ts"), "utf8")).toBe("nested");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeFileAtomic under concurrent readers always yields a WHOLE version", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-atomic-race-"));
+
+  try {
+    const f = join(dir, "big.ts");
+    const vOld = "OLD".repeat(50_000) + "\n";
+    const vNew = "NEW".repeat(50_000) + "\n";
+
+    await writeFileAtomic(f, vOld);
+
+    // Hammer reads while rewriting; every read must be one whole version, never
+    // a truncated/half-written blend (the torn-write the old truncate-in-place
+    // Bun.write could expose).
+    const reads: string[] = [];
+    const reader = (async () => {
+      for (let i = 0; i < 200; i += 1) {
+        reads.push(readFileSync(f, "utf8"));
+        await Bun.sleep(0);
+      }
+    })();
+
+    await writeFileAtomic(f, vNew);
+    await reader;
+
+    expect(reads.every((r) => r === vOld || r === vNew)).toBe(true);
+    expect(readFileSync(f, "utf8")).toBe(vNew);
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

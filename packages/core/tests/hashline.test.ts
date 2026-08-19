@@ -24,7 +24,7 @@ describe("hashline-format", () => {
     const h2 = computeFileHash(text);
 
     expect(h1).toBe(h2);
-    expect(h1).toMatch(/^[0-9A-F]{4}$/);
+    expect(h1).toMatch(/^[0-9A-F]{8}$/); // 32-bit (S2)
   });
 
   test("computeFileHash: different content produces different hash", () => {
@@ -168,7 +168,7 @@ describe("SessionSnapshotStore", () => {
     const store = new SessionSnapshotStore();
     const hash = store.record("src/foo.ts", "const x = 1;");
 
-    expect(hash).toMatch(/^[0-9A-F]{4}$/);
+    expect(hash).toMatch(/^[0-9A-F]{8}$/);
 
     const snapshot = store.head("src/foo.ts");
 
@@ -539,9 +539,13 @@ describe("syntaxErrorCount", () => {
     expect(
       syntaxErrorCount("a.tsx", "export const C = () => <div>hi</div>;\n")
     ).toBe(0);
-    // Non-TS/JS files are never syntax-checked.
+    // Non-TS/JS/JSON files are never syntax-checked.
     expect(syntaxErrorCount("a.md", "# not ( valid ts")).toBe(0);
-    expect(syntaxErrorCount("a.json", "{ broken")).toBe(0);
+    expect(syntaxErrorCount("a.css", ".x { color: red")).toBe(0);
+    // JSON validity IS checked (S3): valid → 0, broken → 1.
+    expect(syntaxErrorCount("a.json", '{"a": 1}')).toBe(0);
+    expect(syntaxErrorCount("a.json", "{ broken")).toBe(1);
+    expect(syntaxErrorCount("a.json", "  ")).toBe(0); // empty/blank → not an error
   });
 });
 
@@ -619,6 +623,217 @@ describe("edit_lines syntax-regression guard", () => {
       expect(out).toContain("REJECTED");
       expect(out).toContain("wipe");
       expect(await Bun.file(join(dir, file)).text()).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── D1: a CRLF file keeps CRLF after an edit_lines edit (issue #24, hashline) ──
+describe("hashline line-ending preservation (D1)", () => {
+  test("editing a CRLF file does not introduce mixed \\n endings", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-crlf-"));
+
+    try {
+      const filePath = "crlf.ts";
+      const content = "const a = 1;\r\nconst b = 2;\r\nconst c = 3;\r\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 2..2:\n+const b = 22;`
+      );
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result.ok).toBe(true);
+
+      const after = await Bun.file(join(dir, filePath)).text();
+
+      // Byte-level: every line ending stays CRLF, none downgraded to bare \n.
+      expect(after).toBe("const a = 1;\r\nconst b = 22;\r\nconst c = 3;\r\n");
+      expect(after.match(/(?<!\r)\n/g)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an LF file stays LF (no spurious \\r introduced)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-lf-"));
+
+    try {
+      const filePath = "lf.ts";
+      const content = "const a = 1;\nconst b = 2;\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 1..1:\n+const a = 11;`
+      );
+
+      await applyHashlineEdit(store, dir, filePath, hash, parsed.ops);
+
+      const after = await Bun.file(join(dir, filePath)).text();
+
+      expect(after).toBe("const a = 11;\nconst b = 2;\n");
+      expect(after).not.toContain("\r");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── S1: overlapping edit_lines ops are rejected, not silently mis-applied ──────
+describe("hashline overlap guard (S1)", () => {
+  test("two ops with overlapping line ranges are refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-overlap-"));
+
+    try {
+      const filePath = "ov.ts";
+      const content = Array.from(
+        { length: 12 },
+        (_, i) => `line ${String(i + 1)}`
+      ).join("\n");
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      // replace 5..10 AND replace 8..12 — overlapping.
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 5..10:\n+A\nreplace 8..12:\n+B`
+      );
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.reason ?? "").toContain("overlapping");
+      // The file was NOT partially mutated.
+      expect(await Bun.file(join(dir, filePath)).text()).toBe(content);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("adjacent (non-overlapping) ops still apply", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-adj-"));
+
+    try {
+      const filePath = "adj.ts";
+      const content = "l1\nl2\nl3\nl4\nl5\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+      const parsed = parseHashlineEdit(
+        `¶${filePath}#${hash}\nreplace 1..1:\n+L1\nreplace 4..4:\n+L4`
+      );
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result.ok).toBe(true);
+      expect(await Bun.file(join(dir, filePath)).text()).toBe(
+        "L1\nl2\nl3\nL4\nl5\n"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── S2: the staleness hash is 32-bit and accepts legacy 4-hex ────────────────
+describe("computeFileHash width (S2)", () => {
+  test("mints an 8-hex (32-bit) tag; legacy 4-hex still validates", () => {
+    const h = computeFileHash("const x = 1;\nconst y = 2;\n");
+
+    expect(h).toMatch(/^[0-9A-F]{8}$/);
+    expect(isValidHash(h)).toBe(true);
+    expect(isValidHash("AB12")).toBe(true); // legacy 4-hex header parses
+    expect(isValidHash("XYZ1")).toBe(false);
+    expect(isValidHash("12")).toBe(false);
+  });
+
+  test("distinct near-identical files get distinct tags (no 16-bit crowding)", () => {
+    const seen = new Set<string>();
+
+    for (let i = 0; i < 500; i += 1) {
+      seen.add(computeFileHash(`export const n = ${String(i)};\n`));
+    }
+
+    // 500 distinct inputs → 500 distinct 32-bit tags (a 16-bit space would
+    // start colliding well before this).
+    expect(seen.size).toBe(500);
+  });
+});
+
+// ── S3: a mis-addressed edit that breaks JSON validity is reverted ───────────
+describe("edit_lines JSON-validity guard (S3)", () => {
+  test("reverts an edit that makes package.json invalid JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-json-"));
+
+    try {
+      const file = "package.json";
+      const original = '{\n  "name": "x",\n  "version": "1.0.0"\n}\n';
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      // Replace the version line with a dangling value → invalid JSON. Before
+      // S3 this committed unguarded (before=0, after=0 for a .json file).
+      const input = `¶${file}#${hash}\nreplace 3..3:\n+  "version":`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("REVERTED");
+      expect(await Bun.file(join(dir, file)).text()).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("commits a clean edit that keeps package.json valid JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-json-ok-"));
+
+    try {
+      const file = "package.json";
+      const original = '{\n  "name": "x",\n  "version": "1.0.0"\n}\n';
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      const input = `¶${file}#${hash}\nreplace 3..3:\n+  "version": "2.0.0"`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("edited");
+      expect(await Bun.file(join(dir, file)).text()).toContain('"2.0.0"');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
