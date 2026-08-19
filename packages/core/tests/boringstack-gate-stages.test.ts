@@ -867,40 +867,119 @@ describe("reachabilityStage", () => {
     throw new Error("no server");
   };
 
+  /** A minimal clone with an API route table that mounts `<camel>Routes` — enough
+   *  static input for the stage to treat the tree as a real boringstack clone
+   *  (inputsPresent) with a CLEAN static check, so the live-spec probe fires. */
+  async function cloneWithMountedRoutes(name: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-reach-"));
+    const routesDir = join(dir, "apps/api/src/config/routes");
+
+    await mkdir(routesDir, { recursive: true });
+    await writeFile(
+      join(routesDir, "routes.ts"),
+      `import { ${name}Routes } from "../../api/${name}/${name}.routes";\n` +
+        `export const routes = { ${name}: ${name}Routes };\n`
+    );
+
+    return dir;
+  }
+
   test("when feature directory doesn't exist → skips gracefully (no reachability errors)", async () => {
-    const stage = reachabilityStage("/nonexistent", "note", specDown);
+    let probes = 0;
+    const spy: SpecFetcher = async () => {
+      probes += 1;
+      throw new Error("no server");
+    };
+    const stage = reachabilityStage("/nonexistent", "note", spy);
     const r = await stage.run("/nonexistent");
 
     // Without the router/API files present, the check can't prove it's unreachable, so it passes
     expect(r.passed).toBe(true);
+    // …and with NO static inputs at all this isn't a boringstack tree, so the
+    // live-spec probe must not fire (it was a network dependency in unit tests).
+    expect(probes).toBe(0);
+  });
+
+  test("static problems present → red WITHOUT probing the live spec (already red; the probe only adds a stall)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-reach-red-"));
+    const routesDir = join(dir, "apps/api/src/config/routes");
+
+    await mkdir(routesDir, { recursive: true });
+    // A PRESENT route table that omits the feature = a static defect.
+    await writeFile(
+      join(routesDir, "routes.ts"),
+      `export const routes = { other: otherRoutes };\n`
+    );
+
+    let probes = 0;
+    const spy: SpecFetcher = async () => {
+      probes += 1;
+      throw new Error("no server");
+    };
+
+    try {
+      const stage = reachabilityStage(dir, "note", spy);
+      const r = await stage.run(dir);
+
+      expect(r.passed).toBe(false);
+      expect(r.errors[0]?.rule).toBe("reachability");
+      expect(probes).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("runtime route-presence: routes ABSENT from the live spec → NOT reachable (kills the #202 source-only false-green)", async () => {
-    // Static files absent (so the static check is silent), but the running API's spec does
-    // NOT serve the feature's routes → the resource isn't mounted → fail.
+    // Statically clean (the route table mounts noteRoutes), but the running API's
+    // spec does NOT serve the feature's routes → the resource isn't mounted → fail.
+    const dir = await cloneWithMountedRoutes("note");
     const servesOtherOnly: SpecFetcher = async () => ({
       openapi: "3.0.0",
       info: { title: "x", version: "1" },
       paths: { "/api/v1/other/": {}, "/api/v1/other/{id}": {} },
     });
-    const stage = reachabilityStage("/nonexistent", "note", servesOtherOnly);
-    const r = await stage.run("/nonexistent");
 
-    expect(r.passed).toBe(false);
-    expect(r.errors[0]?.rule).toBe("reachability");
-    expect(r.errors[0]?.message).toContain("/api/v1/note/");
+    try {
+      const stage = reachabilityStage(dir, "note", servesOtherOnly);
+      const r = await stage.run(dir);
+
+      expect(r.passed).toBe(false);
+      expect(r.errors[0]?.rule).toBe("reachability");
+      expect(r.errors[0]?.message).toContain("/api/v1/note/");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("runtime route-presence: routes PRESENT in the live spec → reachable", async () => {
+    const dir = await cloneWithMountedRoutes("note");
     const servesNote: SpecFetcher = async () => ({
       openapi: "3.0.0",
       info: { title: "x", version: "1" },
       paths: { "/api/v1/note/": {}, "/api/v1/note/{id}": {} },
     });
-    const stage = reachabilityStage("/nonexistent", "note", servesNote);
-    const r = await stage.run("/nonexistent");
 
-    expect(r.passed).toBe(true);
+    try {
+      const stage = reachabilityStage(dir, "note", servesNote);
+      const r = await stage.run(dir);
+
+      expect(r.passed).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("spec unreachable on a statically-clean clone → INCONCLUSIVE, non-blocking", async () => {
+    const dir = await cloneWithMountedRoutes("note");
+
+    try {
+      const stage = reachabilityStage(dir, "note", specDown);
+      const r = await stage.run(dir);
+
+      expect(r.passed).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
