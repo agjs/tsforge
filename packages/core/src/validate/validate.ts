@@ -1,7 +1,12 @@
 import type { ITask } from "../spec";
 import type { ErrorParser, ErrorSet, IValidateResult } from "./validate.types";
 import { runAccept, type IAcceptOptions } from "./accept";
-import { capWithNotice, parserFor, isEslintJsonLine } from "./parse";
+import {
+  capWithNotice,
+  parserFor,
+  isEslintJsonLine,
+  eslintMessageSummary,
+} from "./parse";
 
 /** Longest fallback message we'll surface — a vite/render error fits; a wall of
  *  build logs does not. */
@@ -18,11 +23,21 @@ export function fallbackMessage(output: string): string {
     .join("\n")
     .trim();
 
-  if (cleaned.length === 0) {
-    return "command exited non-zero";
+  if (cleaned.length > 0) {
+    return capWithNotice(cleaned, FALLBACK_CAP);
   }
 
-  return capWithNotice(cleaned, FALLBACK_CAP);
+  // Nothing readable remained after dropping eslint's JSON — but the gate DID
+  // fail. If the JSON carried messages (e.g. a warnings-only `--max-warnings`
+  // failure, which `parseEslintJson` drops as non-errors), surface those so the
+  // loop has something concrete to fix instead of an opaque "non-zero".
+  const eslintSummary = eslintMessageSummary(output);
+
+  if (eslintSummary.length > 0) {
+    return capWithNotice(eslintSummary.join("\n"), FALLBACK_CAP);
+  }
+
+  return "command exited non-zero";
 }
 
 /**

@@ -7,6 +7,9 @@ import {
   parserFor,
   isEslintJsonLine,
   fallbackMessage,
+  parseTestFailures,
+  normalizeGateOutput,
+  eslintMessageSummary,
 } from "../src/validate";
 
 test("parseTsc extracts file/line/rule per diagnostic", () => {
@@ -246,4 +249,73 @@ test("parseTsc surfaces file-less diagnostics like TS18003 (config-level errors)
   expect(items.find((e) => e.key === "tsc:TS18003")?.message).toContain(
     "No inputs were found"
   );
+});
+
+// ── validate hardening: ANSI/CRLF normalization + tsc-alias + eslint warnings ──
+const ESC = String.fromCharCode(27);
+
+test("normalizeGateOutput strips ANSI SGR codes and folds CRLF/CR to LF", () => {
+  const out = normalizeGateOutput(`${ESC}[31mred${ESC}[0m\r\nplain\rmid`);
+
+  expect(out).toBe("red\nplain\nmid");
+});
+
+test("parseTsc parses a diagnostic even with a trailing CR (CRLF output)", () => {
+  // `.` never matches `\r`, so the old `(.+)$` anchor failed on every CRLF line.
+  const items = parseTsc("src/a.ts(3,5): error TS2322: Type 'x'.\r");
+
+  expect(items).toHaveLength(1);
+  expect(items[0]?.rule).toBe("TS2322");
+});
+
+test("parseTestFailures parses bun/vitest failures wrapped in ANSI color", () => {
+  const bun = parseTestFailures(
+    `  ${ESC}[31m(fail)${ESC}[0m suite > does a thing`
+  );
+
+  expect(bun).toHaveLength(1);
+  expect(bun[0]?.message).toBe("suite > does a thing");
+
+  const vitest = parseTestFailures(
+    `${ESC}[2m❯${ESC}[0m foo.test.ts (3 tests ${ESC}[2m|${ESC}[0m 1 failed)\n` +
+      ` ${ESC}[31m×${ESC}[0m renders the header`
+  );
+
+  expect(vitest.length).toBeGreaterThanOrEqual(1);
+  expect(vitest.some((e) => e.message === "renders the header")).toBe(true);
+});
+
+test("parserFor does not pick the tsc parser for tsc-alias", () => {
+  // `\btsc\b` matched inside `tsc-alias`, selecting parseTsc for a gate whose
+  // real compiler never ran.
+  expect(parserFor("tsc-alias && vite build")).toBe(genericErrors);
+  expect(parserFor("tsc -p tsconfig.json")).toBe(parseTsc);
+});
+
+test("eslintMessageSummary surfaces warnings (which parseEslintJson drops)", () => {
+  const json =
+    '[{"filePath":"/a.ts","messages":[' +
+    '{"ruleId":"no-console","severity":1,"message":"Unexpected console","line":3,"column":1}' +
+    "]}]";
+
+  // parseEslintJson keeps errors only → nothing for a warnings-only failure.
+  expect(parseEslintJson(json)).toHaveLength(0);
+
+  const summary = eslintMessageSummary(json);
+
+  expect(summary).toHaveLength(1);
+  expect(summary[0]).toContain("no-console");
+  expect(summary[0]).toContain("warning");
+});
+
+test("fallbackMessage recovers eslint warnings instead of an opaque non-zero", () => {
+  const json =
+    '[{"filePath":"/a.ts","messages":[' +
+    '{"ruleId":"no-console","severity":1,"message":"Unexpected console","line":3,"column":1}],' +
+    '"errorCount":0,"warningCount":1}]';
+
+  const msg = fallbackMessage(json);
+
+  expect(msg).not.toBe("command exited non-zero");
+  expect(msg).toContain("no-console");
 });

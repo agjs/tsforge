@@ -35,8 +35,8 @@ inventory, see the hand-drawn map on [Internals](/internals/).
 | `browser` | Headless Chromium oracle that render-checks a page as a gate stage | optional | 3 | <1k | 1 | 1 |
 | `lsp` | TypeScript language service powering navigation and write-time diagnostics | optional | 3 | <1k | 4 | 0 |
 | `infer-rules` | Scans a repo for its conventions and turns them into rule overrides | core | 7 | <1k | 5 | 2 |
-| `mcp` | Model Context Protocol client that exposes external servers as tools | optional | 8 | <1k | 2 | 1 |
 | `validate` | Runs the gate command and parses tool output into structured errors | core | 7 | <1k | 7 | 2 |
+| `mcp` | Model Context Protocol client that exposes external servers as tools | optional | 8 | <1k | 2 | 1 |
 | `spec` | Task and spec shapes, spec parsing, and test generation from intent | core | 6 | <1k | 6 | 6 |
 | `stack-detection` | Detects the project's stack and picks which rule packs apply | core | 4 | <1k | 8 | 1 |
 | `setup` | Onboarding wizard that writes a project's initial tsforge config | optional | 4 | <1k | 2 | 5 |
