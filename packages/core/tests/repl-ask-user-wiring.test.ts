@@ -8,25 +8,27 @@ import {
   wantsPlanApproval,
 } from "../src/cli/repl";
 
-// WS-C: the interactive REPL must offer ask_user, and it must SURVIVE /clear. The /clear
-// path rebuilds Session.create WITHOUT reusing the init config, so it silently dropped
-// interactive once (the panel caught it). Both Session.create sites must gate interactive
-// on humanAtKeyboard() — a TTY (so a piped/non-TTY REPL, with no human to answer, never
-// advertises a pause nobody can resume). This source guard locks both regressions — the
-// /clear rebuild lives inside the readline command loop and isn't unit-reachable.
-test("both REPL Session.create sites (init + /clear) gate interactive on humanAtKeyboard()", async () => {
+// R1: there is no per-action approval UI, so an `ask` verdict must resolve to a
+// DENY with an honest reason — `interactive: true` kept it `ask`, which
+// executeTool rejected anyway while claiming a human had been consulted. Both
+// Session.create sites (init + the /clear rebuild, which does NOT reuse the init
+// config) must therefore pass `interactive: false`, and — the WS-C regression
+// this guard originally caught — they must AGREE, so /clear can't silently drift
+// from init. Flip both back to humanAtKeyboard() only when a real prompt lands.
+// (ask_user itself is unaffected: it classifies read_file, allowed in every
+// mode regardless of `interactive`.)
+test("both REPL Session.create sites (init + /clear) set interactive: false (no approval UI)", async () => {
   const src = await Bun.file(
     join(import.meta.dir, "..", "src", "cli", "repl.ts")
   ).text();
 
-  // Every Session.create in the REPL is interactive-WHEN-a-human-is-present.
   const createCount = (src.match(/Session\.create\(/g) ?? []).length;
-  const interactiveCount = (
-    src.match(/interactive: humanAtKeyboard\(\)/g) ?? []
-  ).length;
+  const interactiveFalseCount = (src.match(/interactive: false/g) ?? []).length;
 
   expect(createCount).toBeGreaterThanOrEqual(2);
-  expect(interactiveCount).toBe(createCount);
+  expect(interactiveFalseCount).toBe(createCount);
+  // No site still advertises the (non-existent) approval path.
+  expect(src).not.toContain("interactive: humanAtKeyboard()");
 });
 
 // #103: the scoped format janitor is opt-in (coreFormat). The interactive REPL enables it,
