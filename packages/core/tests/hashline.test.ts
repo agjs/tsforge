@@ -24,7 +24,7 @@ describe("hashline-format", () => {
     const h2 = computeFileHash(text);
 
     expect(h1).toBe(h2);
-    expect(h1).toMatch(/^[0-9A-F]{4}$/);
+    expect(h1).toMatch(/^[0-9A-F]{8}$/); // 32-bit (S2)
   });
 
   test("computeFileHash: different content produces different hash", () => {
@@ -168,7 +168,7 @@ describe("SessionSnapshotStore", () => {
     const store = new SessionSnapshotStore();
     const hash = store.record("src/foo.ts", "const x = 1;");
 
-    expect(hash).toMatch(/^[0-9A-F]{4}$/);
+    expect(hash).toMatch(/^[0-9A-F]{8}$/);
 
     const snapshot = store.head("src/foo.ts");
 
@@ -757,5 +757,30 @@ describe("hashline overlap guard (S1)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── S2: the staleness hash is 32-bit and accepts legacy 4-hex ────────────────
+describe("computeFileHash width (S2)", () => {
+  test("mints an 8-hex (32-bit) tag; legacy 4-hex still validates", () => {
+    const h = computeFileHash("const x = 1;\nconst y = 2;\n");
+
+    expect(h).toMatch(/^[0-9A-F]{8}$/);
+    expect(isValidHash(h)).toBe(true);
+    expect(isValidHash("AB12")).toBe(true); // legacy 4-hex header parses
+    expect(isValidHash("XYZ1")).toBe(false);
+    expect(isValidHash("12")).toBe(false);
+  });
+
+  test("distinct near-identical files get distinct tags (no 16-bit crowding)", () => {
+    const seen = new Set<string>();
+
+    for (let i = 0; i < 500; i += 1) {
+      seen.add(computeFileHash(`export const n = ${String(i)};\n`));
+    }
+
+    // 500 distinct inputs → 500 distinct 32-bit tags (a 16-bit space would
+    // start colliding well before this).
+    expect(seen.size).toBe(500);
   });
 });

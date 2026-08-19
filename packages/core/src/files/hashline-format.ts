@@ -29,8 +29,15 @@ export const HL_PAYLOAD_PREFIX = "+";
 /** Range separator: N..M. */
 export const HL_RANGE_SEP = "..";
 
-/** Length of the hex hash (4 hex chars = 16 bits). */
-export const HL_HASH_LENGTH = 4;
+/** Length of the hex hash minted today (8 hex chars = full 32 bits). Was 4
+ *  (16 bits, 65 536 values): the hashline engine addresses edits by LINE
+ *  NUMBER and trusts this hash as the SOLE check that the file is unchanged, so
+ *  a ~1/65 536 collision on a concurrently-edited file spliced line ops into
+ *  DIFFERENT content — a silent wrong-location apply. 32 bits makes that
+ *  ~1/4 billion. A legacy 4-hex hash (from a pre-widening persisted transcript
+ *  the model pastes back) still VALIDATES but won't equal a fresh 8-hex live
+ *  hash, so it routes to the safe stale/re-anchor path rather than a false match. */
+export const HL_HASH_LENGTH = 8;
 
 /**
  * Normalize text for hashing: strip trailing [ \t\r] from every line
@@ -47,10 +54,11 @@ function normalizeForHash(text: string): string {
  */
 export function computeFileHash(text: string): string {
   const normalized = normalizeForHash(text);
-  const hash32 = Bun.hash.xxHash32(normalized, 0);
-  const low16 = hash32 & 0xffff;
+  // `>>> 0` keeps it an unsigned 32-bit int (xxHash32 can return negative under
+  // JS bit ops); 8 hex chars, zero-padded.
+  const hash32 = Bun.hash.xxHash32(normalized, 0) >>> 0;
 
-  return low16.toString(16).padStart(HL_HASH_LENGTH, "0").toUpperCase();
+  return hash32.toString(16).padStart(HL_HASH_LENGTH, "0").toUpperCase();
 }
 
 /**
@@ -96,10 +104,12 @@ export function parseHashHeader(
 }
 
 /**
- * Check if a string is a valid 4-hex hash.
+ * Check if a string is a valid hash: 8 hex (minted today) or 4 hex (legacy,
+ * still accepted so a pre-widening header pasted from an old transcript parses
+ * — it simply won't match a fresh 8-hex live hash and routes to stale recovery).
  */
 export function isValidHash(hash: string): boolean {
-  return /^[0-9A-F]{4}$/i.test(hash);
+  return /^(?:[0-9A-F]{8}|[0-9A-F]{4})$/i.test(hash);
 }
 
 /**
