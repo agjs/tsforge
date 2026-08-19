@@ -545,3 +545,45 @@ test("captured script output is ANSI-free even when the parent env forces color"
     }
   }
 });
+
+test("B1: the script body cannot read the harness's credential env vars", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-script-env-"));
+  const prev = {
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    GH_TOKEN: process.env.GH_TOKEN,
+    MY_DB_PASSWORD: process.env.MY_DB_PASSWORD,
+    PROJECT_MODE: process.env.PROJECT_MODE,
+  };
+
+  process.env.OPENAI_API_KEY = "sk-secret-should-not-leak";
+  process.env.GH_TOKEN = "ghp_secret_should_not_leak";
+  process.env.MY_DB_PASSWORD = "pw-should-not-leak";
+  process.env.PROJECT_MODE = "development"; // ordinary var — must survive
+
+  try {
+    const events: ILoopEvent[] = [];
+    const code = [
+      "console.log('OPENAI=' + (process.env.OPENAI_API_KEY ?? 'MISSING'));",
+      "console.log('GH=' + (process.env.GH_TOKEN ?? 'MISSING'));",
+      "console.log('DBPW=' + (process.env.MY_DB_PASSWORD ?? 'MISSING'));",
+      "console.log('MODE=' + (process.env.PROJECT_MODE ?? 'MISSING'));",
+    ].join("\n");
+
+    const out = await doScript({ code }, makeCtx({ cwd: dir }, events), {
+      execute: executeTool,
+    });
+
+    expect(out).toContain("OPENAI=MISSING");
+    expect(out).toContain("GH=MISSING");
+    expect(out).toContain("DBPW=MISSING");
+    // A non-credential project var is still handed through.
+    expect(out).toContain("MODE=development");
+  } finally {
+    process.env.OPENAI_API_KEY = prev.OPENAI_API_KEY ?? "";
+    process.env.GH_TOKEN = prev.GH_TOKEN ?? "";
+    process.env.MY_DB_PASSWORD = prev.MY_DB_PASSWORD ?? "";
+    process.env.PROJECT_MODE = prev.PROJECT_MODE ?? "";
+
+    await rm(dir, { recursive: true, force: true });
+  }
+});

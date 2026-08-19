@@ -120,6 +120,17 @@ function extractCommand(
     return `bun add ${str(args, "packages")}`.trim();
   }
 
+  // `script` runs the model's `code` verbatim — surface the body AS the command
+  // so the critical denies (destructive-shell, pipe-to-shell, private-key) at
+  // least scan it. Before this, `script` had no `command`, so EVERY
+  // command-gated critical was structurally skipped: the body could `rm -rf`
+  // outside cwd or read `~/.ssh/id_rsa` with the policy never looking. The scan
+  // is best-effort (a JS body's `rmSync` isn't a shell `rm`); the env filter in
+  // script-tool.ts is the load-bearing protection.
+  if (toolName === TOOL_NAME.script) {
+    return str(args, "code");
+  }
+
   return undefined;
 }
 
@@ -159,6 +170,12 @@ export function classifyAction(call: IToolCall, cwd: string): IProposedAction {
 
   if (command !== undefined) {
     action.command = command;
+  }
+
+  // Mark the `script` body so the policy scans it with CODE-native critical
+  // patterns (rmSync/child_process/credential reads), not just shell shapes.
+  if (call.name === TOOL_NAME.script) {
+    action.metadata = { codeExec: true };
   }
 
   return action;

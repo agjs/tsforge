@@ -1,4 +1,6 @@
+import { isRecord } from "../lib/guards";
 import {
+  codeBodyIsDangerous,
   commandReadsPrivateKey,
   isDestructiveShell,
   isPrivateKeyPath,
@@ -283,6 +285,24 @@ function criticalDeny(
       reason: `private-key file access blocked: ${preview(action.command)}`,
       rule: "critical:private-key-read",
     };
+  }
+
+  // A `script` CODE body (marked codeExec at classify time) scanned for
+  // JS-native dangers the shell shapes above can't see. Best-effort; the env
+  // filter in script-tool.ts is the load-bearing protection.
+  if (
+    isRecord(action.metadata) &&
+    action.metadata.codeExec === true &&
+    action.command !== undefined
+  ) {
+    const danger = codeBodyIsDangerous(action.command);
+
+    if (danger !== null) {
+      return {
+        reason: `script body blocked — ${danger}: ${preview(action.command)}`,
+        rule: "critical:script-body",
+      };
+    }
   }
 
   if (

