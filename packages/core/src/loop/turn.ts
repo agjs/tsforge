@@ -106,6 +106,10 @@ import {
   LINEAR_READ_TOOL,
   LINEAR_WRITE_TOOL,
   LINEAR_START_TOOL,
+  NOTION_READ_TOOL,
+  NOTION_WRITE_TOOL,
+  SENTRY_READ_TOOL,
+  SENTRY_WRITE_TOOL,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
   CHECK_TOOL,
@@ -195,6 +199,10 @@ type AdvertisedTool =
   | typeof LINEAR_READ_TOOL
   | typeof LINEAR_WRITE_TOOL
   | typeof LINEAR_START_TOOL
+  | typeof NOTION_READ_TOOL
+  | typeof NOTION_WRITE_TOOL
+  | typeof SENTRY_READ_TOOL
+  | typeof SENTRY_WRITE_TOOL
   | typeof READ_IMAGE_TOOL
   | typeof GENERATE_IMAGE_TOOL
   | typeof CHECK_TOOL
@@ -223,6 +231,11 @@ export interface ICapabilityFlags {
    *  the driver from the MCP registry. When on, the Linear verbs are advertised; the
    *  WRITE handlers also hard-check `ctx.linear`. */
   linear?: boolean;
+  /** The `notion` / `sentry` capabilities = consent (their MCP server configured +
+   *  connected). When on, their curated verbs are advertised; the write handlers
+   *  also hard-check `ctx.notion` / `ctx.sentry`. */
+  notion?: boolean;
+  sentry?: boolean;
 }
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
@@ -275,6 +288,18 @@ function linearTools(caps: ICapabilityFlags): AdvertisedTool[] {
     : [];
 }
 
+/** Notion knowledge verbs — advertised only when the `notion` capability is on.
+ *  Reads are plan-safe (integration_read); writes gated (integration_write). */
+function notionTools(caps: ICapabilityFlags): AdvertisedTool[] {
+  return caps.notion === true ? [NOTION_READ_TOOL, NOTION_WRITE_TOOL] : [];
+}
+
+/** Sentry error verbs — advertised only when the `sentry` capability is on. Read is
+ *  plan-safe; the resolve write is gated (integration_write). */
+function sentryTools(caps: ICapabilityFlags): AdvertisedTool[] {
+  return caps.sentry === true ? [SENTRY_READ_TOOL, SENTRY_WRITE_TOOL] : [];
+}
+
 /** Image capability tools — each advertised only when its backend is configured
  *  (caps resolved by the driver). read_image (vision) and generate_image are
  *  independent, so a vision-only or gen-only setup offers just the one. */
@@ -298,6 +323,8 @@ export function toolsFor(
   const git = gitTools(hasExistingCode);
   const github = githubTools(caps);
   const linear = linearTools(caps);
+  const notion = notionTools(caps);
+  const sentry = sentryTools(caps);
   const script = scriptTools();
   const image = imageTools(caps);
 
@@ -352,6 +379,8 @@ export function toolsFor(
       ...git,
       ...github,
       ...linear,
+      ...notion,
+      ...sentry,
       ...script,
       ...image,
     ];
@@ -370,6 +399,8 @@ export function toolsFor(
     ...git,
     ...github,
     ...linear,
+    ...notion,
+    ...sentry,
     ...script,
     ...image,
   ];
@@ -439,6 +470,10 @@ export interface ILoopCtxTool {
    *  Threaded into the tool context so the Linear WRITE handlers hard-check it and
    *  fail closed when off. See {@link IToolContext.linear}. */
   linear?: boolean;
+  /** Notion / Sentry capabilities = consent, threaded into the tool context so the
+   *  write handlers hard-check them. See {@link IToolContext.notion}/{@link IToolContext.sentry}. */
+  notion?: boolean;
+  sentry?: boolean;
   /** Files the agent created/edited this session (cwd-relative, forward slashes).
    *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
    *  enforce on this set, so they cover what the agent wrote regardless of git.

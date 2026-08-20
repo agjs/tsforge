@@ -46,6 +46,16 @@ export const flags = {
    *  suppressed from advertisement (still dispatchable) so the model's tool list
    *  stays small. Set TSFORGE_LINEAR_RAW=1 for full passthrough. */
   linearRaw: (): boolean => isOn(ENV_FLAG.linearRaw),
+  /** Kill-switch for the `notion` capability (notion_read / notion_write); on iff a
+   *  `notion` MCP server is configured + connected. */
+  noNotion: (): boolean => isOn(ENV_FLAG.noNotion),
+  /** Re-expose the raw `mcp__notion__*` tools alongside the curated verbs. */
+  notionRaw: (): boolean => isOn(ENV_FLAG.notionRaw),
+  /** Kill-switch for the `sentry` capability (sentry_read / sentry_write); on iff a
+   *  `sentry` MCP server is configured + connected. */
+  noSentry: (): boolean => isOn(ENV_FLAG.noSentry),
+  /** Re-expose the raw `mcp__sentry__*` tools alongside the curated verbs. */
+  sentryRaw: (): boolean => isOn(ENV_FLAG.sentryRaw),
   /** Fall back to basic readline input (no multiline editor) in interactive mode.
    *  Default OFF — the editor is on. Set to "1" to disable the editor. */
   basicInput: (): boolean => isOn(ENV_FLAG.basicInput),

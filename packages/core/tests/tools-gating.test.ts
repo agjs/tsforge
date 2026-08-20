@@ -108,6 +108,23 @@ test("the linear capability advertises the three curated Linear verbs", () => {
   expect(on).toContain("linear_start");
 });
 
+test("Notion + Sentry verbs are gated on their own capabilities", () => {
+  expect(names(toolsFor(true))).not.toContain("notion_read");
+  expect(names(toolsFor(true))).not.toContain("sentry_read");
+
+  const notion = names(toolsFor(true, { notion: true }));
+
+  expect(notion).toContain("notion_read");
+  expect(notion).toContain("notion_write");
+  expect(notion).not.toContain("sentry_read"); // independent capability
+
+  const sentry = names(toolsFor(true, { sentry: true }));
+
+  expect(sentry).toContain("sentry_read");
+  expect(sentry).toContain("sentry_write");
+  expect(sentry).not.toContain("notion_read");
+});
+
 test("web tools are absent unless TSFORGE_WEB=1", () => {
   const n = names(toolsFor(true));
 

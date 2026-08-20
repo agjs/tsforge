@@ -44,13 +44,22 @@ import {
   LINEAR_START_TOOL,
   LINEAR_MARKER,
   LINEAR_DRIVE_GUIDANCE,
+  NOTION_READ_TOOL,
+  NOTION_WRITE_TOOL,
+  NOTION_MARKER,
+  NOTION_DRIVE_GUIDANCE,
+  SENTRY_READ_TOOL,
+  SENTRY_WRITE_TOOL,
+  SENTRY_MARKER,
+  SENTRY_DRIVE_GUIDANCE,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
 import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
-import {
-  resolveLinearCapability,
-  mcpSchemasForAdvertisement,
-} from "./tools/linear-ops";
+import { resolveLinearCapability } from "./tools/linear-ops";
+import { resolveNotionCapability } from "./tools/notion-ops";
+import { resolveSentryCapability } from "./tools/sentry-ops";
+import { suppressedIntegrationServers } from "./tools/integration-servers";
+import { suppressCuratedSchemas } from "./tools/integration-common";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { mergePolicyRules } from "../policy";
 import type { ProfileId } from "../config/profiles";
@@ -2377,6 +2386,55 @@ export class Session {
     return true;
   }
 
+  /** Turn on the Notion verbs when a `notion` MCP server is connected. Mirrors
+   *  setLinearCapability (advertise + consent + one-time guidance). Returns whether
+   *  it turned on (for the boot banner). Idempotent. */
+  setNotionCapability(): boolean {
+    if (!resolveNotionCapability(this.ctx.tool.mcpRegistry)) {
+      return false;
+    }
+
+    this.ctx.tool.notion = true;
+    this.addIntegrationTools([NOTION_READ_TOOL, NOTION_WRITE_TOOL]);
+    this.guideOnce(NOTION_MARKER, NOTION_DRIVE_GUIDANCE);
+
+    return true;
+  }
+
+  /** Turn on the Sentry verbs when a `sentry` MCP server is connected. Mirrors
+   *  setLinearCapability. Returns whether it turned on. Idempotent. */
+  setSentryCapability(): boolean {
+    if (!resolveSentryCapability(this.ctx.tool.mcpRegistry)) {
+      return false;
+    }
+
+    this.ctx.tool.sentry = true;
+    this.addIntegrationTools([SENTRY_READ_TOOL, SENTRY_WRITE_TOOL]);
+    this.guideOnce(SENTRY_MARKER, SENTRY_DRIVE_GUIDANCE);
+
+    return true;
+  }
+
+  /** Append the given tool schemas to the advertised set if absent (idempotent). */
+  private addIntegrationTools(
+    add: readonly ReturnType<typeof toolsFor>[number][]
+  ): void {
+    for (const tool of add) {
+      if (!this.tools.some((t) => t.function.name === tool.function.name)) {
+        this.tools = [...this.tools, tool];
+      }
+    }
+  }
+
+  /** Append a guidance block to the system prompt exactly once (guarded by `marker`). */
+  private guideOnce(marker: string, guidance: string): void {
+    const system = this.ctx.messages[0];
+
+    if (!(system?.role === "system" && system.content.includes(marker))) {
+      this.guide(guidance);
+    }
+  }
+
   /** Wire the inline-image preview callback the `generate_image` tool fires after
    *  saving (the CLI emits the terminal's inline-image escape). Absent ⇒ the tool
    *  just reports the saved path. */
@@ -2616,9 +2674,9 @@ export class Session {
     let offeredTools = offeredToolsFor(
       this.tools,
       this.planMode,
-      mcpSchemasForAdvertisement(
+      suppressCuratedSchemas(
         this.ctx.tool.mcpRegistry?.toolSchemas() ?? [],
-        this.ctx.tool.linear === true
+        suppressedIntegrationServers(this.ctx.tool)
       ),
       activeOverlay()?.toolOverrides ?? [],
       this.activePlanId !== null && this.activePlanId.length > 0

@@ -467,6 +467,11 @@ const SPECIAL_TOOLS = new Set<string>([
   // re-gates. Special-with-reason, like git_write. (linear_read is read-only.)
   TOOL_NAME.linearWrite,
   TOOL_NAME.linearStart,
+  // Notion + Sentry writes mutate an external service (create/append page, resolve
+  // an issue), not gated source → no re-gate. Special-with-reason. (Their *_read
+  // verbs are read-only.)
+  TOOL_NAME.notionWrite,
+  TOOL_NAME.sentryWrite,
   // Checklist mutations touch plan JSON under .tsforge/, not gated source —
   // no scoped edit count / re-gate. task_list + present_plan are read-only.
   TOOL_NAME.taskFocus,
