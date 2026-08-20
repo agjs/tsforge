@@ -177,6 +177,15 @@ export function parseManifest(raw: unknown): IScaffoldManifest {
     };
   });
 
+  // crossRules are the SAFETY validation (mutually-exclusive / implies checks
+  // that assertValid enforces). optArray would silently coerce a wrong TYPE
+  // (an object, string, null) to `[]` — defeating validation while the config
+  // scaffolds as "valid". Present-but-not-an-array must fail loud, like every
+  // other required field in this parser. (Absent → [] is fine.)
+  if (raw.crossRules !== undefined && !isArray(raw.crossRules)) {
+    throw new Error("scaffold manifest: crossRules must be an array");
+  }
+
   const crossRules = optArray(raw, "crossRules").map(
     (r, i): IConfigCrossRule => {
       if (!isRecord(r)) {

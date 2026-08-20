@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { applyScaffold } from "../src/scaffold/configure";
 import { answersToPlan } from "../src/scaffold/plan";
 import { parseManifest } from "../src/scaffold/boringstack-manifest";
-import type { IScaffoldFs, IScaffoldRunner } from "../src/scaffold/io";
+import {
+  assertSafeScaffoldRel,
+  type IScaffoldFs,
+  type IScaffoldRunner,
+} from "../src/scaffold/io";
 import type { IShellRun } from "../src/lib/fs/process";
 
 const MANIFEST = parseManifest(
@@ -229,5 +233,65 @@ describe("applyScaffold — initial superuser", () => {
 
     expect(compose).not.toContain("SUPERUSER_EMAIL");
     expect(compose).not.toContain("SUPERUSER_PASSWORD");
+  });
+});
+
+// ── Path-traversal + safety-validation hardening ────────────────────────────
+describe("assertSafeScaffoldRel", () => {
+  test("rejects escaping paths, accepts a contained relative path", () => {
+    expect(() => assertSafeScaffoldRel("compose/.env", "write")).not.toThrow();
+    expect(() => assertSafeScaffoldRel("../escape.env", "write")).toThrow(
+      /unsafe path/u
+    );
+    expect(() => assertSafeScaffoldRel("a/../../etc/x", "write")).toThrow(
+      /unsafe path/u
+    );
+    expect(() => assertSafeScaffoldRel("/etc/passwd", "write")).toThrow(
+      /unsafe path/u
+    );
+    expect(() => assertSafeScaffoldRel("..\\win", "write")).toThrow(
+      /unsafe path/u
+    );
+    expect(() => assertSafeScaffoldRel("", "write")).toThrow(/unsafe path/u);
+  });
+});
+
+describe("applyScaffold — refuses a manifest env-file that escapes the dest", () => {
+  test("an envEdit targeting ../ throws instead of writing outside dest", async () => {
+    const base = answersToPlan(MANIFEST, {
+      archetype: "boringstack",
+      stack: "dev",
+      values: {},
+    });
+    // A manifest-derived env-file name that escapes the scaffold destination.
+    const plan = {
+      ...base,
+      envEdits: [
+        { key: "X", value: "1", secret: false, file: "../../../.bashrc" },
+      ],
+    };
+    const { run } = recorder();
+    const { fs, store } = memFs();
+
+    await expect(
+      applyScaffold(DIR, MANIFEST, plan, { run, fs })
+    ).rejects.toThrow(/refusing to write env file/u);
+    // Nothing was written outside (or anywhere).
+    expect(store.size).toBe(0);
+  });
+});
+
+describe("parseManifest — crossRules type is validated (safety layer)", () => {
+  test("a non-array crossRules fails loud, not silently dropped", () => {
+    const raw = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "fixtures/scaffold/scaffold-manifest.json"),
+        "utf8"
+      )
+    );
+
+    raw.crossRules = { bogus: true }; // object, not an array
+
+    expect(() => parseManifest(raw)).toThrow(/crossRules must be an array/u);
   });
 });

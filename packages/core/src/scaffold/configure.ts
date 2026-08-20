@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { assertSafeScaffoldRel } from "./io";
 import type { IScaffoldFs, IScaffoldRunner } from "./io";
 import { allocateHostPorts } from "./ports";
 import type {
@@ -185,6 +186,11 @@ export async function applyScaffold(
     if (file.length === 0) {
       continue;
     }
+
+    // A manifest-supplied env-file name must stay inside `dir` — otherwise a
+    // crafted `envFile: "../../../.bashrc"` would read+rewrite a file outside
+    // the scaffold destination (readOrSeed + writeText below).
+    assertSafeScaffoldRel(file, "write env file");
 
     const path = `${dir}/${file}`;
     const base = await readOrSeed(fs, path);
