@@ -22,8 +22,8 @@ inventory, see the hand-drawn map on [Internals](/internals/).
 | `meta-rules` | Gate rules that need no AST — config shape, CI wiring, supply chain | core | 42 | 3k | 1 | 2 |
 | `self-harness` | Lets the harness propose, trial, and keep edits to its own prompts and rules | optional | 15 | 3k | 2 | 9 |
 | `config` | tsforge.config.json, profiles, recipes, agent specs, and external plugins | core | 12 | 3k | 8 | 8 |
-| `scaffold` | Stands up a new project from an archetype and configures its gate | optional | 15 | 3k | 3 | 3 |
 | `(root)` | CLI entry, model registry, session persistence — the loose files in src/ | core | 6 | 3k | 6 | 15 |
+| `scaffold` | Stands up a new project from an archetype and configures its gate | optional | 15 | 3k | 3 | 3 |
 | `editor` | The terminal input-line editor behind the REPL prompt | core | 10 | 2k | 2 | 2 |
 | `gate` | Composes and runs the deterministic gate: linter, stages, tool paths | core | 15 | 2k | 5 | 8 |
 | `reviewers` | Independent review panel that grades a change before it is trusted | optional | 9 | 2k | 1 | 3 |
