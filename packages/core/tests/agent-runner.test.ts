@@ -340,6 +340,88 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     expect(result.turns).toBe(3);
   });
 
+  test("duplicate agent_result on one turn does not dangle a tool_call_id", async () => {
+    // A model (open ones especially) can emit two agent_result calls in one
+    // assistant message. The steer path used to answer only the FIRST, leaving
+    // the second tool_call_id unanswered — a strict endpoint then 400s on the
+    // next request, knocking a productive run into the error/salvage path.
+    // `strict` emulates that endpoint: it throws if any assistant tool_call
+    // lacks a matching tool response, so the OLD behavior surfaces as a failed
+    // run and the fix as a clean "done".
+    const queue: IModelResponse[] = [
+      // Turn 1: two premature agent_result calls, no investigation yet.
+      {
+        content: "",
+        toolCalls: [
+          { id: "1", name: "agent_result", arguments: { result: "a" } },
+          { id: "2", name: "agent_result", arguments: { result: "b" } },
+        ],
+      },
+      // Turn 2: forced to investigate with a real tool.
+      {
+        content: "",
+        toolCalls: [
+          { id: "3", name: "read", arguments: { file: "package.json" } },
+        ],
+      },
+      // Turn 3: grounded result, now accepted.
+      {
+        content: "",
+        toolCalls: [
+          { id: "4", name: "agent_result", arguments: { result: "grounded" } },
+        ],
+      },
+    ];
+    let i = 0;
+    const strict: IProvider = {
+      complete(msgs: IChatMessage[]): Promise<IModelResponse> {
+        const answered = new Set<string>();
+
+        for (const m of msgs) {
+          if (m.role === "tool" && typeof m.toolCallId === "string") {
+            answered.add(m.toolCallId);
+          }
+        }
+
+        for (const m of msgs) {
+          if (m.role !== "assistant" || m.toolCalls === undefined) {
+            continue;
+          }
+
+          for (const c of m.toolCalls) {
+            if (typeof c.id === "string" && !answered.has(c.id)) {
+              throw new Error(`unmatched tool_call_id: ${c.id}`);
+            }
+          }
+        }
+
+        const res = queue[Math.min(i, queue.length - 1)];
+
+        i += 1;
+
+        if (res === undefined) {
+          throw new Error("scripted queue is empty");
+        }
+
+        return Promise.resolve(res);
+      },
+    };
+
+    const result = await new AgentRunner({
+      id: "dup",
+      outputMode: "structured",
+    }).run({
+      provider: strict,
+      cwd: REPO,
+      tsService: null,
+      parentTaskId: "r",
+      task: "t",
+    });
+
+    expect(result.status).toBe("done");
+    expect(result.output).toBe("grounded");
+  });
+
   test("structured agent with NO real tools accepts agent_result immediately", async () => {
     const { provider } = scripted([
       {
