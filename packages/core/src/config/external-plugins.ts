@@ -83,14 +83,33 @@ export function isRulePack(value: unknown): value is IRulePack {
     return false;
   }
 
-  if (!isRecord(value.rules) || !isRecord(value.rulesConfig)) {
+  const { rules, rulesConfig } = value;
+
+  if (!isRecord(rules) || !isRecord(rulesConfig)) {
     return false;
   }
 
-  for (const severity of Object.values(value.rulesConfig)) {
+  for (const severity of Object.values(rulesConfig)) {
     if (severity !== "error" && severity !== "warn") {
       return false;
     }
+  }
+
+  // `rules` and `rulesConfig` MUST agree on keys. A rule present in `rules` but
+  // absent from `rulesConfig` registers as available yet is never enabled — it
+  // silently does nothing (a flat-config rule only runs with a severity), which
+  // is exactly the "rule meant to constrain the model never fires" footgun for
+  // a rules-driven gate. The reverse (a severity for a rule that doesn't exist)
+  // makes ESLint error at config-build. Reject both: an external pack must ship
+  // a severity for every rule it defines, and no severity for one it doesn't.
+  const ruleKeys = Object.keys(rules);
+  const configKeys = Object.keys(rulesConfig);
+
+  if (
+    ruleKeys.length !== configKeys.length ||
+    !ruleKeys.every((k) => Object.hasOwn(rulesConfig, k))
+  ) {
+    return false;
   }
 
   return true;
