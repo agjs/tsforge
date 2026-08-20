@@ -129,8 +129,13 @@ export async function readFile(
  *  the model's context. The full content is still snapshotted for hashline edits. */
 const MAX_READ_LINES = 1500;
 
-/** Commands a plan-mode `run` may execute — pure inspection, never mutation. */
+/** Commands a plan-mode `run` may execute — pure inspection, never mutation.
+ *  `cd` is here because a model habitually prefixes probes with `cd <dir> && …`
+ *  (being explicit about the working directory, often its OWN cwd); `cd` only
+ *  moves the shell — it reads/writes nothing — so a `cd X && <read-only>` chain
+ *  is entirely read-only (a mutating trailing segment still fails on its own). */
 const READ_ONLY_COMMANDS = new Set([
+  "cd",
   "ls",
   "cat",
   "head",
@@ -283,6 +288,43 @@ const TSC_INFO_FLAGS = new Set([
   "--listFilesOnly",
 ]);
 
+/** Git GLOBAL flags (before the subcommand) that consume the NEXT token as a
+ *  value — `git -C <dir> status`, `git -c k=v log`, `git --git-dir <path> diff`.
+ *  A model commonly writes `git -C <cwd> status` to be explicit about the repo;
+ *  without skipping these the parser reads `-C`/`-c` as the "subcommand" and
+ *  rejects a read-only inspection. None of these change what git DOES (they only
+ *  point it at a repo / set a config), so they don't affect read-only-ness. */
+const GIT_GLOBAL_VALUE_FLAGS = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+]);
+
+/** Split git args into the real subcommand + its args, skipping leading global
+ *  flags (value-flags consume their following token; `--flag=value` and boolean
+ *  globals like `--no-pager` consume just themselves). */
+function gitSubcommand(args: readonly string[]): {
+  sub: string | undefined;
+  subArgs: string[];
+} {
+  let i = 0;
+
+  while (i < args.length) {
+    const tok = args[i];
+
+    if (tok?.startsWith("-") !== true) {
+      break; // the subcommand (or end of args)
+    }
+
+    i += GIT_GLOBAL_VALUE_FLAGS.has(tok) ? 2 : 1;
+  }
+
+  return { sub: args[i], subArgs: args.slice(i + 1) };
+}
+
 function gitIsReadOnly(sub: string | undefined, rest: string[]): boolean {
   if (sub === undefined || !READ_ONLY_GIT.has(sub)) {
     return false;
@@ -348,7 +390,9 @@ function isReadOnlySegment(segment: string): boolean {
   }
 
   if (head === "git") {
-    return gitIsReadOnly(rest[0], rest.slice(1));
+    const { sub, subArgs } = gitSubcommand(rest);
+
+    return gitIsReadOnly(sub, subArgs);
   }
 
   if (head === "find") {

