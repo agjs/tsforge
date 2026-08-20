@@ -39,6 +39,34 @@ describe("parseSpec", () => {
     expect(s.tasks[0]!.id).toBe("1");
   });
 
+  test("a PLAIN numbered acceptance-criteria list is not scanned as phantom tasks", () => {
+    // `1.`/`2.` under `## Acceptance criteria` used to be parsed as tasks with
+    // empty accept, colliding ids with the real task and blocking the spec.
+    // Task parsing is now scoped to the `## Tasks` section.
+    const s = parseSpec(
+      `---\nid: x\n---\n\n## Acceptance criteria\n1. user can log in\n2. errors show\n\n## Tasks\n1. real task\n     accept: bun test\n     files: a.ts\n`
+    );
+
+    expect(s.tasks).toHaveLength(1);
+    expect(s.tasks[0]?.id).toBe("1");
+    expect(s.tasks[0]?.accept).toBe("bun test");
+    expect(s.tasks[0]?.files).toEqual(["a.ts"]);
+  });
+
+  test("a CRLF-authored spec keeps its frontmatter (mode/id/verify not silently lost)", () => {
+    // With a hard-coded `^---\n` regex a CRLF spec dropped ALL frontmatter,
+    // flipping `mode: existing` to the default `scratch` — which DELETES the
+    // task files. Line endings are normalized first.
+    const crlf =
+      "---\r\nid: fix-1\r\nverify: bun run validate\r\nmode: existing\r\n---\r\n\r\n## Tasks\r\n1. patch\r\n     accept: bun test\r\n     files: a.ts\r\n";
+    const s = parseSpec(crlf);
+
+    expect(s.mode).toBe("existing");
+    expect(s.id).toBe("fix-1");
+    expect(s.verify).toBe("bun run validate");
+    expect(s.tasks[0]?.files).toEqual(["a.ts"]);
+  });
+
   test("attaches the Acceptance criteria prose to each task as intent", () => {
     const s = parseSpec(
       `---\nid: x\n---\n\n## Acceptance criteria\nA1. discount is in CENTS: discounted = max(0, subtotal - discountCents).\n\n## Tasks\n1. [x] y\n     accept: bun test\n     files: a.ts\n`
