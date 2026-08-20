@@ -37,6 +37,15 @@ export const flags = {
    *  `gh` CLI is installed AND authenticated); set TSFORGE_NO_GITHUB=1 to force it
    *  off (A/B control, or to keep a run purely local). */
   noGithub: (): boolean => isOn(ENV_FLAG.noGithub),
+  /** Kill-switch for the `linear` capability (the linear_read / linear_write /
+   *  linear_start verbs). The capability is otherwise on iff a `linear` MCP server
+   *  is configured AND connected; set TSFORGE_NO_LINEAR=1 to force it off. */
+  noLinear: (): boolean => isOn(ENV_FLAG.noLinear),
+  /** Re-expose the RAW `mcp__linear__*` tools alongside the curated verbs. Off by
+   *  default: when the linear capability is on, the raw Linear MCP tools are
+   *  suppressed from advertisement (still dispatchable) so the model's tool list
+   *  stays small. Set TSFORGE_LINEAR_RAW=1 for full passthrough. */
+  linearRaw: (): boolean => isOn(ENV_FLAG.linearRaw),
   /** Fall back to basic readline input (no multiline editor) in interactive mode.
    *  Default OFF — the editor is on. Set to "1" to disable the editor. */
   basicInput: (): boolean => isOn(ENV_FLAG.basicInput),

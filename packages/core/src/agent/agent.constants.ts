@@ -26,6 +26,9 @@ export const TOOL_NAME = {
   gitWrite: "git_write",
   githubRead: "github_read",
   githubWrite: "github_write",
+  linearRead: "linear_read",
+  linearWrite: "linear_write",
+  linearStart: "linear_start",
   addDependency: "add_dependency",
   packageInfo: "package_info",
   packageDocs: "package_docs",
@@ -90,6 +93,13 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.githubRead]: { readOnly: true, scriptExposable: false },
   [TOOL_NAME.gitWrite]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.githubWrite]: { readOnly: false, scriptExposable: false },
+  // linear_read inspects the tracker (no mutation) → plan-mode-safe. linear_write
+  // creates cards/comments and linear_start checks out a git branch → both mutate
+  // (not read-only, withheld in plan). None script-exposable (network + MCP). Gated
+  // behind the `linear` capability; write handlers also hard-check ctx.linear.
+  [TOOL_NAME.linearRead]: { readOnly: true, scriptExposable: false },
+  [TOOL_NAME.linearWrite]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.linearStart]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.deleteFile]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
@@ -853,6 +863,114 @@ export const GITHUB_WRITE_TOOL = {
         },
       },
       required: ["op"],
+    },
+  },
+};
+
+/** How to write a Linear card / comment — the PR_BODY_GUIDANCE principle applied to
+ *  the tracker. Cards are read by humans: say the intent, the why, and the outcome,
+ *  in a short, precise, clear way. Code is handled by agents, so don't describe code
+ *  mechanics, line counts, or line numbers — unless the task literally IS a specific
+ *  code detail (e.g. "optimize this one function"). Embedded in the linear_write
+ *  schema and enforced by a soft lint, so there is ONE source of truth. */
+export const LINEAR_CARD_GUIDANCE =
+  "Write for a human teammate. Say the INTENT (what needs to happen and why) and " +
+  "the OUTCOME (what 'done' looks like) — short, precise, clear. Do NOT describe " +
+  "code mechanics, line counts, or line numbers; agents handle the code. The one " +
+  "exception is a task that is itself about a specific code detail.";
+
+/** A stable marker so the Linear guidance is appended to the system prompt exactly
+ *  once across relaunches/resumes (mirrors GITHUB_MARKER). */
+export const LINEAR_MARKER = "## Working with Linear";
+
+/** Guidance appended to the system prompt only when the `linear` capability is on.
+ *  Teaches the Linear→branch→PR flow, leaning on Linear's native GitHub sync (which
+ *  links the branch and moves the card automatically), so the harness orchestrates
+ *  nothing. Kept short — the tool descriptions carry the per-op detail. */
+export const LINEAR_DRIVE_GUIDANCE = `${LINEAR_MARKER}
+You can read and act on Linear issues. To work on a card: read it with linear_read (or start it in one step with linear_start, which reads the card AND checks out the branch Linear generated for it). Do the work, then open a PR with github_write pr_create whose body references the issue (e.g. "Fixes ENG-123"). Linear's GitHub integration links that branch to the card and moves the card automatically as the PR opens and merges — so you never set Linear status by hand. To capture a NEW piece of work, use linear_write create; it returns the new issue's identifier and its branch name, which you then check out.
+
+${LINEAR_CARD_GUIDANCE}`;
+
+/** Read-only Linear inspection via curated verbs over the Linear MCP server.
+ *  Offered only when the `linear` capability is on (a linear MCP server configured
+ *  + connected). op is a fixed allowlist. */
+export const LINEAR_READ_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.linearRead,
+    description:
+      "Look at Linear work (read-only). ops: 'issue' (one card by identifier like ENG-123 — title, state, description, assignee, the git BRANCH NAME Linear generated for it, and links), 'search' (find issues matching `query`), 'mine' (issues assigned to you), 'comments' (the discussion on a card). Use the branch name from 'issue' with git_write checkout, or let linear_start do both.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          enum: ["issue", "search", "mine", "comments"],
+        },
+        id: {
+          type: "string",
+          description: "issue identifier, e.g. ENG-123 (issue/comments)",
+        },
+        query: { type: "string", description: "search text (search)" },
+        maxChars: {
+          type: "number",
+          description: "cap on returned characters (default 4000)",
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** Linear WRITE via curated verbs over MCP — create a card, comment. Mutating →
+ *  withheld in plan mode, denied in ci/dontAsk (integration_write kind). Card STATE
+ *  is moved by Linear's native GitHub sync, so there is deliberately no status op. */
+export const LINEAR_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.linearWrite,
+    description:
+      "Act on Linear. ops: 'create' (open a new issue — needs `title`, optional `description` and `team`; returns the new identifier and its git branch name), 'comment' (add a comment to a card — `id` + `body`). Card status is handled automatically by Linear's GitHub integration when the linked PR opens/merges, so there is no status op here.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["create", "comment"] },
+        title: { type: "string", description: "issue title (create)" },
+        description: {
+          type: "string",
+          description: `issue description (create). ${LINEAR_CARD_GUIDANCE}`,
+        },
+        team: {
+          type: "string",
+          description: "team key/name to file under (create; optional)",
+        },
+        id: { type: "string", description: "issue identifier (comment)" },
+        body: {
+          type: "string",
+          description: `comment body (comment). ${LINEAR_CARD_GUIDANCE}`,
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** One-shot start-work: read a Linear card and check out the branch Linear made for
+ *  it, in a single call. Mutating (a git checkout) → classified vcs_write, withheld
+ *  in plan/ci. The thin seam that makes the Linear→git flow one step. */
+export const LINEAR_START_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.linearStart,
+    description:
+      "Start work on a Linear issue in one step: read the card `id` (e.g. ENG-123) and check out the git branch Linear generated for it (creating it from the current branch if it doesn't exist yet). After this, edit as usual and open a PR referencing the issue — Linear links the branch and moves the card for you.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "issue identifier, e.g. ENG-123" },
+      },
+      required: ["id"],
     },
   },
 };

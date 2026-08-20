@@ -8,6 +8,10 @@ export const ENV_FLAG = {
   noScriptTool: "TSFORGE_NO_SCRIPT",
   noGitTool: "TSFORGE_NO_GIT_TOOL",
   noGithub: "TSFORGE_NO_GITHUB",
+  // Linear integration kill-switch, and the escape hatch that re-exposes the raw
+  // `mcp__linear__*` tools alongside the curated verbs (off by default).
+  noLinear: "TSFORGE_NO_LINEAR",
+  linearRaw: "TSFORGE_LINEAR_RAW",
   basicInput: "TSFORGE_BASIC_INPUT",
   noDelegation: "TSFORGE_NO_DELEGATION",
   expertRescue: "TSFORGE_EXPERT_RESCUE",

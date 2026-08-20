@@ -462,6 +462,11 @@ const SPECIAL_TOOLS = new Set<string>([
   // like `run`: special-with-reason, not mutating. (github_read is read-only.)
   TOOL_NAME.gitWrite,
   TOOL_NAME.githubWrite,
+  // linear_write mutates an external tracker (create card/comment) and linear_start
+  // checks out a git branch — neither writes gated workspace source, so neither
+  // re-gates. Special-with-reason, like git_write. (linear_read is read-only.)
+  TOOL_NAME.linearWrite,
+  TOOL_NAME.linearStart,
   // Checklist mutations touch plan JSON under .tsforge/, not gated source —
   // no scoped edit count / re-gate. task_list + present_plan are read-only.
   TOOL_NAME.taskFocus,
