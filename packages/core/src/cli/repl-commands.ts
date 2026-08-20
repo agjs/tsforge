@@ -3,7 +3,7 @@
 import { buildAndPersistMap, mapStatus, forgetMap } from "../codebase";
 import { reviewChange, formatReport, formatReviewCard } from "../loop";
 import { STYLE, paint } from "../render";
-import type { OpenAICompatibleProvider } from "../inference";
+import type { IProvider } from "../inference";
 import { parseEventLog, formatTrace } from "../eval";
 import { listSessions } from "../session-store";
 import { newestLogFile, resolveLogArg } from "./logging";
@@ -100,14 +100,15 @@ export async function runMapCommand(
 
 /** `/review` in the REPL — review the current change and print findings. `out` is
  *  the pane-aware sink; when `columns` is given the findings render as a colored,
- *  width-wrapped card (the TUI), otherwise plain text (CLI/pipe). */
+ *  width-wrapped card (the TUI), otherwise plain text (CLI/pipe). Returns the PLAIN
+ *  findings text (empty when clean/errored) so the caller can hand it to `/reviewfix`. */
 export async function runReviewCommand(
-  provider: OpenAICompatibleProvider,
+  provider: IProvider,
   dir: string,
   base: string,
   out: (s: string) => void = STDOUT,
   columns?: number
-): Promise<void> {
+): Promise<string> {
   out(
     `${paint("reviewing the current change…", STYLE.dim, columns !== undefined)}\n`
   );
@@ -127,10 +128,16 @@ export async function runReviewCommand(
         : formatReviewCard(report, columns, true);
 
     out(`\n${rendered}\n`);
+
+    // Plain text (never the colored card) so /reviewfix hands the agent readable
+    // findings, not ANSI. Empty when there's nothing to act on.
+    return report.findings.length > 0 ? formatReport(report) : "";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
     out(`\nreview failed: ${message}\n`);
+
+    return "";
   }
 }
 
