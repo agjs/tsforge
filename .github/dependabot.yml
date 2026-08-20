@@ -10,6 +10,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    ignore:
+      # The `typescript` package here is the JS COMPILER-API library (ts.createSourceFile,
+      # LanguageService, the AST) that lsp / syntax-check / dependency-analyzer / proptest
+      # use programmatically. TypeScript 7 is a native (Go) rewrite that ships NO JS API —
+      # so `typescript@7.x` is an API-less stub and a major bump nulls every ts.* call.
+      # We already run TS7 for the actual typecheck via the separate aliased dep
+      # `@typescript/native` ("npm:typescript@7.0.2"), so the speed is already captured.
+      # Keep the JS-API library on 6.x: allow patch/minor, block the 7.x major.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       # Bump the lint/format/type toolchain together so it moves as one unit
       # (mismatched patch versions are exactly what caused a formatting drift).
