@@ -133,7 +133,7 @@ test("parseModelsConfig rejects bad shapes with actionable errors", () => {
   expect(() =>
     parseModelsConfig({
       active: "ghost",
-      models: { a: { baseUrl: "u", model: "m" } },
+      models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
     })
   ).toThrow(/not one of/);
 });
@@ -146,21 +146,39 @@ test("parseModelsConfig requires maxTokens / contextWindow to be positive intege
   expect(() =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m", maxTokens: "8192" } },
+      models: {
+        a: {
+          baseUrl: "http://localhost:1234/v1",
+          model: "m",
+          maxTokens: "8192",
+        },
+      },
     })
   ).toThrow(/maxTokens must be a positive integer/);
 
   expect(() =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m", maxTokens: 8192.5 } },
+      models: {
+        a: {
+          baseUrl: "http://localhost:1234/v1",
+          model: "m",
+          maxTokens: 8192.5,
+        },
+      },
     })
   ).toThrow(/maxTokens must be a positive integer/);
 
   expect(() =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m", contextWindow: 0 } },
+      models: {
+        a: {
+          baseUrl: "http://localhost:1234/v1",
+          model: "m",
+          contextWindow: 0,
+        },
+      },
     })
   ).toThrow(/contextWindow must be a positive integer/);
 
@@ -168,9 +186,59 @@ test("parseModelsConfig requires maxTokens / contextWindow to be positive intege
   expect(
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m", maxTokens: 8192 } },
+      models: {
+        a: { baseUrl: "http://localhost:1234/v1", model: "m", maxTokens: 8192 },
+      },
     }).models.a?.maxTokens
   ).toBe(8192);
+});
+
+test("parseModelsConfig requires apiKey/apiKeyEnv to be strings (else the key silently vanishes)", () => {
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: {
+        a: { baseUrl: "http://localhost:1234/v1", model: "m", apiKey: 12345 },
+      },
+    })
+  ).toThrow(/apiKey must be a string/);
+
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: {
+        a: { baseUrl: "http://localhost:1234/v1", model: "m", apiKeyEnv: true },
+      },
+    })
+  ).toThrow(/apiKeyEnv must be a string/);
+});
+
+test("parseModelsConfig rejects a malformed baseUrl at the JSON boundary (not mid-turn)", () => {
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "api.host/v1", model: "m" } }, // no scheme
+    })
+  ).toThrow(/baseUrl is not a valid URL/);
+});
+
+test("parseModelsConfig rejects minReviewers <= 0 (a 0 would satisfy review with zero votes)", () => {
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
+      reviewPanel: { minReviewers: 0, reviewers: [] },
+    })
+  ).toThrow(/minReviewers must be a positive integer/);
+
+  // A valid positive integer still parses.
+  expect(
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
+      reviewPanel: { minReviewers: 3, reviewers: [] },
+    }).reviewPanel?.minReviewers
+  ).toBe(3);
 });
 
 test("setActiveModel switches + persists; unknown name throws with the options", async () => {
@@ -223,17 +291,27 @@ test("setActiveModel preserves the capabilities block (does not drop it)", async
 });
 
 test("resolveApiKey: inline wins, else apiKeyEnv, else undefined", () => {
-  expect(resolveApiKey({ baseUrl: "u", model: "m", apiKey: "inline" })).toBe(
-    "inline"
-  );
+  expect(
+    resolveApiKey({
+      baseUrl: "http://localhost:1234/v1",
+      model: "m",
+      apiKey: "inline",
+    })
+  ).toBe("inline");
 
   process.env.DEEPSEEK_API_KEY = "from-env";
   expect(
-    resolveApiKey({ baseUrl: "u", model: "m", apiKeyEnv: "DEEPSEEK_API_KEY" })
+    resolveApiKey({
+      baseUrl: "http://localhost:1234/v1",
+      model: "m",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+    })
   ).toBe("from-env");
   delete process.env.DEEPSEEK_API_KEY;
 
-  expect(resolveApiKey({ baseUrl: "u", model: "m" })).toBeUndefined();
+  expect(
+    resolveApiKey({ baseUrl: "http://localhost:1234/v1", model: "m" })
+  ).toBeUndefined();
 });
 
 test("explicit TSFORGE_* env overrides the registry's active model", async () => {
@@ -273,7 +351,7 @@ test("capabilities: parse validates known keys + real entry targets, round-trips
   expect(() =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m" } },
+      models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
       capabilities: { audio: "a" },
     })
   ).toThrow(/unknown capability "audio"/);
@@ -282,7 +360,7 @@ test("capabilities: parse validates known keys + real entry targets, round-trips
   expect(() =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m" } },
+      models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
       capabilities: { vision: "ghost" },
     })
   ).toThrow(/capability "vision" must name a model/);
@@ -295,7 +373,7 @@ test("capabilities: every CAPABILITY_NAMES key (incl. planner + expert) is a val
   // CAPABILITY_NAMES, so config and env agree on the full capability set.
   const cfg = parseModelsConfig({
     active: "a",
-    models: { a: { baseUrl: "u", model: "m" } },
+    models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
     capabilities: {
       vision: "a",
       imageGen: "a",
@@ -314,7 +392,13 @@ test("parseModelsConfig rejects a bad imageApi (fails loud, no silent fallback)"
   expect(() =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m", imageApi: "chat-modality" } },
+      models: {
+        a: {
+          baseUrl: "http://localhost:1234/v1",
+          model: "m",
+          imageApi: "chat-modality",
+        },
+      },
     })
   ).toThrow(/imageApi must be/);
 
@@ -323,7 +407,11 @@ test("parseModelsConfig rejects a bad imageApi (fails loud, no silent fallback)"
     parseModelsConfig({
       active: "a",
       models: {
-        a: { baseUrl: "u", model: "m", imageApi: "images-generations" },
+        a: {
+          baseUrl: "http://localhost:1234/v1",
+          model: "m",
+          imageApi: "images-generations",
+        },
       },
     }).models.a?.imageApi
   ).toBe("images-generations");
@@ -404,7 +492,9 @@ test("planner is a routable capability role", () => {
 test("parseModelsConfig accepts a preset NAME or a well-formed reasoning profile", () => {
   const entry = (reasoning: unknown) => ({
     active: "a",
-    models: { a: { baseUrl: "u", model: "m", reasoning } },
+    models: {
+      a: { baseUrl: "http://localhost:1234/v1", model: "m", reasoning },
+    },
   });
 
   const presets: ReasoningStyle[] = [
@@ -434,7 +524,7 @@ test("parseModelsConfig accepts a preset NAME or a well-formed reasoning profile
   expect(
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m" } },
+      models: { a: { baseUrl: "http://localhost:1234/v1", model: "m" } },
     }).models.a?.reasoning
   ).toBeUndefined();
 });
@@ -443,7 +533,9 @@ test("parseModelsConfig rejects a bad reasoning value at the JSON boundary", () 
   const bad = (reasoning: unknown) => () =>
     parseModelsConfig({
       active: "a",
-      models: { a: { baseUrl: "u", model: "m", reasoning } },
+      models: {
+        a: { baseUrl: "http://localhost:1234/v1", model: "m", reasoning },
+      },
     });
 
   // A typo would otherwise behave as an empty profile: load fine, then silently

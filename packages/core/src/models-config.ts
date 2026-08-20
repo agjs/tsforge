@@ -200,6 +200,62 @@ function assertNumericFields(name: string, entry: unknown): void {
   }
 }
 
+/** `apiKey`/`apiKeyEnv` are unchecked by `isModelEntry`. A hand-edited non-string
+ *  (`"apiKey": 12345`) then fails silently: `entry.apiKey.length > 0` is false,
+ *  so resolution falls through to no Authorization header and the provider
+ *  returns a 401 that reads like an account problem, not the config typo it is.
+ *  Fail loud at the boundary, matching the numeric guard. */
+function assertKeyFields(name: string, entry: unknown): void {
+  if (!isRecord(entry)) {
+    return;
+  }
+
+  for (const field of ["apiKey", "apiKeyEnv"]) {
+    if (entry[field] !== undefined && typeof entry[field] !== "string") {
+      throw new Error(
+        `models.json: model "${name}" field ${field} must be a string`
+      );
+    }
+  }
+}
+
+/** `baseUrl` is the one field that decides WHERE the API key is sent, yet
+ *  `isModelEntry` only checks it's a string. A malformed value (no scheme,
+ *  `"api.host/v1"`) otherwise throws `Invalid URL` mid-turn instead of at load;
+ *  validate it here (fail loud at the boundary). A non-`https` URL carrying a
+ *  key is warned — a committed registry edit shouldn't silently ship the secret
+ *  over cleartext — but not rejected (localhost/dev over http is legitimate). */
+function assertBaseUrl(name: string, entry: unknown): void {
+  if (!isRecord(entry) || typeof entry.baseUrl !== "string") {
+    return; // isModelEntry already rejects a missing/non-string baseUrl
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(entry.baseUrl);
+  } catch {
+    throw new Error(
+      `models.json: model "${name}" baseUrl is not a valid URL: "${entry.baseUrl}"`
+    );
+  }
+
+  const hasKey =
+    typeof entry.apiKey === "string" || typeof entry.apiKeyEnv === "string";
+
+  if (
+    hasKey &&
+    url.protocol === "http:" &&
+    url.hostname !== "localhost" &&
+    url.hostname !== "127.0.0.1"
+  ) {
+    process.stderr.write(
+      `models.json: model "${name}" sends its API key to ${url.origin} over ` +
+        `plaintext http — use https for a remote endpoint.\n`
+    );
+  }
+}
+
 /** A hand-edited `imageApi` typo (e.g. "chat-modality") would otherwise pass the
  *  baseUrl/model-only guard and silently fall back to the chat-modalities wire
  *  path in image-gen — fail loud with the valid options instead. */
@@ -409,6 +465,19 @@ function parseReviewPanel(
     );
   }
 
+  // minReviewers is the quorum floor a blocking review must clear. A `0` (or
+  // negative/float) would let the panel be satisfied by ZERO independent votes —
+  // a change trusted unreviewed — so require a positive integer, matching the
+  // maxTokens/contextWindow guard. Absent → default 2.
+  if (
+    raw.minReviewers !== undefined &&
+    (!Number.isInteger(raw.minReviewers) || Number(raw.minReviewers) <= 0)
+  ) {
+    throw new Error(
+      "models.json: reviewPanel.minReviewers must be a positive integer"
+    );
+  }
+
   const minReviewers =
     typeof raw.minReviewers === "number" ? raw.minReviewers : 2;
   const reviewers = raw.reviewers.map((r) => parseReviewer(r, models));
@@ -456,6 +525,8 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     }
 
     assertNumericFields(name, entry);
+    assertKeyFields(name, entry);
+    assertBaseUrl(name, entry);
     assertImageApi(name, entry);
     assertReasoning(name, entry);
     models[name] = entry;
