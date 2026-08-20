@@ -72,13 +72,15 @@ describe("wizard flow mapping", () => {
     const dir = repo([
       { path: "src/a.ts", content: "export interface User { id: string; }" },
       { path: "src/b.ts", content: "export interface Order { n: number; }" },
+      { path: "src/c.ts", content: "export interface Invoice { n: number; }" },
     ]);
 
     try {
       const report = await scanRepo(dir);
       const steps = buildSteps(report);
 
-      // The interfaces step preselects the recommendation (bare-pascal-case).
+      // Enough bare interfaces (>= the min-sample floor) to infer bare-pascal-case;
+      // the interfaces step preselects that recommendation.
       const actions: IWizardAction[] = [
         ...steps.map((): IWizardAction => "confirm"),
         "confirm", // overview → apply
@@ -125,6 +127,7 @@ describe("runSetup orchestration", () => {
     const dir = repo([
       { path: "src/a.ts", content: "export interface User { id: string; }" },
       { path: "src/b.ts", content: "export interface Order { n: number; }" },
+      { path: "src/c.ts", content: "export interface Invoice { n: number; }" },
       { path: "src/e.ts", content: "export enum Color { Red }" },
     ]);
     let out = "";
