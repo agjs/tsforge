@@ -209,6 +209,20 @@ function decideReason(
   return "";
 }
 
+/** The reason string for a NON-blocked verdict. "all reviewers approved" is a
+ *  factual claim, so it must only be used when every reviewer actually approved:
+ *  a request-changes verdict that fell below the blocking threshold still means
+ *  a reviewer did NOT approve, and reporting otherwise misinforms whoever reads
+ *  the verdict (and any steer built from it). This changes only the reason TEXT
+ *  on the pass path — `blocked` is unchanged. */
+function approvalReason(reviews: IReview[]): string {
+  const dissent = reviews.filter((r) => r.verdict !== "approve").length;
+
+  return dissent === 0
+    ? "all reviewers approved"
+    : `passed: ${String(dissent)} of ${String(reviews.length)} reviewer(s) requested changes, below the blocking threshold`;
+}
+
 export function aggregate(
   outcomes: ReviewOutcome[],
   opts: { minReviewers: number; identity: string }
@@ -235,16 +249,17 @@ export function aggregate(
   const errored = failures.length;
 
   const ranked = rank(groupFindings(reviews));
-  const reason = decideReason(
+  const blockReason = decideReason(
     reviews,
     ranked,
     reviews.length,
     opts.minReviewers
   );
+  const blocked = blockReason.length > 0;
 
   return {
-    blocked: reason.length > 0,
-    reason: reason.length > 0 ? reason : "all reviewers approved",
+    blocked,
+    reason: blocked ? blockReason : approvalReason(reviews),
     reviewers: { ok: reviews.length, errored },
     ranked,
     perReviewer: reviews,

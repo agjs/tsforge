@@ -173,6 +173,40 @@ describe("aggregate", () => {
     expect(v.reason).toMatch(/agree/u);
   });
 
+  test("a below-threshold dissent passes but the reason does NOT claim everyone approved", () => {
+    // One reviewer requests changes with a CRITICAL (non-security) finding, the
+    // other approves. Corroboration policy is unchanged — a single uncorroborated
+    // non-security finding does not block — but the verdict used to report
+    // "all reviewers approved", a false statement that misinforms anyone reading
+    // it (and any steer built from the reason). blocked stays false; reason must
+    // reflect the dissent.
+    const v = aggregate(
+      [
+        ok("a", "request-changes", [
+          {
+            severity: "critical",
+            findingCode: "complexity",
+            file: "a.ts",
+            issue: "unbounded recursion, stack overflow on large N",
+          },
+        ]),
+        ok("b", "approve"),
+      ],
+      opts
+    );
+
+    expect(v.blocked).toBe(false);
+    expect(v.reason).not.toBe("all reviewers approved");
+    expect(v.reason).toMatch(/requested changes/u);
+  });
+
+  test("a genuinely unanimous approval still reads 'all reviewers approved'", () => {
+    const v = aggregate([ok("a", "approve"), ok("b", "approve")], opts);
+
+    expect(v.blocked).toBe(false);
+    expect(v.reason).toBe("all reviewers approved");
+  });
+
   test("majority request-changes with a major but no locus agreement → block", () => {
     const v = aggregate(
       [

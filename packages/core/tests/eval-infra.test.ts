@@ -34,6 +34,15 @@ describe("eval report: statistics", () => {
     expect(twoProportionZ(9, 10, 2, 10)).toBeGreaterThan(1.96);
     expect(twoProportionZ(1, 0, 1, 1)).toBe(0);
   });
+
+  test("twoProportionZ handles a zero standard error (both variants all-pass or all-fail)", () => {
+    // The pooled proportion is exactly 0 or 1, so the pooled SE is 0 — a real
+    // promotion scenario (baseline and candidate both perfect / both zero). The
+    // z is 0 (no distinguishable difference), NOT NaN from a divide-by-zero, so
+    // the promotion gate reads "no significant uplift" rather than crashing.
+    expect(twoProportionZ(10, 10, 10, 10)).toBe(0);
+    expect(twoProportionZ(0, 10, 0, 10)).toBe(0);
+  });
 });
 
 describe("eval report: buildSweepReport", () => {
