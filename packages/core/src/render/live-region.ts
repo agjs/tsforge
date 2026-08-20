@@ -8,13 +8,38 @@
  * `tsforge agents` tree). On a non-TTY sink every call is a no-op, so piped and
  * `--log` runs fall back to the caller's plain-text path unchanged.
  */
+import { displayWidth } from "./width";
+import { stripSgr } from "./frame/ansi-plain";
+
 const ESC = "\x1b";
 
 /** The minimal sink LiveRegion needs — matches `process.stdout` but injectable
- *  so a VirtualScreen test can capture the exact byte stream. */
+ *  so a VirtualScreen test can capture the exact byte stream. `columns` lets the
+ *  erase account for soft-wrapped lines (a line wider than the terminal occupies
+ *  more than one physical row). */
 export interface ILiveRegionOut {
   write(data: string): boolean;
   readonly isTTY?: boolean;
+  readonly columns?: number;
+}
+
+/** Physical terminal rows `lines` occupy at width `cols`: each logical line
+ *  soft-wraps to ceil(displayWidth/cols) rows (min 1 — a blank line is one row).
+ *  SGR is stripped first so color codes aren't counted as columns. `cols <= 0`
+ *  (width unknown) falls back to one row per line — no worse than the old
+ *  logical-line assumption. */
+function physicalRows(lines: readonly string[], cols: number): number {
+  if (cols <= 0) {
+    return lines.length;
+  }
+
+  let total = 0;
+
+  for (const line of lines) {
+    total += Math.max(1, Math.ceil(displayWidth(stripSgr(line)) / cols));
+  }
+
+  return total;
 }
 
 export class LiveRegion {
@@ -60,9 +85,14 @@ export class LiveRegion {
     }
 
     // Raw-mode terminals are ONLCR-off; joining with CRLF renders correctly in
-    // both raw and cooked sinks (a cooked terminal collapses the extra CR).
-    this.out.write(this.eraseCurrent() + lines.join("\r\n"));
-    this.rows = lines.length;
+    // both raw and cooked sinks (a cooked terminal collapses the extra CR). A
+    // trailing RESET closes any unbalanced SGR so a colored line can't bleed
+    // into the scrollback above the block.
+    this.out.write(this.eraseCurrent() + lines.join("\r\n") + `${ESC}[0m`);
+    // Track PHYSICAL rows, not logical lines: a line wider than the terminal
+    // wraps to several rows, and the next erase must climb ALL of them or it
+    // leaves ghost fragments of the previous block above the redraw.
+    this.rows = physicalRows(lines, this.out.columns ?? 0);
   }
 
   /** Erase the block and leave the cursor at its former top line. Idempotent. */

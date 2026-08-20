@@ -249,6 +249,48 @@ describe("runWizard interactive teardown", () => {
     }
   });
 
+  test("a throw during the INITIAL draw restores the terminal and resolves cancelled", async () => {
+    // The initial enter + first draw run outside onKey. A synchronous throw
+    // there used to abandon the Promise executor with the terminal stranded
+    // (view.close() / EXIT_ALT never reached, raw mode still on). The fix routes
+    // it through finish(): the wizard resolves cancelled and the surface closes.
+    const fake = new FakeStdin();
+    const realStdin = process.stdin;
+    let closed = 0;
+
+    Object.defineProperty(process, "stdin", {
+      value: fake,
+      configurable: true,
+    });
+
+    try {
+      const done = runWizard(STEPS, false, {
+        manageInput: false,
+        out: () => undefined,
+        view: {
+          render: () => {
+            throw new Error("renderFrame blew up on the first draw");
+          },
+          close: () => {
+            closed += 1;
+          },
+        },
+      });
+
+      // No keypress is ever emitted — the failure is on the first draw. The
+      // promise must still resolve (not reject/hang), and the surface restored.
+      const state = await done;
+
+      expect(state.status).toBe("cancel");
+      expect(closed).toBe(1);
+    } finally {
+      Object.defineProperty(process, "stdin", {
+        value: realStdin,
+        configurable: true,
+      });
+    }
+  });
+
   test("view mode paints host overlay and never opens a nested alt-screen", async () => {
     const fake = new FakeStdin();
     const realStdin = process.stdin;

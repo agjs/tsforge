@@ -101,7 +101,7 @@ Async functions returning an exit code, declared under the CLI — the commands.
 | `main` | `cli.ts:755` |
 | `mapMode` | `cli.ts:482` |
 | `recipesMode` | `cli.ts:501` |
-| `repl` | `cli/repl.ts:720` |
+| `repl` | `cli/repl.ts:753` |
 | `reviewMode` | `cli.ts:181` |
 | `runOnce` | `cli.ts:93` |
 | `runTraceCommand` | `cli/repl-commands.ts:118` |
