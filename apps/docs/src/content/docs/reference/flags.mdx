@@ -42,6 +42,8 @@ headless environments. Never change these interactively:
 | `TSFORGE_NO_SCRIPT` | off | withhold the `script` (programmatic tool calling) tool (`=1`) |
 | `TSFORGE_NO_DELEGATION` | off | withhold `spawn_agent`: run single-stream with no subagents (`=1`). See [delegation](/agent/delegation/) |
 | `TSFORGE_NO_REVIEW` | off | skip the automatic post-work [agent review](/cli/review/) after a task goes green (`=1`) |
+| `TSFORGE_REVIEW_MAX_FILES` | `100` | max changed files [review](/cli/review/) covers in one run (raise for large changes; excess is queued, not dropped) |
+| `TSFORGE_REVIEW_DIFF_CHARS` | `12000` | per-file diff budget before the reviewer truncates (raise to review very large single-file diffs) |
 
 ## Git context
 

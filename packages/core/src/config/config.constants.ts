@@ -20,6 +20,10 @@ export const ENV_FLAG = {
   // Post-work agent review (auto after a task goes green). On by default; eval
   // sweeps and cost-sensitive headless runs set this to skip the review phase.
   noReview: "TSFORGE_NO_REVIEW",
+  // Review coverage caps (numeric): max changed files reviewed per run, and the
+  // per-file diff char budget before truncation. Raise for large changes.
+  reviewMaxFiles: "TSFORGE_REVIEW_MAX_FILES",
+  reviewDiffChars: "TSFORGE_REVIEW_DIFF_CHARS",
   basicInput: "TSFORGE_BASIC_INPUT",
   noDelegation: "TSFORGE_NO_DELEGATION",
   expertRescue: "TSFORGE_EXPERT_RESCUE",

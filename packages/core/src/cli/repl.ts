@@ -44,6 +44,7 @@ import {
   isEphemeralUserInject,
   reviewChange,
   formatReport,
+  formatReviewCard,
   type Reporter,
   type ILoopEvent,
 } from "../loop";
@@ -1224,9 +1225,13 @@ export async function repl(args: ICliArgs): Promise<number> {
         return; // clean — stay quiet, don't nag on every green turn
       }
 
+      // Display the colored, wrapped card in the pane; keep a PLAIN copy for
+      // /reviewfix (the agent gets text, never ANSI escapes).
       lastReviewFindings = formatReport(review);
-      echo(`\n${lastReviewFindings}\n`);
-      echo("↳ /reviewfix to have the agent address these findings.\n");
+      echo(`\n${formatReviewCard(review, transcriptCols(), true)}\n`);
+      echo(
+        `${paint("↳ /reviewfix", STYLE.dim, true)} to have the agent address these findings.\n`
+      );
     } catch {
       // A review failure (git/model/fs) is non-fatal — the turn already succeeded.
     }
@@ -1595,7 +1600,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         break;
 
       case "review":
-        await runReviewCommand(provider, args.dir, arg);
+        await runReviewCommand(provider, args.dir, arg, echo, transcriptCols());
         break;
 
       case "reviewfix":
@@ -1615,11 +1620,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         break;
 
       case "map":
-        await runMapCommand(args.dir, arg);
+        await runMapCommand(args.dir, arg, echo);
         break;
 
       case "trace":
-        await runTraceCommand(arg, logFile);
+        await runTraceCommand(arg, logFile, echo);
         break;
 
       case "config":

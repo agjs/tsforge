@@ -47,6 +47,10 @@ The usual failure of AI review is confident nonsense. tsforge runs an adversaria
 
 When a `tsconfig.json` is present, it also feeds the reviewer the callers of each changed export, computed from the type graph, so the regression check looks at concrete call sites instead of guessing.
 
+## Coverage on large changes
+
+Review covers up to `TSFORGE_REVIEW_MAX_FILES` changed files (default **100**) per run, and reads up to `TSFORGE_REVIEW_DIFF_CHARS` (default **12000**) of each file's diff. Excess files are queued through the same [concurrency](/guardrails/config/) limit, not dropped — raise the caps for very large changes. If a run does hit a cap, the report says so loudly (`⚠ coverage: reviewed N of M …`) so a partial review never reads as a clean bill of health.
+
 ## Parallel review
 
 By default the per-file find pass and per-finding verify pass run one model call at a time. If your endpoint genuinely batches concurrent requests (e.g. vllm with `max_num_seqs` headroom), set [`agents.concurrency`](/guardrails/config/) in `tsforge.config.json`:

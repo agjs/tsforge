@@ -1,7 +1,8 @@
 /** Self-contained REPL commands shared with the CLI's one-shot modes:
  *  /sessions, /map, /review, /trace, and the /metrics turns-to-green line. */
 import { buildAndPersistMap, mapStatus, forgetMap } from "../codebase";
-import { reviewChange, formatReport } from "../loop";
+import { reviewChange, formatReport, formatReviewCard } from "../loop";
+import { STYLE, paint } from "../render";
 import type { OpenAICompatibleProvider } from "../inference";
 import { parseEventLog, formatTrace } from "../eval";
 import { listSessions } from "../session-store";
@@ -46,9 +47,20 @@ export async function printSessions(
 
 /** `/map [status|forget]` (REPL) and `tsforge map` — build/inspect the workspace
  *  map. The built map primes future sessions (and a `/clear`). */
-export async function runMapCommand(dir: string, sub: string): Promise<void> {
+/** Default output sink. Under the pane TUI the caller MUST pass a pane-aware sink
+ *  (the REPL's `echo`): raw `process.stdout.write` bypasses the compositor and
+ *  corrupts the display (see printSessions). */
+const STDOUT = (s: string): void => {
+  process.stdout.write(s);
+};
+
+export async function runMapCommand(
+  dir: string,
+  sub: string,
+  out: (s: string) => void = STDOUT
+): Promise<void> {
   if (sub === "status") {
-    process.stdout.write(`${await mapStatus(dir)}\n`);
+    out(`${await mapStatus(dir)}\n`);
 
     return;
   }
@@ -56,27 +68,25 @@ export async function runMapCommand(dir: string, sub: string): Promise<void> {
   if (sub === "forget") {
     const had = await forgetMap(dir);
 
-    process.stdout.write(
-      had ? "workspace map deleted\n" : "no map to delete\n"
-    );
+    out(had ? "workspace map deleted\n" : "no map to delete\n");
 
     return;
   }
 
   if (sub.length > 0) {
-    process.stdout.write(
+    out(
       `unknown map subcommand: ${sub} (use 'status', 'forget', or nothing to build)\n`
     );
 
     return;
   }
 
-  process.stdout.write("building workspace map…\n");
+  out("building workspace map…\n");
 
   try {
     const map = await buildAndPersistMap(dir);
 
-    process.stdout.write(
+    out(
       map === null
         ? "no tsconfig.json — nothing to map (the map is for TypeScript projects)\n"
         : `mapped ${map.meta.totalFiles} files, ${map.hubs.length} hubs. Primes new sessions (/clear to apply now).\n`
@@ -84,30 +94,43 @@ export async function runMapCommand(dir: string, sub: string): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
-    process.stdout.write(`map failed: ${message}\n`);
+    out(`map failed: ${message}\n`);
   }
 }
 
-/** `/review` in the REPL — review the current change and print findings. */
+/** `/review` in the REPL — review the current change and print findings. `out` is
+ *  the pane-aware sink; when `columns` is given the findings render as a colored,
+ *  width-wrapped card (the TUI), otherwise plain text (CLI/pipe). */
 export async function runReviewCommand(
   provider: OpenAICompatibleProvider,
   dir: string,
-  base: string
+  base: string,
+  out: (s: string) => void = STDOUT,
+  columns?: number
 ): Promise<void> {
-  process.stdout.write("reviewing the current change…\n");
+  out(
+    `${paint("reviewing the current change…", STYLE.dim, columns !== undefined)}\n`
+  );
 
   // Guard the REPL: a review error (git/fs/model) must not crash the session.
   try {
     const report = await reviewChange(provider, dir, {
       ...(base.length > 0 ? { base } : {}),
-      log: (m) => process.stdout.write(`  ↳ ${m}\n`),
+      log: (m) => {
+        out(`  ↳ ${m}\n`);
+      },
     });
 
-    process.stdout.write(`\n${formatReport(report)}\n`);
+    const rendered =
+      columns === undefined
+        ? formatReport(report)
+        : formatReviewCard(report, columns, true);
+
+    out(`\n${rendered}\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
-    process.stdout.write(`\nreview failed: ${message}\n`);
+    out(`\nreview failed: ${message}\n`);
   }
 }
 
@@ -117,7 +140,8 @@ export async function runReviewCommand(
  *  (the live session log) and falls back to the newest log on disk. */
 export async function runTraceCommand(
   arg: string,
-  prefer = ""
+  prefer = "",
+  out: (s: string) => void = STDOUT
 ): Promise<number> {
   let file = resolveLogArg(arg);
 
@@ -130,9 +154,7 @@ export async function runTraceCommand(
   }
 
   if (file.length === 0) {
-    process.stdout.write(
-      "no log to analyze — run with --log first, or pass a path\n"
-    );
+    out("no log to analyze — run with --log first, or pass a path\n");
 
     return 1;
   }
@@ -143,12 +165,12 @@ export async function runTraceCommand(
   const events = parseEventLog(text);
 
   if (events.length === 0) {
-    process.stdout.write(`no events parsed from ${file}\n`);
+    out(`no events parsed from ${file}\n`);
 
     return 1;
   }
 
-  process.stdout.write(`trace of ${file}\n\n${formatTrace(events)}\n`);
+  out(`trace of ${file}\n\n${formatTrace(events)}\n`);
 
   return 0;
 }
