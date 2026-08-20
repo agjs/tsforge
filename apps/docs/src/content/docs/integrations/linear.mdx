@@ -1,0 +1,46 @@
+---
+title: Linear
+description: "Read and act on Linear issues from the harness — look up a card, start work on its branch in one step, and open a PR that Linear links and transitions on its own."
+---
+
+For teams that live in [Linear](https://linear.app), work starts as a card. tsforge can read those cards and start work on them directly — and because Linear's own GitHub integration links the branch and moves the card as the PR opens and merges, the harness orchestrates nothing: it just reads the card and checks out the branch Linear already named.
+
+Linear is a **curated integration over MCP** — see [MCP servers](/integrations/mcp/) for the shared model (capability = consent, curated verbs, opt-in).
+
+## Turn it on
+
+Add a `linear` MCP server to `tsforge.config.json`. Linear's server is remote, so bridge it to tsforge's stdio transport with `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"]
+    }
+  }
+}
+```
+
+The server **must be keyed exactly `linear`**. Once it connects, an interactive session prints `↳ linear: on`. Force it off with `TSFORGE_NO_LINEAR=1`.
+
+## The tools
+
+- **`linear_read`** (read-only): `issue` (one card by identifier like `ENG-123` — title, state, description, the **branch name** Linear generated, and links), `search`, `mine` (your assigned issues), and `comments`.
+- **`linear_write`**: `create` (a new card — returns its identifier and branch name) and `comment`. There is deliberately **no status op**: Linear moves the card itself when the linked PR opens and merges.
+- **`linear_start`**: the one-step start — read a card by id and **check out the git branch** Linear made for it (creating it if needed). Edit as usual, then open a PR referencing the issue (e.g. `Fixes ENG-123`); Linear links the branch and transitions the card for you.
+
+## Cards written for humans
+
+`create` and `comment` describe the **intent** and the **outcome** for a human teammate — not code mechanics, line counts, or line numbers (the code is the agent's job). A soft check nudges the model off diff-speak, with an exception for a task that really is about a specific code detail.
+
+## When they're active
+
+Reads are available in every mode, including [plan mode](/cli/plan-mode/). Writes (`create`, `comment`, and `linear_start`'s checkout) follow capability-as-consent: allowed interactively, denied while planning or running unattended. See [Permissions & policy](/guardrails/policy/).
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_NO_LINEAR` | off | withhold the Linear tools even when the server is connected (`=1`) |
+| `TSFORGE_LINEAR_RAW` | off | also advertise the raw `mcp__linear__*` tools alongside the curated verbs (`=1`) |
+
+→ [MCP servers](/integrations/mcp/) · [Git & GitHub](/integrations/git-github/) · [Environment variables](/reference/flags/)

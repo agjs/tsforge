@@ -1,0 +1,42 @@
+---
+title: Git & GitHub
+description: "Read a PR and its CI, read and resolve review threads, branch, commit, push, and open a PR — the github_read, git_write, and github_write tools. Never merges; that stays human."
+---
+
+tsforge can take a change from an edit all the way to a **review-ready pull request** without leaving the harness: make a branch, commit, push, open a PR, watch CI, pull the failing logs, and read and resolve review threads (human **and** Copilot). It deliberately **never merges or closes** a PR — that decision stays with a person.
+
+This uses the local **`git`** binary for local work and the **`gh`** CLI for anything on GitHub (no raw API tokens to manage).
+
+## Turn it on
+
+The capability is **consent**: it's on only when the `gh` CLI is installed **and** authenticated. There's nothing to configure — tsforge detects it.
+
+```bash
+gh auth login   # once; then start tsforge in your repo
+```
+
+When it's on, an interactive session prints `↳ github: on` at startup. Force it off with `TSFORGE_NO_GITHUB=1` (e.g. to keep a run purely local).
+
+## The tools
+
+- **`github_read`** (read-only): inspect a pull request and its CI — `pr_view` (title, state, branches, mergeability, review decision), `pr_diff`, `checks` (per-check status), `failing_logs` (the failing run's log, tail), and `review_threads` (the unresolved threads, each with its id so it can be resolved).
+- **`git_write`**: `branch`, `checkout`, `commit` (stage paths or everything, then commit with a message), and `push` (set the upstream on a new branch's first push). No force-push, rebase, amend, reset, or branch deletion.
+- **`github_write`**: `pr_create`, `pr_comment`, and `resolve_thread` (mark a review thread resolved by its id). **No merge or close.**
+
+## The loop
+
+A typical change: `git_write` branch → commit → push, then `github_write pr_create`. Poll CI with `github_read checks`; if a check is red, pull `github_read failing_logs`, fix the code, and push again. Read reviewer feedback with `github_read review_threads`, address each comment, reply with `pr_comment` where useful, and mark it done with `resolve_thread`. When CI is green and every thread is resolved, tsforge reports the PR is **ready for a human to merge** and stops.
+
+## Human-readable PR descriptions
+
+PR bodies tsforge writes are aimed at a person, not a diff reader: **why** the change was needed, **what** it does, and the **outcome** — short, plain, and clear. They never talk about line counts, file counts, or code mechanics; the reviewer reads the diff for that.
+
+## When they're active
+
+The reads are available in every mode, including [plan mode](/cli/plan-mode/) (inspecting a PR mutates nothing). The **writes** — commit, push, PR create/comment, resolve — follow a capability-as-consent posture: allowed in the interactive modes (default / accept-edits) and **denied while planning or running unattended** (plan / ci / dont-ask). See [Permissions & policy](/guardrails/policy/).
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_NO_GITHUB` | off | withhold the git/GitHub tools even when `gh` is authenticated (`=1`) |
+
+→ [Environment variables](/reference/flags/) · [Permissions & policy](/guardrails/policy/) · [Linear](/integrations/linear/)

@@ -48,6 +48,20 @@ On existing-code runs tsforge offers `git_context`, a read-only tool giving the 
 
 Offered only when there is existing code to inspect (greenfield scratch builds have no history), and it is independent of `TSFORGE_NO_LSP_TOOLS` since it is not an LSP tool. Being read-only, it is available in [plan mode](/cli/plan-mode/) too. For eval/headless runs it can be withheld with `TSFORGE_NO_GIT_TOOL=1`.
 
+## Integrations: GitHub, Linear, Notion, Sentry
+
+Optional, opt-in integrations that let the agent read and act on the tools your workflow runs through. Each is **off** until it's available — [GitHub](/integrations/git-github/) when the `gh` CLI is installed and authenticated; [Linear](/integrations/linear/), [Notion](/integrations/notion/), and [Sentry](/integrations/sentry/) when their MCP server is configured — and each **writes only in interactive modes** (never while planning or running unattended). The kill-switches force one off; the `*_RAW` flags additionally expose that server's raw `mcp__<server>__*` tools alongside the curated verbs (off by default, so the model sees a small, focused tool set).
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_NO_GITHUB` | off | withhold the git/GitHub tools even when `gh` is authenticated (`=1`) |
+| `TSFORGE_NO_LINEAR` | off | withhold the Linear tools even when the server is connected (`=1`) |
+| `TSFORGE_LINEAR_RAW` | off | also advertise the raw `mcp__linear__*` tools (`=1`) |
+| `TSFORGE_NO_NOTION` | off | withhold the Notion tools (`=1`) |
+| `TSFORGE_NOTION_RAW` | off | also advertise the raw `mcp__notion__*` tools (`=1`) |
+| `TSFORGE_NO_SENTRY` | off | withhold the Sentry tools (`=1`) |
+| `TSFORGE_SENTRY_RAW` | off | also advertise the raw `mcp__sentry__*` tools (`=1`) |
+
 ## Web access
 
 Opt-in, free, and no required service keys. Turn on **Web tools** in [`/config`](/cli/interactive/) to add read-only research tools: `package_info`, `package_docs`, `web_fetch`, `web_search`, and `web_browse`. Search defaults to DuckDuckGo's keyless HTML endpoint. SearXNG is not bundled; set `TSFORGE_SEARXNG_URL` only when you already run a SearXNG service. Full guide: [Web access](/integrations/web-tools/).
