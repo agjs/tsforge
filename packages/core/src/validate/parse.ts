@@ -1,6 +1,27 @@
 import type { IErrorItem, ErrorParserFn } from "./validate.types";
 import { isArray, isRecord } from "../lib/guards";
 
+/** ANSI SGR color codes. Built from `String.fromCharCode(27)` rather than a
+ *  literal ESC so the pattern doesn't trip `no-control-regex` (same technique as
+ *  render/frame/ansi-plain.ts). */
+const ANSI_SGR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "gu");
+
+/**
+ * Normalize raw tool output before any regex parsing. Two failure modes this
+ * closes, both of which silently reduced a whole gate wall to one opaque blob:
+ *  - COLOR: under CI / `FORCE_COLOR`, tsc/eslint/bun/vitest wrap output in ANSI
+ *    SGR codes. A leading `ESC[..m` is not `\s`, so glyph-/`^`-anchored regexes
+ *    (`× case`, the vitest header, `(fail)`) never matched and parsed to zero.
+ *  - CRLF: parsers `split("\n")`, so CRLF output left a trailing `\r` on every
+ *    line; `.` doesn't match `\r`, so every `(.+)$`-anchored regex (TSC, the bun
+ *    `(fail)` line, vitest reasons) failed to anchor. Fold CR/CRLF to LF.
+ * A blob fallback isn't just less useful — its constant `nonzero` key makes the
+ * stuck-detector (sameErrorSet) read "no progress" while the model is fixing.
+ */
+export function normalizeGateOutput(output: string): string {
+  return output.replace(ANSI_SGR, "").replace(/\r\n?/g, "\n");
+}
+
 const TSC = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/;
 /** File-less tsc diagnostics — config/project-level errors like TS18003
  *  ("No inputs were found"). They carry no `file(line,col):` prefix, so the
@@ -17,7 +38,8 @@ export function capWithNotice(text: string, cap: number): string {
 }
 
 /** Parse `tsc` output into a structured error set (one item per diagnostic). */
-export function parseTsc(output: string): IErrorItem[] {
+export function parseTsc(rawOutput: string): IErrorItem[] {
+  const output = normalizeGateOutput(rawOutput);
   const items: IErrorItem[] = [];
 
   for (const line of output.split("\n")) {
@@ -62,7 +84,7 @@ export function parseTsc(output: string): IErrorItem[] {
 
 /** Fallback when we have no tool-specific parser: the whole output is one error. */
 export function genericErrors(output: string): IErrorItem[] {
-  const text = output.trim();
+  const text = normalizeGateOutput(output).trim();
 
   return text.length > 0
     ? [{ key: "raw", message: capWithNotice(text, GENERIC_CAP) }]
@@ -105,7 +127,8 @@ function tryParseArray(s: string): unknown[] | null {
  * JSON-array line(s) and union them — the chain can run eslint twice (syntactic
  * + type-aware), each emitting its own array.
  */
-export function parseEslintJson(output: string): IErrorItem[] {
+export function parseEslintJson(rawOutput: string): IErrorItem[] {
+  const output = normalizeGateOutput(rawOutput);
   const whole = tryParseArray(output);
 
   if (whole !== null) {
@@ -127,6 +150,63 @@ export function parseEslintJson(output: string): IErrorItem[] {
   }
 
   return items;
+}
+
+/**
+ * Human-readable one-line summaries of EVERY eslint message (warnings included),
+ * for the fallback path. `parseEslintJson` keeps only errors (severity 2), so a
+ * gate that fails purely on WARNINGS (`--max-warnings 0`, exit 1) parsed to zero
+ * items AND then had its only description — the JSON line — stripped by
+ * `fallbackMessage`, leaving the loop a contentless "command exited non-zero".
+ * This recovers the warning text so the model can actually see what to fix.
+ */
+export function eslintMessageSummary(rawOutput: string): string[] {
+  const output = normalizeGateOutput(rawOutput);
+  const lines: string[] = [];
+
+  for (const line of output.split("\n")) {
+    if (!isEslintJsonLine(line)) {
+      continue;
+    }
+
+    const arr = tryParseArray(line.trim());
+
+    if (arr === null) {
+      continue;
+    }
+
+    for (const file of arr) {
+      collectEslintMessages(file, lines);
+    }
+  }
+
+  return lines;
+}
+
+/** Append `file:line:col sev rule: message` for each message in one eslint file
+ *  entry (both warnings and errors). */
+function collectEslintMessages(file: unknown, out: string[]): void {
+  if (!isRecord(file) || !isArray(file.messages)) {
+    return;
+  }
+
+  const filePath = typeof file.filePath === "string" ? file.filePath : "?";
+
+  for (const m of file.messages) {
+    if (!isRecord(m)) {
+      continue;
+    }
+
+    const lineNo = typeof m.line === "number" ? m.line : 0;
+    const col = typeof m.column === "number" ? m.column : 0;
+    const rule = typeof m.ruleId === "string" ? m.ruleId : "syntax";
+    const sev = m.severity === 1 ? "warning" : "error";
+    const message = typeof m.message === "string" ? m.message : "";
+
+    out.push(
+      `${filePath}:${String(lineNo)}:${String(col)} ${sev} ${rule}: ${message}`
+    );
+  }
 }
 
 /** Error items from one eslint JSON file entry (severity-2 messages only). */
@@ -178,7 +258,8 @@ function eslintFileItems(file: unknown): IErrorItem[] {
  * Structured failures from bun test / vitest / jest output — failures only.
  * Used by brownfield gates so `bun test` is not a 500-char opaque blob.
  */
-export function parseTestFailures(output: string): IErrorItem[] {
+export function parseTestFailures(rawOutput: string): IErrorItem[] {
+  const output = normalizeGateOutput(rawOutput);
   const items: IErrorItem[] = [];
   let bunFileCtx = "";
   // Vitest's DEFAULT reporter file context (`❯ file (N tests | M failed)`) —
@@ -331,14 +412,22 @@ export function combinedParser(output: string): IErrorItem[] {
   });
 }
 
+/** A whole-word match where `-` counts as part of the word, so `tsc` does NOT
+ *  match inside `tsc-alias`/`tsc-watch` (a plain `\btsc\b` does, because `-` is a
+ *  word boundary — that mis-selected the tsc parser for a gate whose real
+ *  compiler never ran). */
+function hasWord(command: string, word: string): boolean {
+  return new RegExp(`(?<![\\w-])${word}(?![\\w-])`, "u").test(command);
+}
+
 /** Pick a parser from the command. Add tools here as we support them. */
 export function parserFor(command: string): ErrorParserFn {
-  const hasTsc = /\btsc\b/.test(command);
-  const hasEslint = /\beslint\b/.test(command);
+  const hasTsc = hasWord(command, "tsc");
+  const hasEslint = hasWord(command, "eslint");
   const hasTest =
-    /\bbun\s+test\b/.test(command) ||
-    /\bvitest\b/.test(command) ||
-    /\bjest\b/.test(command);
+    /(?<![\w-])bun\s+test(?![\w-])/u.test(command) ||
+    hasWord(command, "vitest") ||
+    hasWord(command, "jest");
 
   // A chained tsc+eslint(+tests) gate needs the combined parser (see above).
   if (hasTsc && hasEslint) {

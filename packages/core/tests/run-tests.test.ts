@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTests } from "../src/validate";
+import { runTests, isRealRed } from "../src/validate";
 
 test("counts collected tests (pass + fail) from a real run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-runtests-"));
@@ -63,6 +63,37 @@ test("surfaces a load failure as an error, not a real test", async () => {
     const r = await runTests("broken.test.ts", dir);
 
     expect(r.errors).toBeGreaterThanOrEqual(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// 1.2: count derivation must read bun's SUMMARY lines, not the first `\d+ pass`
+// found anywhere. A passing test whose console output contains a summary-shaped
+// string used to spoof pass:0/fail:5 from the log line — flipping isRealRed to
+// accept a passing suite as a real RED one (a false TDD-floor pass).
+test("test log output cannot spoof the collected counts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-runtests-"));
+
+  try {
+    await Bun.write(
+      join(dir, "spoof.test.ts"),
+      [
+        'import { test, expect } from "bun:test";',
+        'test("logs a summary-shaped string", () => {',
+        '  console.log("simulating: 0 pass 5 fail  Ran 9 tests");',
+        "  expect(1).toBe(1);",
+        "});",
+      ].join("\n")
+    );
+
+    const r = await runTests("spoof.test.ts", dir);
+
+    // The REAL summary is 1 pass / 0 fail / 1 total, not the logged 0/5/9.
+    expect(r.pass).toBe(1);
+    expect(r.fail).toBe(0);
+    expect(r.total).toBe(1);
+    expect(isRealRed(r)).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

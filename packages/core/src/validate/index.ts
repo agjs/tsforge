@@ -7,6 +7,9 @@ export {
   combinedParser,
   parserFor,
   isEslintJsonLine,
+  normalizeGateOutput,
+  eslintMessageSummary,
+  parseTestFailures,
 } from "./parse";
 export { diffErrorSets, shrank, sameErrorSet } from "./errors";
 export { runTests, isRealRed } from "./run-tests";

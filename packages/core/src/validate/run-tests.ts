@@ -7,6 +7,7 @@
  * the collected count (`total >= 1`) proves the suite actually asserts anything.
  */
 import { runArgvCommand } from "../lib/fs";
+import { normalizeGateOutput } from "./parse";
 
 import type { IRunTestsResult } from "./validate.types";
 
@@ -33,27 +34,46 @@ export function isRealRed(run: IRunTestsResult): boolean {
   return run.errors === 0 && run.total >= 1 && run.pass === 0;
 }
 
-function countTests(output: string): {
+function countTests(rawOutput: string): {
   pass: number;
   fail: number;
   total: number;
   errors: number;
 } {
-  const pass = firstNumber(/(\d+)\s+pass/.exec(output));
-  const fail = firstNumber(/(\d+)\s+fail/.exec(output));
-  const ran = /Ran\s+(\d+)\s+tests?/.exec(output);
-  const total = ran !== null ? firstNumber(ran) : pass + fail;
+  const output = normalizeGateOutput(rawOutput);
+  // Anchor to bun's SUMMARY lines (` N pass`, ` N fail`, ` N error`, `Ran N
+  // tests …`) — the count must be the line's first token — and take the LAST
+  // match. The old code took the FIRST `\d+ pass|fail` ANYWHERE in the merged
+  // stdout+stderr, so a test's own console output (e.g. `console.log("0 pass 5
+  // fail")`) or an assertion diff spoofed the counts, and `isRealRed` could
+  // accept a passing suite as a real RED one — a false TDD-floor pass.
+  const pass = lastLineNumber(output, /^\s*(\d+)\s+pass\b/) ?? 0;
+  const fail = lastLineNumber(output, /^\s*(\d+)\s+fail\b/) ?? 0;
+  const ran = lastLineNumber(output, /^\s*Ran\s+(\d+)\s+tests?\b/);
+  const total = ran ?? pass + fail;
 
-  const counted = firstNumber(/(\d+)\s+error/.exec(output));
-  // bun sometimes prints the banner without a count; treat it as one error.
-  const errors =
-    counted > 0 || !output.includes("Unhandled error") ? counted : 1;
+  const counted = lastLineNumber(output, /^\s*(\d+)\s+errors?\b/);
+  // bun sometimes prints the load-error banner without a leading count; treat a
+  // present-but-uncounted `Unhandled error` as one error so a load failure is
+  // never scored as a clean (errors:0) RED suite.
+  const errors = counted ?? (output.includes("Unhandled error") ? 1 : 0);
 
   return { pass, fail, total, errors };
 }
 
-function firstNumber(match: RegExpExecArray | null): number {
-  const raw = match?.[1];
+/** The number captured by `re` on the LAST line that matches it, or undefined
+ *  when no line does. Per-line + last-match so a summary line wins over any
+ *  earlier log/diff text that happens to contain the same tokens. */
+function lastLineNumber(output: string, re: RegExp): number | undefined {
+  let found: number | undefined;
 
-  return raw === undefined ? 0 : Number(raw);
+  for (const line of output.split("\n")) {
+    const m = re.exec(line);
+
+    if (m?.[1] !== undefined) {
+      found = Number(m[1]);
+    }
+  }
+
+  return found;
 }
