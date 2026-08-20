@@ -1,6 +1,7 @@
 import { join, isAbsolute } from "node:path";
 import type { ITaskRecipe } from "../config/recipes";
 import { isProfileId, PROFILE_IDS, type ProfileId } from "../config/profiles";
+import { isPolicyMode, POLICY_MODES } from "../policy";
 
 /**
  * CLI argument parsing + recipe overlay — pure, no I/O, no module state. Extracted
@@ -455,6 +456,28 @@ export function profileFlagError(
   }
 
   return `unknown --profile "${profile}" — valid: ${PROFILE_IDS.join(", ")}`;
+}
+
+/** Reject an invalid `--policy-mode` value LOUDLY — the mirror of
+ *  `profileFlagError`. Without this a typo (`--policy-mode plna`) was silently
+ *  discarded by every `isPolicyMode(...) ? … : fallback` consumer, landing the
+ *  session on a MORE PERMISSIVE posture than the user asked for (plan-first
+ *  turned off, or a config `bypassPermissions` winning over an intended
+ *  restriction). A safety flag must never fail open on a typo. Returns null when
+ *  the flag is absent (empty) or the value is a valid mode. */
+export function policyModeFlagError(
+  policyMode: string,
+  flagPresent: boolean
+): string | null {
+  if (!flagPresent && policyMode.length === 0) {
+    return null;
+  }
+
+  if (isPolicyMode(policyMode)) {
+    return null;
+  }
+
+  return `unknown --policy-mode "${policyMode}" — valid: ${POLICY_MODES.join(", ")}`;
 }
 
 /** Recipe greenfield role models (split out to keep applyRecipe's complexity in

@@ -1,5 +1,6 @@
 import type { ErrorParser } from "../validate";
 import type { ProfileId } from "../config/profiles";
+import type { PolicyMode } from "../policy";
 import type { IGate } from "../gate/gate-runner";
 import type { MetaBaseline } from "../meta-rules";
 import type { FailureClass } from "../eval/failure-class";
@@ -215,6 +216,10 @@ export interface IRunOptions {
   requireRed?: boolean;
   /** Rule profile override (from a recipe); defaults to tsforge.config.json. */
   profile?: ProfileId;
+  /** Policy-mode override (from the `--policy-mode` CLI flag); when set it wins
+   *  over `tsforge.config.json`'s `policy.mode` for this run. Without it a
+   *  headless/one-shot run ignored the documented flag entirely. */
+  policyMode?: PolicyMode;
   /** The composed gate this run's loop checks each cycle. Defaults to a command
    *  gate built from `task.accept` (brownfield behavior). Modes inject a richer
    *  composed gate (command + differential + judge + …) so the escalation ladder

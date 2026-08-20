@@ -344,12 +344,19 @@ function effectiveParserFor(
  *  rule packs from configured external plugins. */
 /** The optional policy fields for the loop context (kept off `runTask` so its
  *  `exactOptionalPropertyTypes` spreads don't inflate its cognitive complexity). */
-function policyCtxFields(policy: ITsforgeProjectConfig["policy"]): {
+export function policyCtxFields(
+  policy: ITsforgeProjectConfig["policy"],
+  override?: PolicyMode
+): {
   policyMode?: PolicyMode;
   policyRules?: IPolicyRules;
 } {
+  // A `--policy-mode` CLI override wins over the config's `policy.mode` for this
+  // run; the config still supplies the rules.
+  const mode = override ?? policy?.mode;
+
   return {
-    ...(policy?.mode === undefined ? {} : { policyMode: policy.mode }),
+    ...(mode === undefined ? {} : { policyMode: mode }),
     ...(policy?.rules === undefined ? {} : { policyRules: policy.rules }),
   };
 }
@@ -1347,7 +1354,10 @@ export async function runTask(
     messages,
     // Config-driven policy applies to headless runs too (the critical denies
     // already do, mode-independent; this adds `policy.mode`/`rules`).
-    tool: { touched: new Set<string>(), ...policyCtxFields(policy) },
+    tool: {
+      touched: new Set<string>(),
+      ...policyCtxFields(policy, opts.policyMode),
+    },
     gate: {
       parse: effectiveParse,
       stackProfile,

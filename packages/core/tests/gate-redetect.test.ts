@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveGate } from "../src/cli/gate-setup";
 import { parseArgs } from "../src/cli";
-import { profileFlagError } from "../src/cli/args";
+import { profileFlagError, policyModeFlagError } from "../src/cli/args";
 import { isProfileId } from "../src/config/profiles";
 import { autoGateCarry, resumedProfileArg } from "../src/cli/repl";
 import {
@@ -665,6 +665,28 @@ test("profileFlagError rejects invalid/value-less --profile, accepts valid or ab
   expect(profileFlagError("", true)).toContain("unknown --profile");
   // A prototype-chain name → error (not a real id).
   expect(profileFlagError("constructor", true)).toContain("unknown --profile");
+});
+
+// The higher-stakes twin: a typo'd `--policy-mode` must fail loudly, NOT silently
+// discard the value and fall to a MORE PERMISSIVE posture (plan-first off, or a
+// config bypassPermissions winning over an intended restriction).
+test("policyModeFlagError rejects invalid/value-less --policy-mode, accepts valid or absent", () => {
+  // Valid modes → no error.
+  expect(policyModeFlagError("plan", true)).toBeNull();
+  expect(policyModeFlagError("bypassPermissions", true)).toBeNull();
+  expect(policyModeFlagError("acceptEdits", false)).toBeNull();
+  // Not indicated at all → no error (config/default drives it).
+  expect(policyModeFlagError("", false)).toBeNull();
+  // A typo → error (this is what used to silently weaken the posture).
+  expect(policyModeFlagError("plna", true)).toContain(
+    'unknown --policy-mode "plna"'
+  );
+  // Trailing `--policy-mode` with no value → error.
+  expect(policyModeFlagError("", true)).toContain("unknown --policy-mode");
+  // A prototype-chain name → error (Set-backed isPolicyMode rejects it).
+  expect(policyModeFlagError("constructor", true)).toContain(
+    "unknown --policy-mode"
+  );
 });
 
 // A THIS-run explicit gate override must win over a resumed AUTO session — `--continue
