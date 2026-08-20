@@ -5,6 +5,8 @@ import { doPullConventions } from "./pull-conventions";
 import { doHashlineEdit } from "./edit-hashline";
 import { doSearch, doLsp } from "./lsp-ops";
 import { doGit } from "./git-ops";
+import { doGitWrite } from "./git-write-ops";
+import { doGithubRead, doGithubWrite } from "./github-ops";
 import { doAddDependency } from "./add-dependency";
 import { doWebFetch } from "./web-fetch";
 import { doWebSearch } from "./web-search";
@@ -57,6 +59,9 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.moveFile]: (a, c) => doLsp(TOOL_NAME.moveFile, a, c),
   [TOOL_NAME.organizeImports]: (a, c) => doLsp(TOOL_NAME.organizeImports, a, c),
   [TOOL_NAME.gitContext]: doGit,
+  [TOOL_NAME.gitWrite]: doGitWrite,
+  [TOOL_NAME.githubRead]: doGithubRead,
+  [TOOL_NAME.githubWrite]: doGithubWrite,
   [TOOL_NAME.addDependency]: doAddDependency,
   [TOOL_NAME.packageInfo]: doPackageInfo,
   [TOOL_NAME.packageDocs]: doPackageDocs,

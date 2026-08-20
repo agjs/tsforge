@@ -14,6 +14,13 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.typeAt]: "read_file",
   [TOOL_NAME.diagnostics]: "read_file",
   [TOOL_NAME.gitContext]: "read_file",
+  // git/GitHub first-class tools. Reads (git_context above, github_read) → vcs_read
+  // (allowed in every mode incl. plan). Writes (git_write, github_write) → vcs_write
+  // (allowed in default/acceptEdits, denied in plan/ci/dontAsk = capability-as-consent).
+  // Absent here → `unknown` → denied everywhere (the silent-deny DOA class).
+  [TOOL_NAME.githubRead]: "vcs_read",
+  [TOOL_NAME.gitWrite]: "vcs_write",
+  [TOOL_NAME.githubWrite]: "vcs_write",
   [TOOL_NAME.edit]: "edit_file",
   [TOOL_NAME.editLines]: "edit_file",
   [TOOL_NAME.organizeImports]: "edit_file",

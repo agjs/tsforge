@@ -27,6 +27,7 @@ import { composeMessage } from "../loop/prompt";
 import { compactSummaryLine } from "../loop/context-hygiene";
 import { resolveImageInput } from "./image-input";
 import { resolveImageCapabilityFlags } from "../loop/tools/image-tools";
+import { resolveGithubCapability } from "../loop/tools/github-ops";
 import {
   captureClipboardImageToFile,
   readClipboardText,
@@ -749,6 +750,14 @@ function installTerminalRestore(
   }
 }
 
+/** Print the one-line boot notice when the git/GitHub capability is on. Kept a
+ *  module helper so its branch stays out of `repl`'s cognitive-complexity budget. */
+function announceGithub(on: boolean): void {
+  if (on) {
+    process.stdout.write("  ↳ github: on (git + PR review via gh)\n");
+  }
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -781,6 +790,9 @@ export async function repl(args: ICliArgs): Promise<number> {
   // generate_image are offered and whether attached images get described.
   // Resolved up front (a boot IO), so the wiring below stays synchronous.
   const imageCaps = await resolveImageCapabilityFlags();
+  // The `github` capability = the user's consent to git/GitHub operations (gh
+  // installed + authenticated). Resolved once up front like the image caps.
+  const githubCap = await resolveGithubCapability(undefined, args.dir);
 
   let session = initialSession;
   let activeName = initialActiveName;
@@ -1088,9 +1100,11 @@ export async function repl(args: ICliArgs): Promise<number> {
   const wireImages = (): void => {
     session.setImageCapabilities(imageCaps);
     session.setPreviewImage(previewGeneratedImage);
+    session.setGithubCapability(githubCap);
   };
 
   wireImages();
+  announceGithub(githubCap);
 
   if (imageCaps.vision || imageCaps.imageGen) {
     const on = [

@@ -456,6 +456,12 @@ const SPECIAL_TOOLS = new Set<string>([
   TOOL_NAME.script,
   TOOL_NAME.generateImage,
   TOOL_NAME.check,
+  // git_write / github_write mutate git + the GitHub remote (commit/push, PR
+  // create/comment, resolve thread) — NOT gated workspace source — so they report
+  // no scoped mutation and never re-gate. Side-effecting-but-unscoped, exactly
+  // like `run`: special-with-reason, not mutating. (github_read is read-only.)
+  TOOL_NAME.gitWrite,
+  TOOL_NAME.githubWrite,
   // Checklist mutations touch plan JSON under .tsforge/, not gated source —
   // no scoped edit count / re-gate. task_list + present_plan are read-only.
   TOOL_NAME.taskFocus,

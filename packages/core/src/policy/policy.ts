@@ -75,6 +75,8 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   "mcp_tool",
   "plugin_tool",
   "spawn_agent",
+  "vcs_read",
+  "vcs_write",
   "unknown",
 ];
 
@@ -124,6 +126,8 @@ const MODE_MATRIX: Readonly<
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
+    vcs_read: "allow",
+    vcs_write: "allow",
     unknown: "ask",
   },
   plan: {
@@ -139,6 +143,10 @@ const MODE_MATRIX: Readonly<
     plugin_tool: "deny",
     harness_tool: "deny",
     spawn_agent: "allow",
+    // Reads (git log/diff, gh pr view, review threads) are plan-safe; a git/gh
+    // WRITE (commit/push/comment) is a mutation → denied while planning.
+    vcs_read: "allow",
+    vcs_write: "deny",
     unknown: "deny",
   },
   acceptEdits: {
@@ -159,6 +167,10 @@ const MODE_MATRIX: Readonly<
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
+    // Interactive: the user enabling the `github` capability is their consent
+    // to git/GitHub writes (never merge — human-only).
+    vcs_read: "allow",
+    vcs_write: "allow",
     unknown: "deny",
   },
   ci: {
@@ -179,6 +191,10 @@ const MODE_MATRIX: Readonly<
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
+    // Non-interactive: reads are fine, but a git/GitHub write must not happen
+    // unattended without oversight.
+    vcs_read: "allow",
+    vcs_write: "deny",
     unknown: "deny",
   },
   dontAsk: {
@@ -199,6 +215,9 @@ const MODE_MATRIX: Readonly<
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
+    // Non-interactive: same as ci — reads allowed, writes denied unattended.
+    vcs_read: "allow",
+    vcs_write: "deny",
     unknown: "deny",
   },
   bypassPermissions: {
@@ -212,6 +231,8 @@ const MODE_MATRIX: Readonly<
     plugin_tool: "allow",
     harness_tool: "allow",
     spawn_agent: "allow",
+    vcs_read: "allow",
+    vcs_write: "allow",
     unknown: "allow",
   },
 };
@@ -231,11 +252,13 @@ function riskOf(kind: ActionKind): RiskLevel {
     kind === "network" ||
     kind === "mcp_tool" ||
     kind === "plugin_tool" ||
+    kind === "vcs_write" ||
     WRITE_KINDS.has(kind)
   ) {
     return "medium";
   }
 
+  // vcs_read (git/gh inspection) falls here — low, like read_file.
   return "low";
 }
 

@@ -40,6 +40,11 @@ describe("classifyAction", () => {
       ["read", "read_file"],
       ["search", "read_file"],
       ["git_context", "read_file"],
+      // git/GitHub first-class: read → vcs_read, writes → vcs_write. Absent from
+      // KIND_BY_TOOL these would fall to `unknown` → silent deny everywhere.
+      ["github_read", "vcs_read"],
+      ["git_write", "vcs_write"],
+      ["github_write", "vcs_write"],
       ["edit", "edit_file"],
       ["edit_lines", "edit_file"],
       ["organize_imports", "edit_file"],
@@ -88,6 +93,34 @@ describe("classifyAction", () => {
           interactive: false,
         }).decision
       ).toBe("allow");
+    }
+  });
+
+  test("vcs_read is allowed in EVERY mode (gh reads are plan-safe)", () => {
+    const read = action("vcs_read", { toolName: "github_read" });
+
+    for (const mode of [
+      "default",
+      "plan",
+      "acceptEdits",
+      "ci",
+      "dontAsk",
+    ] as const) {
+      expect(evaluatePolicy(read, ctx(mode)).decision).toBe("allow");
+    }
+  });
+
+  test("vcs_write is allowed only in interactive modes (capability = consent)", () => {
+    const write = action("vcs_write", { toolName: "git_write" });
+
+    // Allowed where the human is driving.
+    for (const mode of ["default", "acceptEdits"] as const) {
+      expect(evaluatePolicy(write, ctx(mode)).decision).toBe("allow");
+    }
+
+    // Denied in plan (read-only) and the unattended modes — no autonomous push.
+    for (const mode of ["plan", "ci", "dontAsk"] as const) {
+      expect(evaluatePolicy(write, ctx(mode)).decision).toBe("deny");
     }
   });
 

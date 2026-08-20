@@ -23,6 +23,9 @@ export const TOOL_NAME = {
   deleteFile: "delete",
   organizeImports: "organize_imports",
   gitContext: "git_context",
+  gitWrite: "git_write",
+  githubRead: "github_read",
+  githubWrite: "github_write",
   addDependency: "add_dependency",
   packageInfo: "package_info",
   packageDocs: "package_docs",
@@ -78,6 +81,15 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // git_context only inspects history/diffs — no workspace mutation — so it is a
   // plan-mode tool too (scope a review/fix while planning, before any edit).
   [TOOL_NAME.gitContext]: { readOnly: true, scriptExposable: true },
+  // github_read inspects the REMOTE (gh pr view/diff/checks, CI logs, review
+  // threads) — no mutation, so plan-mode-safe. Not script-exposable (network +
+  // per-call gh subprocess). git_write / github_write MUTATE (commit/push, PR
+  // create/comment, resolve a thread) → not read-only (withheld in plan mode)
+  // and not script-exposable (side-effecting network/process). Gated behind the
+  // `github` capability; the write handlers also hard-check ctx.github.
+  [TOOL_NAME.githubRead]: { readOnly: true, scriptExposable: false },
+  [TOOL_NAME.gitWrite]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.githubWrite]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.deleteFile]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
@@ -696,6 +708,148 @@ export const GIT_CONTEXT_TOOL = {
         maxChars: {
           type: "number",
           description: "cap on returned characters (default 4000)",
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** The house style for a PR description the harness writes. A human, not a diff
+ *  reader, is the audience: say WHY (the problem/need), WHAT changed, and the
+ *  OUTCOME (how it's better). Kept short and plain — never line counts, file
+ *  tallies, or code mechanics; the reviewer reads the diff for those. Referenced
+ *  by the `github_write` `body` schema and the drive-loop guidance so there is
+ *  ONE source of truth. */
+export const PR_BODY_GUIDANCE =
+  "Write for a human, not a diff reader. Say WHY this change was needed (the " +
+  "problem or goal), WHAT it does, and the OUTCOME — how it makes things better. " +
+  "Keep it short, plain, and clear; do NOT be verbose. NEVER mention line counts, " +
+  "file counts, or code mechanics — the reviewer reads the diff for that.";
+
+/** A stable marker in the system prompt so the git/GitHub guidance is appended
+ *  exactly once across relaunches/resumes (mirrors DELEGATION_MARKER). */
+export const GITHUB_MARKER = "## Working with git and GitHub";
+
+/** Guidance appended to the system prompt only when the `github` capability is on.
+ *  Teaches the drive loop and the two hard rules (never merge/close; human-readable
+ *  PR bodies). Kept short — the tool descriptions carry the per-op detail. */
+export const GITHUB_DRIVE_GUIDANCE = `${GITHUB_MARKER}
+You can use git and GitHub directly. To get a change reviewed: make a branch (git_write branch), commit your work (git_write commit), push it (git_write push with setUpstream on the first push), then open a PR (github_write pr_create). After pushing, poll CI with github_read checks; if a check is red, pull github_read failing_logs, fix the code, and push again. Read reviewer feedback (human and Copilot) with github_read review_threads, address each comment in code, reply with github_write pr_comment if useful, and mark it done with github_write resolve_thread using the thread id.
+
+Two hard rules:
+- NEVER merge or close a PR — that is the human's call. When CI is green and every thread is resolved, say the PR is ready for a human to merge, and stop.
+- ${PR_BODY_GUIDANCE}`;
+
+/** Read-only GitHub inspection via the `gh` CLI. Offered only when the `github`
+ *  capability is on (gh installed + authenticated). op is a fixed allowlist. */
+export const GITHUB_READ_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.githubRead,
+    description:
+      "Inspect a GitHub pull request and its CI (read-only). ops: 'pr_view' (title/state/branches/mergeable/review-decision/checks summary), 'pr_diff' (the PR's diff), 'checks' (per-check CI status), 'failing_logs' (the failing CI run's logs, tail), 'review_threads' (UNRESOLVED review threads — Copilot + human — each with its id, file:line, and comments; use the id with github_write resolve_thread). Defaults to the current branch's PR when 'pr' is omitted.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          enum: [
+            "pr_view",
+            "pr_diff",
+            "checks",
+            "failing_logs",
+            "review_threads",
+          ],
+        },
+        pr: {
+          type: "string",
+          description:
+            "PR number or head branch; default is the current branch's PR",
+        },
+        maxChars: {
+          type: "number",
+          description: "cap on returned characters (default 4000)",
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** Local git WRITE via the git binary. Mutating → withheld in plan mode and
+ *  denied in ci/dontAsk (see the vcs_write policy kind). Deliberately NO
+ *  force/rebase/amend/reset/history-rewrite/branch-delete. */
+export const GIT_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.gitWrite,
+    description:
+      "Make a local git change. ops: 'branch' (create + switch to `name`), 'checkout' (switch to `name`/`ref`), 'commit' (stage `paths` — or everything when `all` — then commit with `message`), 'push' (push the current branch; set `setUpstream` for a new branch). No force-push, rebase, amend, reset, or branch deletion.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          enum: ["branch", "checkout", "commit", "push"],
+        },
+        name: { type: "string", description: "branch name (branch/checkout)" },
+        ref: { type: "string", description: "ref to check out (checkout)" },
+        message: { type: "string", description: "commit message (commit)" },
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "files to stage for 'commit' (omit + set all:true for all)",
+        },
+        all: {
+          type: "boolean",
+          description: "stage all tracked changes before committing",
+        },
+        setUpstream: {
+          type: "boolean",
+          description:
+            "push with -u origin <branch> (first push of a new branch)",
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** GitHub WRITE via `gh` (create/comment on a PR, resolve a review thread).
+ *  Mutating → gated like git_write. NEVER merges or closes a PR — that is
+ *  human-only. The `body` field carries the human-readable PR-description style. */
+export const GITHUB_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.githubWrite,
+    description:
+      "Act on a GitHub pull request. ops: 'pr_create' (open a PR for the pushed branch — needs `title`, `body`, `base`; set `draft` for a draft), 'pr_comment' (add a comment — `body`, optional `pr`), 'resolve_thread' (mark a review thread resolved — `threadId` from github_read review_threads). This NEVER merges or closes a PR; when the PR is green and threads are addressed, report that it's ready for a human to merge.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          enum: ["pr_create", "pr_comment", "resolve_thread"],
+        },
+        title: { type: "string", description: "PR title (pr_create)" },
+        body: {
+          type: "string",
+          description: `PR/comment body. ${PR_BODY_GUIDANCE}`,
+        },
+        base: {
+          type: "string",
+          description: "base branch to open the PR against (pr_create)",
+        },
+        draft: {
+          type: "boolean",
+          description: "open the PR as a draft (pr_create)",
+        },
+        pr: { type: "string", description: "PR number or branch (pr_comment)" },
+        threadId: {
+          type: "string",
+          description: "review-thread id to resolve (resolve_thread)",
         },
       },
       required: ["op"],

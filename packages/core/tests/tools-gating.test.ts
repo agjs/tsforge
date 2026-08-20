@@ -68,6 +68,30 @@ test("git_context is absent on scratch (no history) and removable by flag", () =
   expect(names(toolsFor(true))).not.toContain("git_context");
 });
 
+test("git/GitHub tools are absent unless the github capability is on", () => {
+  const off = names(toolsFor(true));
+
+  expect(off).not.toContain("github_read");
+  expect(off).not.toContain("git_write");
+  expect(off).not.toContain("github_write");
+});
+
+test("the github capability advertises all three git/GitHub tools", () => {
+  const on = names(toolsFor(true, { github: true }));
+
+  expect(on).toContain("github_read");
+  expect(on).toContain("git_write");
+  expect(on).toContain("github_write");
+});
+
+test("git/GitHub tools are offered on scratch runs too (a fresh repo still commits)", () => {
+  const on = names(toolsFor(false, { github: true }));
+
+  expect(on).toContain("github_read");
+  expect(on).toContain("git_write");
+  expect(on).toContain("github_write");
+});
+
 test("web tools are absent unless TSFORGE_WEB=1", () => {
   const n = names(toolsFor(true));
 

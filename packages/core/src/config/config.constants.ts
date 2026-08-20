@@ -7,6 +7,7 @@ export const ENV_FLAG = {
   webTools: "TSFORGE_WEB",
   noScriptTool: "TSFORGE_NO_SCRIPT",
   noGitTool: "TSFORGE_NO_GIT_TOOL",
+  noGithub: "TSFORGE_NO_GITHUB",
   basicInput: "TSFORGE_BASIC_INPUT",
   noDelegation: "TSFORGE_NO_DELEGATION",
   expertRescue: "TSFORGE_EXPERT_RESCUE",
