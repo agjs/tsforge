@@ -11,6 +11,7 @@ import {
 } from "../../agent/agent-scheduler";
 import type { Reporter } from "../loop.types";
 import { buildTsService } from "../turn";
+import { ENV_FLAG } from "../../config";
 import { LENSES, lensRubric } from "./lenses";
 import { callerSignal } from "./signals";
 import type {
@@ -20,8 +21,25 @@ import type {
   Severity,
 } from "./review.types";
 
-const MAX_FILES = 25;
-const DIFF_CHARS = 6000;
+/** Bounded positive-int env read (default when unset/invalid, clamped to [min,max]). */
+function envInt(name: string, def: number, min: number, max: number): number {
+  const v = Number(process.env[name]);
+
+  return Number.isFinite(v) && v >= min ? Math.min(Math.floor(v), max) : def;
+}
+
+/** Max changed files reviewed in one run (raise with TSFORGE_REVIEW_MAX_FILES).
+ *  The fan-out scheduler queues excess at `agents.concurrency`, so a higher cap
+ *  just reviews more — it doesn't spawn everything at once. */
+export function reviewMaxFiles(): number {
+  return envInt(ENV_FLAG.reviewMaxFiles, 100, 1, 1000);
+}
+
+/** Per-file diff char budget before truncation (raise with TSFORGE_REVIEW_DIFF_CHARS). */
+export function reviewDiffChars(): number {
+  return envInt(ENV_FLAG.reviewDiffChars, 12000, 500, 200000);
+}
+
 const WINDOW = 8;
 const LENS_IDS = new Set<string>(LENSES.map((l) => l.id));
 
@@ -137,7 +155,7 @@ function splitFiles(out: string): string[] {
 /** The set of changed source files to review, with coverage bookkeeping so a
  *  capped run never reports as if it were complete. */
 interface IChangeSet {
-  /** Files to review (deduped, capped at MAX_FILES). */
+  /** Files to review (deduped, capped at reviewMaxFiles()). */
   files: string[];
   /** Total candidate files BEFORE the cap (files.length when nothing was dropped). */
   totalCandidates: number;
@@ -180,7 +198,7 @@ async function collectChangedFiles(
   }
 
   return {
-    files: all.slice(0, MAX_FILES),
+    files: all.slice(0, reviewMaxFiles()),
     totalCandidates: all.length,
     untracked,
   };
@@ -275,9 +293,11 @@ async function fileDiff(
         staged ? ["diff", "--staged", "--", file] : ["diff", base, "--", file]
       );
 
+  const diffChars = reviewDiffChars();
+
   return {
-    diff: raw.slice(0, DIFF_CHARS),
-    truncated: raw.length > DIFF_CHARS,
+    diff: raw.slice(0, diffChars),
+    truncated: raw.length > diffChars,
     ranges: changedLineRanges(raw),
   };
 }
@@ -583,7 +603,7 @@ export async function reviewChange(
 
   if (totalCandidates > files.length) {
     log(
-      `⚠ coverage: ${totalCandidates} changed files, reviewing the first ${files.length} (MAX_FILES=${MAX_FILES})`
+      `⚠ coverage: ${totalCandidates} changed files, reviewing the first ${files.length} (MAX_FILES=${reviewMaxFiles()})`
     );
   }
 
@@ -755,13 +775,13 @@ export function formatReport(report: IReviewReport): string {
 
   if (total > reviewed) {
     coverageNotes.push(
-      `⚠ coverage: reviewed ${reviewed} of ${total} changed file(s); ${total - reviewed} not reviewed (cap ${MAX_FILES}) — re-run scoped to cover them.`
+      `⚠ coverage: reviewed ${reviewed} of ${total} changed file(s); ${total - reviewed} not reviewed (cap ${reviewMaxFiles()}) — re-run scoped to cover them.`
     );
   }
 
   if (truncated.length > 0) {
     coverageNotes.push(
-      `⚠ ${truncated.length} file(s) had diffs truncated at ${DIFF_CHARS} chars — review saw only a prefix: ${truncated.join(", ")}`
+      `⚠ ${truncated.length} file(s) had diffs truncated at ${reviewDiffChars()} chars — review saw only a prefix: ${truncated.join(", ")}`
     );
   }
 

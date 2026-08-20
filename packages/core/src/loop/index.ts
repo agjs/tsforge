@@ -89,6 +89,7 @@ export {
 export {
   reviewChange,
   formatReport,
+  formatReviewCard,
   LENSES,
   type IReviewOptions,
   type IReviewReport,

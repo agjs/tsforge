@@ -239,6 +239,24 @@ test("the diff is XML-wrapped in the USER message (untrusted-data framing)", asy
   expect(sink.user).toContain("</diff>");
 });
 
+test("TSFORGE_REVIEW_MAX_FILES caps the reviewed set and still warns loudly", async () => {
+  const tri = makeTriRepo(); // 3 changed files
+
+  process.env.TSFORGE_REVIEW_MAX_FILES = "2";
+
+  try {
+    const report = await reviewChange(stub(FINDINGS, true), tri);
+
+    expect(report.changedFiles.length).toBe(2);
+    expect(report.totalChangedFiles).toBe(3);
+    // the report must NOT read as complete — coverage warning fires
+    expect(formatReport(report)).toContain("reviewed 2 of 3");
+  } finally {
+    delete process.env.TSFORGE_REVIEW_MAX_FILES;
+    rmSync(tri, { recursive: true, force: true });
+  }
+});
+
 test("the security and consistency lenses ship in the rubric", () => {
   const ids = LENSES.map((l) => l.id);
 
