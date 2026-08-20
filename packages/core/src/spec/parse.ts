@@ -9,9 +9,19 @@ import type { ISpec, ITask } from "./spec.types";
  * lines. Richer fields (needs/covers/docs) land in the spec-engine slice.
  */
 export function parseSpec(markdown: string): ISpec {
-  const fm = parseFrontmatter(markdown);
-  const tasks = parseTasks(markdown);
-  const intent = parseSection(markdown, "Acceptance criteria");
+  // Normalize line endings first. A CRLF-authored spec otherwise fails the
+  // `^---\n` frontmatter match, dropping `mode`/`id`/`verify` to their defaults
+  // — silently flipping `mode: existing` to `scratch`, which then DELETES the
+  // task files (self-harness startRed). Fold CR/CRLF to LF so parsing is
+  // byte-ending-agnostic.
+  const md = markdown.replace(/\r\n?/g, "\n");
+  const fm = parseFrontmatter(md);
+  // Scope task parsing to the `## Tasks` section: a plain numbered list under
+  // `## Acceptance criteria` (`1. …`) would otherwise be scanned as phantom
+  // tasks with empty `accept`, colliding ids with the real tasks and blocking
+  // the spec on a task the author never wrote.
+  const tasks = parseTasks(parseSection(md, "Tasks"));
+  const intent = parseSection(md, "Acceptance criteria");
 
   if (intent.length > 0) {
     for (const task of tasks) {
