@@ -4,11 +4,13 @@ import {
   doLinearWrite,
   doLinearStart,
   resolveLinearCapability,
-  mcpSchemasForAdvertisement,
-  lintCardText,
-  type ILinearRegistry,
   type ILinearDeps,
 } from "../src/loop/tools/linear-ops";
+import {
+  lintHumanText,
+  suppressCuratedSchemas,
+  type IIntegrationRegistry,
+} from "../src/loop/tools/integration-common";
 import type { IToolContext } from "../src/loop/tools";
 
 const ctx = (linear = true): IToolContext => ({
@@ -22,11 +24,11 @@ const ctx = (linear = true): IToolContext => ({
 /** A fake Linear MCP registry: routes `mcp__linear__<short>` to canned JSON, and
  *  records every call. Only the short names in `tools` are "exposed". */
 function fakeRegistry(tools: Record<string, string>): {
-  reg: ILinearRegistry;
+  reg: IIntegrationRegistry;
   calls: { name: string; args: Record<string, unknown> }[];
 } {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
-  const reg: ILinearRegistry = {
+  const reg: IIntegrationRegistry = {
     has: (name) => Object.keys(tools).some((s) => name === `mcp__linear__${s}`),
     callTool: async (name, args) => {
       calls.push({ name, args });
@@ -39,7 +41,10 @@ function fakeRegistry(tools: Record<string, string>): {
   return { reg, calls };
 }
 
-const deps = (reg: ILinearRegistry, run?: ILinearDeps["run"]): ILinearDeps => ({
+const deps = (
+  reg: IIntegrationRegistry,
+  run?: ILinearDeps["run"]
+): ILinearDeps => ({
   registry: reg,
   run:
     run ??
@@ -214,12 +219,12 @@ test("a missing curated tool degrades to a clear message", async () => {
   expect(out).toContain("exposes none of");
 });
 
-test("lintCardText: intent passes; empty + mechanics are flagged", () => {
+test("lintHumanText: intent passes; empty + mechanics are flagged", () => {
   expect(
-    lintCardText("Checkout is slow for large carts; make it feel instant.")
+    lintHumanText("Checkout is slow for large carts; make it feel instant.")
   ).toBeNull();
-  expect(lintCardText("")).toContain("empty");
-  expect(lintCardText("touched 5 files")).toContain("line/file");
+  expect(lintHumanText("")).toContain("empty");
+  expect(lintHumanText("touched 5 files")).toContain("line/file");
 });
 
 test("resolveLinearCapability: on iff a `linear` server is connected + not killed", () => {
@@ -236,7 +241,7 @@ test("resolveLinearCapability: on iff a `linear` server is connected + not kille
   );
 });
 
-test("raw mcp__linear__* schemas are suppressed by default, kept with TSFORGE_LINEAR_RAW", () => {
+test("suppressCuratedSchemas drops a suppressed server's raw tools, keeps others", () => {
   const schemas = [
     {
       type: "function" as const,
@@ -256,15 +261,11 @@ test("raw mcp__linear__* schemas are suppressed by default, kept with TSFORGE_LI
     },
   ];
 
-  // linear off → passthrough
-  expect(mcpSchemasForAdvertisement(schemas, false)).toHaveLength(2);
+  // no servers suppressed → passthrough
+  expect(suppressCuratedSchemas(schemas, [])).toHaveLength(2);
 
-  // linear on → linear raw tools dropped, other servers kept
-  const trimmed = mcpSchemasForAdvertisement(schemas, true);
+  // suppress linear → its raw tools dropped, other servers kept
+  const trimmed = suppressCuratedSchemas(schemas, ["linear"]);
 
   expect(trimmed.map((s) => s.function.name)).toEqual(["mcp__notion__search"]);
-
-  // raw flag re-exposes them
-  process.env.TSFORGE_LINEAR_RAW = "1";
-  expect(mcpSchemasForAdvertisement(schemas, true)).toHaveLength(2);
 });

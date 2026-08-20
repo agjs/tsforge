@@ -12,6 +12,11 @@ export const ENV_FLAG = {
   // `mcp__linear__*` tools alongside the curated verbs (off by default).
   noLinear: "TSFORGE_NO_LINEAR",
   linearRaw: "TSFORGE_LINEAR_RAW",
+  // Notion + Sentry integrations: same kill-switch + raw-passthrough pair as Linear.
+  noNotion: "TSFORGE_NO_NOTION",
+  notionRaw: "TSFORGE_NOTION_RAW",
+  noSentry: "TSFORGE_NO_SENTRY",
+  sentryRaw: "TSFORGE_SENTRY_RAW",
   basicInput: "TSFORGE_BASIC_INPUT",
   noDelegation: "TSFORGE_NO_DELEGATION",
   expertRescue: "TSFORGE_EXPERT_RESCUE",

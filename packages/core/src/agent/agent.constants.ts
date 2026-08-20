@@ -29,6 +29,10 @@ export const TOOL_NAME = {
   linearRead: "linear_read",
   linearWrite: "linear_write",
   linearStart: "linear_start",
+  notionRead: "notion_read",
+  notionWrite: "notion_write",
+  sentryRead: "sentry_read",
+  sentryWrite: "sentry_write",
   addDependency: "add_dependency",
   packageInfo: "package_info",
   packageDocs: "package_docs",
@@ -100,6 +104,14 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.linearRead]: { readOnly: true, scriptExposable: false },
   [TOOL_NAME.linearWrite]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.linearStart]: { readOnly: false, scriptExposable: false },
+  // Notion + Sentry, same posture as Linear: the *_read verbs inspect (plan-safe),
+  // the *_write verbs mutate an external service (withheld in plan, denied in
+  // ci/dontAsk). None script-exposable (network + MCP). Gated behind their
+  // capability; write handlers also hard-check ctx.notion / ctx.sentry.
+  [TOOL_NAME.notionRead]: { readOnly: true, scriptExposable: false },
+  [TOOL_NAME.notionWrite]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.sentryRead]: { readOnly: true, scriptExposable: false },
+  [TOOL_NAME.sentryWrite]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.deleteFile]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
@@ -681,6 +693,10 @@ export const LSP_TOOLS = [
   },
 ];
 
+/** Shared `maxChars` param description for the read tools (git/github/linear/
+ *  notion/sentry) — one literal so it isn't duplicated across their schemas. */
+export const MAX_CHARS_DESC = "cap on returned characters (default 4000)";
+
 /** Read-only, structured git introspection — scope a review or a fix to what
  *  actually changed. Wraps the `git` binary via an explicit argv (no shell); the
  *  op is a fixed read-only allowlist. Offered on existing-code runs (gated like
@@ -717,7 +733,7 @@ export const GIT_CONTEXT_TOOL = {
         },
         maxChars: {
           type: "number",
-          description: "cap on returned characters (default 4000)",
+          description: MAX_CHARS_DESC,
         },
       },
       required: ["op"],
@@ -779,7 +795,7 @@ export const GITHUB_READ_TOOL = {
         },
         maxChars: {
           type: "number",
-          description: "cap on returned characters (default 4000)",
+          description: MAX_CHARS_DESC,
         },
       },
       required: ["op"],
@@ -915,7 +931,7 @@ export const LINEAR_READ_TOOL = {
         query: { type: "string", description: "search text (search)" },
         maxChars: {
           type: "number",
-          description: "cap on returned characters (default 4000)",
+          description: MAX_CHARS_DESC,
         },
       },
       required: ["op"],
@@ -971,6 +987,119 @@ export const LINEAR_START_TOOL = {
         id: { type: "string", description: "issue identifier, e.g. ENG-123" },
       },
       required: ["id"],
+    },
+  },
+};
+
+// ── Notion ───────────────────────────────────────────────────────────────────
+
+/** A stable marker so the Notion guidance is appended to the system prompt once. */
+export const NOTION_MARKER = "## Working with Notion";
+
+/** Guidance appended when the `notion` capability is on. Notion is the KNOWLEDGE
+ *  layer — pull context before/while working; capture durable notes for humans. */
+export const NOTION_DRIVE_GUIDANCE = `${NOTION_MARKER}
+You can read and write Notion — the team's knowledge base. Before or while working, use notion_read search to find relevant pages and notion_read page to read one, so your work reflects the team's existing context and decisions. To capture something durable (a decision, a gotcha, a summary), use notion_write create or append.
+
+${LINEAR_CARD_GUIDANCE}`;
+
+/** Read-only Notion inspection via curated verbs over the Notion MCP server. */
+export const NOTION_READ_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.notionRead,
+    description:
+      "Read the team's Notion knowledge base. ops: 'search' (find pages matching `query` — returns titles + ids), 'page' (read one page's content by `id`). Use it to pull context, decisions, and gotchas before or while working.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["search", "page"] },
+        query: { type: "string", description: "search text (search)" },
+        id: { type: "string", description: "page id or url (page)" },
+        maxChars: {
+          type: "number",
+          description: MAX_CHARS_DESC,
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** Notion WRITE via curated verbs over MCP — create a page, append to one. */
+export const NOTION_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.notionWrite,
+    description:
+      "Write to Notion. ops: 'create' (a new page — `title`, `content`, optional `parent` page id), 'append' (add `content` to an existing page `id`). Use it to record a decision, a summary, or a gotcha for the team.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["create", "append"] },
+        title: { type: "string", description: "page title (create)" },
+        content: {
+          type: "string",
+          description: `page/section content (create/append). ${LINEAR_CARD_GUIDANCE}`,
+        },
+        parent: {
+          type: "string",
+          description: "parent page id to nest under (create; optional)",
+        },
+        id: { type: "string", description: "page id to append to (append)" },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+// ── Sentry ───────────────────────────────────────────────────────────────────
+
+/** A stable marker so the Sentry guidance is appended to the system prompt once. */
+export const SENTRY_MARKER = "## Working with Sentry";
+
+/** Guidance appended when the `sentry` capability is on. Sentry is the BUG source —
+ *  read the issue + stacktrace to fix it; a Linear card is usually already linked. */
+export const SENTRY_DRIVE_GUIDANCE = `${SENTRY_MARKER}
+You can read Sentry issues to fix bugs. Use sentry_read issue to get the error, its culprit, how often it happens, and the stacktrace, then fix it in code. A Sentry bug is usually already linked to a Linear card — check for it and work through that card's branch. Once the fix has shipped, sentry_write resolve marks the issue resolved.`;
+
+/** Read-only Sentry inspection via curated verbs over the Sentry MCP server. */
+export const SENTRY_READ_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.sentryRead,
+    description:
+      "Read Sentry errors. ops: 'issue' (one issue by `id` — title, culprit, level, how many times it's happened, permalink, and the latest event's stacktrace), 'search' (find issues matching `query`). Use it to understand a bug before fixing it.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["issue", "search"] },
+        id: { type: "string", description: "Sentry issue id/short-id (issue)" },
+        query: { type: "string", description: "search text (search)" },
+        maxChars: {
+          type: "number",
+          description: MAX_CHARS_DESC,
+        },
+      },
+      required: ["op"],
+    },
+  },
+};
+
+/** Sentry WRITE via a curated verb over MCP — resolve an issue after a fix ships. */
+export const SENTRY_WRITE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.sentryWrite,
+    description:
+      "Act on a Sentry issue. op: 'resolve' (mark issue `id` resolved — do this only once the fix has actually shipped). Deliberately narrow: no deleting or bulk-mutating issues.",
+    parameters: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["resolve"] },
+        id: { type: "string", description: "Sentry issue id/short-id" },
+      },
+      required: ["op", "id"],
     },
   },
 };

@@ -1,8 +1,16 @@
-import { mcpToolName, type IToolSchema } from "../../mcp";
 import { flags } from "../../config";
 import { runArgvCommand } from "../../lib/fs";
 import { str, reject, type IToolContext } from "./tool-context";
 import { unsafe, intArg, capHead, pick, type VcsRunner } from "./vcs-common";
+import {
+  callFirst,
+  field,
+  isRecord,
+  jsonParseSafe,
+  lintHumanText,
+  resolveMcpCapability,
+  type IIntegrationRegistry,
+} from "./integration-common";
 import { LOOP_LIMITS } from "../loop.constants";
 
 /** The required config key for the Linear MCP server. The curated verbs address
@@ -14,117 +22,17 @@ const CAPABILITY_OFF =
   "the Linear capability is off — add a `linear` MCP server to tsforge.config.json " +
   "`mcpServers` (and ensure TSFORGE_NO_LINEAR is unset).";
 
-/** The registry surface the curated verbs need: existence check + invoke. The real
- *  McpRegistry satisfies this structurally; tests pass a fake. */
-export interface ILinearRegistry {
-  has(name: string): boolean;
-  callTool(name: string, args: Record<string, unknown>): Promise<string>;
-}
-
 export interface ILinearDeps {
-  registry: ILinearRegistry | undefined;
+  registry: IIntegrationRegistry | undefined;
   run: VcsRunner;
 }
 
-/** callTool never throws — a failure comes back as a sentinel string. */
-function isMcpError(raw: string): boolean {
-  return (
-    raw.startsWith("unknown MCP") ||
-    raw.startsWith("MCP tool") ||
-    raw.trim().length === 0
-  );
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    const parsed: unknown = JSON.parse(text);
-
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Resolve the `linear` capability = the user's consent to Linear operations. On iff
- * the TSFORGE_NO_LINEAR kill-switch is unset AND a server named exactly `linear` is
- * connected in the MCP registry (configured + reachable). Sync — the registry is
- * already connected by the driver. Never throws (any error → false, fail closed).
- */
+/** Resolve the `linear` capability = consent (a `linear` MCP server connected, the
+ *  kill-switch unset). Never throws. */
 export function resolveLinearCapability(
   registry: { serverNames(): string[] } | null | undefined
 ): boolean {
-  try {
-    if (flags.noLinear() || registry === null || registry === undefined) {
-      return false;
-    }
-
-    return registry.serverNames().includes(LINEAR_SERVER);
-  } catch {
-    return false;
-  }
-}
-
-/** The advertised MCP schemas, with the raw `mcp__linear__*` tools removed when the
- *  curated Linear capability owns them (unless TSFORGE_LINEAR_RAW re-exposes them).
- *  The tools stay in the registry and remain dispatchable — this only trims the
- *  MODEL'S advertised tool list so it isn't drowned by ~30 raw Linear tools on top
- *  of the 3 curated verbs. Off (linearOn=false) ⇒ unchanged passthrough. */
-export function mcpSchemasForAdvertisement(
-  schemas: readonly IToolSchema[],
-  linearOn: boolean
-): IToolSchema[] {
-  if (!linearOn || flags.linearRaw()) {
-    return [...schemas];
-  }
-
-  const prefix = `mcp__${LINEAR_SERVER}__`;
-
-  return schemas.filter((s) => !s.function.name.startsWith(prefix));
-}
-
-/** Call the first Linear MCP tool (by short name) the registry actually exposes —
- *  tolerates naming differences between Linear MCP builds (create_issue vs
- *  save_issue, …). Returns the raw text, or an error string when none exist / the
- *  call failed. */
-async function callLinear(
-  reg: ILinearRegistry,
-  candidates: readonly string[],
-  args: Record<string, unknown>
-): Promise<{ text: string } | { error: string }> {
-  for (const short of candidates) {
-    const name = mcpToolName(LINEAR_SERVER, short);
-
-    if (reg.has(name)) {
-      const raw = await reg.callTool(name, args);
-
-      return isMcpError(raw) ? { error: raw } : { text: raw };
-    }
-  }
-
-  return {
-    error: `this Linear MCP server exposes none of: ${candidates.join(", ")}`,
-  };
-}
-
-function field(rec: Record<string, unknown>, ...keys: string[]): string {
-  for (const k of keys) {
-    const v = rec[k];
-
-    if (typeof v === "string" && v.length > 0) {
-      return v;
-    }
-
-    if (typeof v === "number") {
-      return String(v);
-    }
-  }
-
-  return "";
+  return resolveMcpCapability(registry, LINEAR_SERVER, flags.noLinear());
 }
 
 /** The git branch Linear generated for an issue payload, across field-name variants. */
@@ -164,11 +72,11 @@ function summarizeIssue(rec: Record<string, unknown>): string {
 /** Pull an issue record out of an MCP payload that may be the object itself, a
  *  {text: json} wrapper, or a list whose first element is the issue. */
 function issueRecord(raw: string): Record<string, unknown> | null {
-  const parsed = jsonParse(raw);
+  const parsed = jsonParseSafe(raw);
 
   if (isRecord(parsed)) {
     if (typeof parsed.text === "string") {
-      const inner = jsonParse(parsed.text);
+      const inner = jsonParseSafe(parsed.text);
 
       return isRecord(inner) ? inner : null;
     }
@@ -186,11 +94,11 @@ function issueRecord(raw: string): Record<string, unknown> | null {
 // ── reads ──────────────────────────────────────────────────────────────────
 
 async function readIssue(
-  reg: ILinearRegistry,
+  reg: IIntegrationRegistry,
   id: string,
   max: number
 ): Promise<string> {
-  const res = await callLinear(reg, ["get_issue"], { id });
+  const res = await callFirst(reg, LINEAR_SERVER, ["get_issue"], { id });
 
   if ("error" in res) {
     return res.error;
@@ -202,18 +110,18 @@ async function readIssue(
 }
 
 async function readList(
-  reg: ILinearRegistry,
+  reg: IIntegrationRegistry,
   candidates: readonly string[],
   args: Record<string, unknown>,
   max: number
 ): Promise<string> {
-  const res = await callLinear(reg, candidates, args);
+  const res = await callFirst(reg, LINEAR_SERVER, candidates, args);
 
   if ("error" in res) {
     return res.error;
   }
 
-  const parsed = jsonParse(res.text);
+  const parsed = jsonParseSafe(res.text);
 
   if (!Array.isArray(parsed)) {
     return capHead(res.text, max);
@@ -233,41 +141,23 @@ async function readList(
   return rows.length > 0 ? capHead(rows.join("\n"), max) : "no matching issues";
 }
 
-// ── write lint (human-intent, not code mechanics) ────────────────────────────
-
-/** Soft lint for a card title/description/comment: reject empty; nudge away from
- *  code mechanics (line/file counts). Mirrors lintPrBody — SOFT so a genuinely
- *  code-detail task can still say what it means. Returns a reason, or null. */
-export function lintCardText(text: string): string | null {
-  if (text.trim().length === 0) {
-    return "empty — say the intent and the outcome for a human teammate";
-  }
-
-  if (/\b\d+\s+(lines?|files?)\b/i.test(text) || /\bline count\b/i.test(text)) {
-    return "drop the line/file counts — describe the intent and outcome, not code mechanics";
-  }
-
-  return null;
-}
-
 // ── writes ─────────────────────────────────────────────────────────────────
 
 async function createIssue(
-  reg: ILinearRegistry,
+  reg: IIntegrationRegistry,
   args: Record<string, unknown>
 ): Promise<string> {
   const title = str(args, "title");
   const description = str(args, "description");
   const team = str(args, "team");
-  const titleLint = lintCardText(title);
+  const titleLint = lintHumanText(title);
 
   if (titleLint !== null) {
     return `linear_write create: title ${titleLint}`;
   }
 
-  // Description is optional, but if present it must read for a human.
   if (description.length > 0) {
-    const descLint = lintCardText(description);
+    const descLint = lintHumanText(description);
 
     if (descLint !== null) {
       return `linear_write create: description ${descLint}`;
@@ -285,7 +175,12 @@ async function createIssue(
     payload.teamId = team;
   }
 
-  const res = await callLinear(reg, ["create_issue", "save_issue"], payload);
+  const res = await callFirst(
+    reg,
+    LINEAR_SERVER,
+    ["create_issue", "save_issue"],
+    payload
+  );
 
   if ("error" in res) {
     return res.error;
@@ -306,7 +201,7 @@ async function createIssue(
 }
 
 async function commentIssue(
-  reg: ILinearRegistry,
+  reg: IIntegrationRegistry,
   args: Record<string, unknown>
 ): Promise<string> {
   const id = str(args, "id");
@@ -316,17 +211,18 @@ async function commentIssue(
     return "linear_write comment: needs an issue `id`";
   }
 
-  const bodyLint = lintCardText(body);
+  const bodyLint = lintHumanText(body);
 
   if (bodyLint !== null) {
     return `linear_write comment: ${bodyLint}`;
   }
 
-  const res = await callLinear(reg, ["create_comment", "save_comment"], {
-    issueId: id,
-    id,
-    body,
-  });
+  const res = await callFirst(
+    reg,
+    LINEAR_SERVER,
+    ["create_comment", "save_comment"],
+    { issueId: id, id, body }
+  );
 
   return "error" in res ? res.error : `commented on ${id}`;
 }
@@ -431,7 +327,9 @@ export async function doLinearStart(
 
   ctx.report({ kind: "tool", task: ctx.task, message: `linear_start ${id}` });
 
-  const res = await callLinear(deps.registry, ["get_issue"], { id });
+  const res = await callFirst(deps.registry, LINEAR_SERVER, ["get_issue"], {
+    id,
+  });
 
   if ("error" in res) {
     return res.error;

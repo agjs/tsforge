@@ -8,6 +8,8 @@ import { doGit } from "./git-ops";
 import { doGitWrite } from "./git-write-ops";
 import { doGithubRead, doGithubWrite } from "./github-ops";
 import { doLinearRead, doLinearWrite, doLinearStart } from "./linear-ops";
+import { doNotionRead, doNotionWrite } from "./notion-ops";
+import { doSentryRead, doSentryWrite } from "./sentry-ops";
 import { doAddDependency } from "./add-dependency";
 import { doWebFetch } from "./web-fetch";
 import { doWebSearch } from "./web-search";
@@ -66,6 +68,10 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.linearRead]: doLinearRead,
   [TOOL_NAME.linearWrite]: doLinearWrite,
   [TOOL_NAME.linearStart]: doLinearStart,
+  [TOOL_NAME.notionRead]: doNotionRead,
+  [TOOL_NAME.notionWrite]: doNotionWrite,
+  [TOOL_NAME.sentryRead]: doSentryRead,
+  [TOOL_NAME.sentryWrite]: doSentryWrite,
   [TOOL_NAME.addDependency]: doAddDependency,
   [TOOL_NAME.packageInfo]: doPackageInfo,
   [TOOL_NAME.packageDocs]: doPackageDocs,

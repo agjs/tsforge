@@ -766,6 +766,14 @@ function announceLinear(on: boolean): void {
   }
 }
 
+/** Generic boot notice for a curated MCP integration (notion/sentry). Module helper
+ *  so its branch stays out of `repl`'s cognitive-complexity budget. */
+function announceIntegration(on: boolean, name: string, detail: string): void {
+  if (on) {
+    process.stdout.write(`  ↳ ${name}: on (${detail})\n`);
+  }
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -1106,17 +1114,23 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   let linearOn = false;
+  let notionOn = false;
+  let sentryOn = false;
 
   const wireImages = (): void => {
     session.setImageCapabilities(imageCaps);
     session.setPreviewImage(previewGeneratedImage);
     session.setGithubCapability(githubCap);
     linearOn = session.setLinearCapability();
+    notionOn = session.setNotionCapability();
+    sentryOn = session.setSentryCapability();
   };
 
   wireImages();
   announceGithub(githubCap);
   announceLinear(linearOn);
+  announceIntegration(notionOn, "notion", "pages + knowledge via MCP");
+  announceIntegration(sentryOn, "sentry", "errors + fixes via MCP");
 
   if (imageCaps.vision || imageCaps.imageGen) {
     const on = [

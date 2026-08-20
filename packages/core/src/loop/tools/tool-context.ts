@@ -152,6 +152,12 @@ export interface IToolContext {
    *  salvaged/forced call can't create a card or check out a branch when off. The
    *  Linear MCP calls route through `mcpRegistry`. */
   linear?: boolean;
+  /** Notion capability = consent (a `notion` MCP server configured + connected,
+   *  TSFORGE_NO_NOTION unset). The notion_write handler hard-checks it. */
+  notion?: boolean;
+  /** Sentry capability = consent (a `sentry` MCP server configured + connected,
+   *  TSFORGE_NO_SENTRY unset). The sentry_write handler hard-checks it. */
+  sentry?: boolean;
   /** Whether a real interactive per-action approval path exists. Absent/false ⇒
    *  a policy `ask` resolves to `deny` (no approval UI today). NOTE: this is a POLICY
    *  signal — it does NOT mean "a human is watching"; the REPL sets `humanPresent`, not
