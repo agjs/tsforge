@@ -3,7 +3,13 @@ import { cloneRepo, scaffoldRecord } from "./clone";
 import { bootStack, type IBootDeps } from "./boot";
 import { answersToPlan } from "./plan";
 import { parseManifest } from "./boringstack-manifest";
-import { realRunner, realFs, realPoller, type IScaffoldFs } from "./io";
+import {
+  realRunner,
+  realFs,
+  realPoller,
+  assertSafeScaffoldRel,
+  type IScaffoldFs,
+} from "./io";
 import { seedReactGreenfieldOpinionated } from "../config/seed-greenfield-profile";
 import type {
   IArchetypeProfile,
@@ -226,13 +232,7 @@ async function stripTemplatePaths(
   paths: readonly string[]
 ): Promise<void> {
   for (const rel of paths) {
-    if (
-      rel.length === 0 ||
-      rel.startsWith("/") ||
-      rel.split("/").includes("..")
-    ) {
-      throw new Error(`scaffold: refusing to strip unsafe path "${rel}"`);
-    }
+    assertSafeScaffoldRel(rel, "strip");
 
     await fs.remove(`${dest}/${rel}`);
   }

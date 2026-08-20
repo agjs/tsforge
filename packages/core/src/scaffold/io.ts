@@ -10,6 +10,24 @@ import { dirname } from "node:path";
 import { runArgvCommand, type IShellRun } from "../lib/fs/process";
 import { pollUntilReady } from "../../scripts/boot-check";
 
+/** Reject a manifest-derived relative path that would escape the destination —
+ *  empty, absolute, or containing a `..` segment (either separator). Scaffold
+ *  manifest values are semi-trusted: the manifest is read from a CLONED repo,
+ *  redirectable via BORINGSTACK_REPO/`--ref`, so every on-disk path built from
+ *  it — env files to WRITE, template paths to DELETE — must be contained, or an
+ *  `envFile: "../../../.bashrc"` writes (or an unsafe strip deletes) outside the
+ *  scaffold destination. Lexical + both separators; the caller joins to `dest`. */
+export function assertSafeScaffoldRel(rel: string, verb: string): void {
+  if (
+    rel.length === 0 ||
+    rel.startsWith("/") ||
+    rel.startsWith("\\") ||
+    rel.split(/[\\/]/u).includes("..")
+  ) {
+    throw new Error(`scaffold: refusing to ${verb} unsafe path "${rel}"`);
+  }
+}
+
 /** Runs an explicit argv (no shell) in `cwd`. Matches `runArgvCommand` so the real
  *  adapter is a direct pass-through; tests inject a recording fake to assert the
  *  exact command sequence without spawning git/Docker. */
