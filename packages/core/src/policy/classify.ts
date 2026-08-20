@@ -21,6 +21,14 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.githubRead]: "vcs_read",
   [TOOL_NAME.gitWrite]: "vcs_write",
   [TOOL_NAME.githubWrite]: "vcs_write",
+  // Curated Linear verbs over MCP. Read → integration_read (plan-safe); write →
+  // integration_write (capability-as-consent, denied plan/ci/dontAsk). linear_start
+  // reads the card BUT then does a git checkout, so it's a vcs_write (a working-tree
+  // mutation withheld while planning), not a tracker write. Absent here → `unknown`
+  // → silent deny (the same DOA class the github tools guard against).
+  [TOOL_NAME.linearRead]: "integration_read",
+  [TOOL_NAME.linearWrite]: "integration_write",
+  [TOOL_NAME.linearStart]: "vcs_write",
   [TOOL_NAME.edit]: "edit_file",
   [TOOL_NAME.editLines]: "edit_file",
   [TOOL_NAME.organizeImports]: "edit_file",

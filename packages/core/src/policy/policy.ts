@@ -77,6 +77,8 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   "spawn_agent",
   "vcs_read",
   "vcs_write",
+  "integration_read",
+  "integration_write",
   "unknown",
 ];
 
@@ -128,6 +130,8 @@ const MODE_MATRIX: Readonly<
     spawn_agent: "allow",
     vcs_read: "allow",
     vcs_write: "allow",
+    integration_read: "allow",
+    integration_write: "allow",
     unknown: "ask",
   },
   plan: {
@@ -147,6 +151,10 @@ const MODE_MATRIX: Readonly<
     // WRITE (commit/push/comment) is a mutation → denied while planning.
     vcs_read: "allow",
     vcs_write: "deny",
+    // A tracker READ (Linear card, Notion page, Sentry issue) is inspection — safe
+    // while planning. A tracker WRITE (create card/comment/checkout) is a mutation.
+    integration_read: "allow",
+    integration_write: "deny",
     unknown: "deny",
   },
   acceptEdits: {
@@ -171,6 +179,10 @@ const MODE_MATRIX: Readonly<
     // to git/GitHub writes (never merge — human-only).
     vcs_read: "allow",
     vcs_write: "allow",
+    // Interactive: enabling a tracker capability (Linear/Notion/Sentry) is the
+    // user's consent to its writes, same posture as the github capability.
+    integration_read: "allow",
+    integration_write: "allow",
     unknown: "deny",
   },
   ci: {
@@ -195,6 +207,10 @@ const MODE_MATRIX: Readonly<
     // unattended without oversight.
     vcs_read: "allow",
     vcs_write: "deny",
+    // Non-interactive: tracker reads are fine; a tracker write must not happen
+    // unattended.
+    integration_read: "allow",
+    integration_write: "deny",
     unknown: "deny",
   },
   dontAsk: {
@@ -218,6 +234,8 @@ const MODE_MATRIX: Readonly<
     // Non-interactive: same as ci — reads allowed, writes denied unattended.
     vcs_read: "allow",
     vcs_write: "deny",
+    integration_read: "allow",
+    integration_write: "deny",
     unknown: "deny",
   },
   bypassPermissions: {
@@ -233,6 +251,8 @@ const MODE_MATRIX: Readonly<
     spawn_agent: "allow",
     vcs_read: "allow",
     vcs_write: "allow",
+    integration_read: "allow",
+    integration_write: "allow",
     unknown: "allow",
   },
 };
@@ -253,12 +273,14 @@ function riskOf(kind: ActionKind): RiskLevel {
     kind === "mcp_tool" ||
     kind === "plugin_tool" ||
     kind === "vcs_write" ||
+    kind === "integration_write" ||
     WRITE_KINDS.has(kind)
   ) {
     return "medium";
   }
 
-  // vcs_read (git/gh inspection) falls here — low, like read_file.
+  // vcs_read / integration_read (git/gh + tracker inspection) fall here — low,
+  // like read_file.
   return "low";
 }
 

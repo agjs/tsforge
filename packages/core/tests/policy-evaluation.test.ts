@@ -45,6 +45,11 @@ describe("classifyAction", () => {
       ["github_read", "vcs_read"],
       ["git_write", "vcs_write"],
       ["github_write", "vcs_write"],
+      // Curated Linear verbs: read → integration_read, write → integration_write,
+      // start → vcs_write (it checks out a git branch).
+      ["linear_read", "integration_read"],
+      ["linear_write", "integration_write"],
+      ["linear_start", "vcs_write"],
       ["edit", "edit_file"],
       ["edit_lines", "edit_file"],
       ["organize_imports", "edit_file"],
@@ -119,6 +124,29 @@ describe("classifyAction", () => {
     }
 
     // Denied in plan (read-only) and the unattended modes — no autonomous push.
+    for (const mode of ["plan", "ci", "dontAsk"] as const) {
+      expect(evaluatePolicy(write, ctx(mode)).decision).toBe("deny");
+    }
+  });
+
+  test("integration_read is allowed in EVERY mode; integration_write only interactive", () => {
+    const read = action("integration_read", { toolName: "linear_read" });
+    const write = action("integration_write", { toolName: "linear_write" });
+
+    for (const mode of [
+      "default",
+      "plan",
+      "acceptEdits",
+      "ci",
+      "dontAsk",
+    ] as const) {
+      expect(evaluatePolicy(read, ctx(mode)).decision).toBe("allow");
+    }
+
+    for (const mode of ["default", "acceptEdits"] as const) {
+      expect(evaluatePolicy(write, ctx(mode)).decision).toBe("allow");
+    }
+
     for (const mode of ["plan", "ci", "dontAsk"] as const) {
       expect(evaluatePolicy(write, ctx(mode)).decision).toBe("deny");
     }

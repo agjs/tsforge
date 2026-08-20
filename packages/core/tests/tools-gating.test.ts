@@ -92,6 +92,22 @@ test("git/GitHub tools are offered on scratch runs too (a fresh repo still commi
   expect(on).toContain("github_write");
 });
 
+test("Linear verbs are absent unless the linear capability is on", () => {
+  const off = names(toolsFor(true));
+
+  expect(off).not.toContain("linear_read");
+  expect(off).not.toContain("linear_write");
+  expect(off).not.toContain("linear_start");
+});
+
+test("the linear capability advertises the three curated Linear verbs", () => {
+  const on = names(toolsFor(true, { linear: true }));
+
+  expect(on).toContain("linear_read");
+  expect(on).toContain("linear_write");
+  expect(on).toContain("linear_start");
+});
+
 test("web tools are absent unless TSFORGE_WEB=1", () => {
   const n = names(toolsFor(true));
 

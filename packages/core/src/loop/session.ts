@@ -39,9 +39,18 @@ import {
   GITHUB_WRITE_TOOL,
   GITHUB_MARKER,
   GITHUB_DRIVE_GUIDANCE,
+  LINEAR_READ_TOOL,
+  LINEAR_WRITE_TOOL,
+  LINEAR_START_TOOL,
+  LINEAR_MARKER,
+  LINEAR_DRIVE_GUIDANCE,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
 import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
+import {
+  resolveLinearCapability,
+  mcpSchemasForAdvertisement,
+} from "./tools/linear-ops";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { mergePolicyRules } from "../policy";
 import type { ProfileId } from "../config/profiles";
@@ -2332,6 +2341,42 @@ export class Session {
     }
   }
 
+  /** Turn on the Linear verbs when a `linear` MCP server is connected (and the
+   *  kill-switch is unset). Resolves the capability from THIS session's registry,
+   *  advertises the three verbs, records consent on the tool context (the WRITE
+   *  handlers hard-check `ctx.tool.linear`), and appends the drive guidance once.
+   *  Idempotent — mirrors setGithubCapability. Returns whether it turned on (for the
+   *  boot banner). */
+  setLinearCapability(): boolean {
+    const on = resolveLinearCapability(this.ctx.tool.mcpRegistry);
+
+    if (!on) {
+      return false;
+    }
+
+    this.ctx.tool.linear = true;
+
+    for (const tool of [
+      LINEAR_READ_TOOL,
+      LINEAR_WRITE_TOOL,
+      LINEAR_START_TOOL,
+    ]) {
+      if (!this.tools.some((t) => t.function.name === tool.function.name)) {
+        this.tools = [...this.tools, tool];
+      }
+    }
+
+    const system = this.ctx.messages[0];
+
+    if (!(
+      system?.role === "system" && system.content.includes(LINEAR_MARKER)
+    )) {
+      this.guide(LINEAR_DRIVE_GUIDANCE);
+    }
+
+    return true;
+  }
+
   /** Wire the inline-image preview callback the `generate_image` tool fires after
    *  saving (the CLI emits the terminal's inline-image escape). Absent ⇒ the tool
    *  just reports the saved path. */
@@ -2571,7 +2616,10 @@ export class Session {
     let offeredTools = offeredToolsFor(
       this.tools,
       this.planMode,
-      this.ctx.tool.mcpRegistry?.toolSchemas() ?? [],
+      mcpSchemasForAdvertisement(
+        this.ctx.tool.mcpRegistry?.toolSchemas() ?? [],
+        this.ctx.tool.linear === true
+      ),
       activeOverlay()?.toolOverrides ?? [],
       this.activePlanId !== null && this.activePlanId.length > 0
     );

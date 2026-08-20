@@ -146,6 +146,12 @@ export interface IToolContext {
    *  hard-check this and reject when false — so even a salvaged/forced call can't
    *  push/comment when the capability is off (belt to the advertisement suspenders). */
   github?: boolean;
+  /** Linear capability = consent: true only when a `linear` MCP server is configured
+   *  AND connected (and TSFORGE_NO_LINEAR is unset). The Linear WRITE handlers
+   *  (linear_write / linear_start) hard-check this and reject when false — so even a
+   *  salvaged/forced call can't create a card or check out a branch when off. The
+   *  Linear MCP calls route through `mcpRegistry`. */
+  linear?: boolean;
   /** Whether a real interactive per-action approval path exists. Absent/false ⇒
    *  a policy `ask` resolves to `deny` (no approval UI today). NOTE: this is a POLICY
    *  signal — it does NOT mean "a human is watching"; the REPL sets `humanPresent`, not

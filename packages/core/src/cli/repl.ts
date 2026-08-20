@@ -758,6 +758,14 @@ function announceGithub(on: boolean): void {
   }
 }
 
+/** Boot notice for the Linear capability. Module helper to keep its branch out of
+ *  `repl`'s cognitive-complexity budget (mirrors announceGithub). */
+function announceLinear(on: boolean): void {
+  if (on) {
+    process.stdout.write("  ↳ linear: on (issues + start-work via MCP)\n");
+  }
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -1097,14 +1105,18 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
+  let linearOn = false;
+
   const wireImages = (): void => {
     session.setImageCapabilities(imageCaps);
     session.setPreviewImage(previewGeneratedImage);
     session.setGithubCapability(githubCap);
+    linearOn = session.setLinearCapability();
   };
 
   wireImages();
   announceGithub(githubCap);
+  announceLinear(linearOn);
 
   if (imageCaps.vision || imageCaps.imageGen) {
     const on = [

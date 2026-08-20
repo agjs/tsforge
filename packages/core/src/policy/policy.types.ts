@@ -44,6 +44,17 @@ export type ActionKind =
    *  capability-as-consent — allowed in the interactive modes (default/
    *  acceptEdits) and denied in plan/ci/dontAsk. Never MERGE/close (human-only). */
   | "vcs_write"
+  /** A read-only lookup in an external work tracker via a curated verb over MCP —
+   *  a Linear card, a Notion page, a Sentry issue. Mutates nothing, so it is
+   *  allowed in EVERY mode incl. plan (like `vcs_read`). Distinct from the raw
+   *  `mcp_tool` kind so the CURATED integration verbs stay plan-safe while a raw
+   *  `mcp__server__*` passthrough keeps `mcp_tool`'s conservative posture. */
+  | "integration_read"
+  /** A WRITE to an external work tracker via a curated verb over MCP — create a
+   *  Linear card, comment, check out its branch. Capability-as-consent: allowed in
+   *  default/acceptEdits, denied in plan/ci/dontAsk (like `vcs_write`). Shared by
+   *  the Linear/Notion/Sentry integrations. */
+  | "integration_write"
   | "unknown";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";

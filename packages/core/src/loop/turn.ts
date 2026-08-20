@@ -103,6 +103,9 @@ import {
   GIT_WRITE_TOOL,
   GITHUB_READ_TOOL,
   GITHUB_WRITE_TOOL,
+  LINEAR_READ_TOOL,
+  LINEAR_WRITE_TOOL,
+  LINEAR_START_TOOL,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
   CHECK_TOOL,
@@ -189,6 +192,9 @@ type AdvertisedTool =
   | typeof GIT_WRITE_TOOL
   | typeof GITHUB_READ_TOOL
   | typeof GITHUB_WRITE_TOOL
+  | typeof LINEAR_READ_TOOL
+  | typeof LINEAR_WRITE_TOOL
+  | typeof LINEAR_START_TOOL
   | typeof READ_IMAGE_TOOL
   | typeof GENERATE_IMAGE_TOOL
   | typeof CHECK_TOOL
@@ -212,6 +218,11 @@ export interface ICapabilityFlags {
    *  driver. When on, the git/GitHub tools are advertised; the WRITE handlers also
    *  hard-check `ctx.github` so a forced call can't push/comment with it off. */
   github?: boolean;
+  /** The `linear` capability = the user's consent to Linear operations (a `linear`
+   *  MCP server configured + connected, TSFORGE_NO_LINEAR unset). Resolved once by
+   *  the driver from the MCP registry. When on, the Linear verbs are advertised; the
+   *  WRITE handlers also hard-check `ctx.linear`. */
+  linear?: boolean;
 }
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
@@ -253,6 +264,17 @@ function githubTools(caps: ICapabilityFlags): AdvertisedTool[] {
     : [];
 }
 
+/** Linear first-class verbs — advertised only when the `linear` capability is on (a
+ *  `linear` MCP server configured + connected). `linear_read` is read-only
+ *  (integration_read, plan-safe); `linear_write`/`linear_start` mutate
+ *  (withheld/denied in plan/ci/dontAsk). Curated verbs over MCP — the raw
+ *  `mcp__linear__*` tools are suppressed from advertisement unless TSFORGE_LINEAR_RAW. */
+function linearTools(caps: ICapabilityFlags): AdvertisedTool[] {
+  return caps.linear === true
+    ? [LINEAR_READ_TOOL, LINEAR_WRITE_TOOL, LINEAR_START_TOOL]
+    : [];
+}
+
 /** Image capability tools — each advertised only when its backend is configured
  *  (caps resolved by the driver). read_image (vision) and generate_image are
  *  independent, so a vision-only or gen-only setup offers just the one. */
@@ -275,6 +297,7 @@ export function toolsFor(
   const web = webTools();
   const git = gitTools(hasExistingCode);
   const github = githubTools(caps);
+  const linear = linearTools(caps);
   const script = scriptTools();
   const image = imageTools(caps);
 
@@ -328,6 +351,7 @@ export function toolsFor(
       ...web,
       ...git,
       ...github,
+      ...linear,
       ...script,
       ...image,
     ];
@@ -345,6 +369,7 @@ export function toolsFor(
     ...web,
     ...git,
     ...github,
+    ...linear,
     ...script,
     ...image,
   ];
@@ -410,6 +435,10 @@ export interface ILoopCtxTool {
    *  tool context so the git/GitHub WRITE handlers can hard-check it and fail closed
    *  when off — even on a salvaged/forced call. See {@link IToolContext.github}. */
   github?: boolean;
+  /** Linear capability = consent (a `linear` MCP server configured + connected).
+   *  Threaded into the tool context so the Linear WRITE handlers hard-check it and
+   *  fail closed when off. See {@link IToolContext.linear}. */
+  linear?: boolean;
   /** Files the agent created/edited this session (cwd-relative, forward slashes).
    *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
    *  enforce on this set, so they cover what the agent wrote regardless of git.
