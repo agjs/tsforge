@@ -100,6 +100,9 @@ import {
   buildPullConventionsTool,
   SCRIPT_TOOL,
   GIT_CONTEXT_TOOL,
+  GIT_WRITE_TOOL,
+  GITHUB_READ_TOOL,
+  GITHUB_WRITE_TOOL,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
   CHECK_TOOL,
@@ -183,6 +186,9 @@ type AdvertisedTool =
   | ReturnType<typeof buildPullConventionsTool>
   | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL
+  | typeof GIT_WRITE_TOOL
+  | typeof GITHUB_READ_TOOL
+  | typeof GITHUB_WRITE_TOOL
   | typeof READ_IMAGE_TOOL
   | typeof GENERATE_IMAGE_TOOL
   | typeof CHECK_TOOL
@@ -201,6 +207,11 @@ type AdvertisedTool =
 export interface ICapabilityFlags {
   vision?: boolean;
   imageGen?: boolean;
+  /** The `github` capability = the user's consent to git/GitHub operations
+   *  (gh installed + authenticated, TSFORGE_NO_GITHUB unset). Resolved once by the
+   *  driver. When on, the git/GitHub tools are advertised; the WRITE handlers also
+   *  hard-check `ctx.github` so a forced call can't push/comment with it off. */
+  github?: boolean;
 }
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
@@ -232,6 +243,16 @@ function scriptTools(): AdvertisedTool[] {
   return flags.scriptTool() ? [SCRIPT_TOOL] : [];
 }
 
+/** git/GitHub first-class tools — advertised only when the `github` capability is
+ *  on (gh installed + authenticated). `github_read` is read-only (vcs_read, plan-safe);
+ *  `git_write`/`github_write` mutate (vcs_write, withheld/denied in plan/ci/dontAsk).
+ *  Available on existing-code AND scratch runs — a fresh repo still commits/pushes. */
+function githubTools(caps: ICapabilityFlags): AdvertisedTool[] {
+  return caps.github === true
+    ? [GITHUB_READ_TOOL, GIT_WRITE_TOOL, GITHUB_WRITE_TOOL]
+    : [];
+}
+
 /** Image capability tools — each advertised only when its backend is configured
  *  (caps resolved by the driver). read_image (vision) and generate_image are
  *  independent, so a vision-only or gen-only setup offers just the one. */
@@ -253,6 +274,7 @@ export function toolsFor(
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
+  const github = githubTools(caps);
   const script = scriptTools();
   const image = imageTools(caps);
 
@@ -305,6 +327,7 @@ export function toolsFor(
       ...taskTools,
       ...web,
       ...git,
+      ...github,
       ...script,
       ...image,
     ];
@@ -321,6 +344,7 @@ export function toolsFor(
     ...LSP_TOOLS,
     ...web,
     ...git,
+    ...github,
     ...script,
     ...image,
   ];
@@ -382,6 +406,10 @@ export interface ILoopCtxTool {
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
    *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
   mcpRegistry?: McpRegistry;
+  /** GitHub capability = consent (gh installed + authenticated). Threaded into the
+   *  tool context so the git/GitHub WRITE handlers can hard-check it and fail closed
+   *  when off — even on a salvaged/forced call. See {@link IToolContext.github}. */
+  github?: boolean;
   /** Files the agent created/edited this session (cwd-relative, forward slashes).
    *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
    *  enforce on this set, so they cover what the agent wrote regardless of git.

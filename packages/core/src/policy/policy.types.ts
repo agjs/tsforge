@@ -34,6 +34,16 @@ export type ActionKind =
    *  spawn itself mutates nothing; the child is read-only-enforced separately.
    *  Its own action class so a repo can deny/ask delegation specifically. */
   | "spawn_agent"
+  /** A read-only version-control / GitHub inspection (git log/diff, `gh pr view`,
+   *  reading review threads). Mutates nothing local or remote, so it is allowed
+   *  in EVERY mode incl. plan — a dedicated kind (not `network`) so gh-backed
+   *  reads aren't wrongly denied the way `network` is in acceptEdits/ci. */
+  | "vcs_read"
+  /** A version-control / GitHub WRITE: local git (commit/branch/push) or a gh
+   *  mutation (pr create/comment, resolve a review thread). Gated as
+   *  capability-as-consent — allowed in the interactive modes (default/
+   *  acceptEdits) and denied in plan/ci/dontAsk. Never MERGE/close (human-only). */
+  | "vcs_write"
   | "unknown";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";

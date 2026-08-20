@@ -67,6 +67,7 @@ import {
   applyTtsrInterrupt,
 } from "./ttsr-init";
 import { resolveImageCapabilityFlags } from "./tools/image-tools";
+import { resolveGithubCapability } from "./tools/github-ops";
 import {
   type ILoopCtx,
   type ILoopState,
@@ -1344,7 +1345,9 @@ export async function runTask(
     },
   ];
 
-  const caps = await resolveImageCapabilityFlags();
+  const imageCaps = await resolveImageCapabilityFlags();
+  const github = await resolveGithubCapability(undefined, cwd);
+  const caps = { ...imageCaps, github };
   const tools = toolsFor(hasExistingCode, caps);
 
   // Mode-aware reasoning cap: scratch tasks over-think unbounded, so default
@@ -1366,6 +1369,7 @@ export async function runTask(
     // already do, mode-independent; this adds `policy.mode`/`rules`).
     tool: {
       touched: new Set<string>(),
+      github,
       ...policyCtxFields(policy, opts.policyMode),
     },
     gate: {

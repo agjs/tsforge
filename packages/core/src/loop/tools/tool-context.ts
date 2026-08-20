@@ -141,6 +141,11 @@ export interface IToolContext {
   /** Config-driven policy rules (deny/allow/ask), evaluated before the mode
    *  default. Absent ⇒ mode default only. */
   policyRules?: IPolicyRules;
+  /** GitHub capability = consent: true only when the `gh` CLI is installed AND
+   *  authenticated (and TSFORGE_NO_GITHUB is unset). The git/GitHub WRITE handlers
+   *  hard-check this and reject when false — so even a salvaged/forced call can't
+   *  push/comment when the capability is off (belt to the advertisement suspenders). */
+  github?: boolean;
   /** Whether a real interactive per-action approval path exists. Absent/false ⇒
    *  a policy `ask` resolves to `deny` (no approval UI today). NOTE: this is a POLICY
    *  signal — it does NOT mean "a human is watching"; the REPL sets `humanPresent`, not

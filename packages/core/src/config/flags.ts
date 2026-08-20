@@ -32,6 +32,11 @@ export const flags = {
   /** Withhold the read-only `git_context` tool on existing-code runs (default ON;
    *  set to "1" to force off, e.g. for eval sweeps or non-git workspaces). */
   noGitTool: (): boolean => isOn(ENV_FLAG.noGitTool),
+  /** Kill-switch for the whole `github` capability (the git_write / github_read /
+   *  github_write tools). The capability is otherwise auto-detected (on iff the
+   *  `gh` CLI is installed AND authenticated); set TSFORGE_NO_GITHUB=1 to force it
+   *  off (A/B control, or to keep a run purely local). */
+  noGithub: (): boolean => isOn(ENV_FLAG.noGithub),
   /** Fall back to basic readline input (no multiline editor) in interactive mode.
    *  Default OFF — the editor is on. Set to "1" to disable the editor. */
   basicInput: (): boolean => isOn(ENV_FLAG.basicInput),

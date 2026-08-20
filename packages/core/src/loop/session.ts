@@ -34,6 +34,11 @@ import {
   buildSpawnAgentTool,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
+  GITHUB_READ_TOOL,
+  GIT_WRITE_TOOL,
+  GITHUB_WRITE_TOOL,
+  GITHUB_MARKER,
+  GITHUB_DRIVE_GUIDANCE,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
 import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
@@ -2297,6 +2302,33 @@ export class Session {
       if (!this.tools.some((t) => t.function.name === tool.function.name)) {
         this.tools = [...this.tools, tool];
       }
+    }
+  }
+
+  /** Turn on the git/GitHub first-class tools when the `github` capability is
+   *  present (gh installed + authenticated). Advertises the three tools, records
+   *  consent on the tool context (the WRITE handlers hard-check `ctx.tool.github`),
+   *  and appends the drive-loop guidance to the system prompt ONCE. Idempotent —
+   *  a resumed session re-runs it; guards mirror setImageCapabilities/setDelegation. */
+  setGithubCapability(on: boolean): void {
+    if (!on) {
+      return;
+    }
+
+    this.ctx.tool.github = true;
+
+    for (const tool of [GITHUB_READ_TOOL, GIT_WRITE_TOOL, GITHUB_WRITE_TOOL]) {
+      if (!this.tools.some((t) => t.function.name === tool.function.name)) {
+        this.tools = [...this.tools, tool];
+      }
+    }
+
+    const system = this.ctx.messages[0];
+
+    if (!(
+      system?.role === "system" && system.content.includes(GITHUB_MARKER)
+    )) {
+      this.guide(GITHUB_DRIVE_GUIDANCE);
     }
   }
 
