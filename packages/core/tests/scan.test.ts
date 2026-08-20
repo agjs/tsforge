@@ -70,7 +70,27 @@ describe("interface naming scan + recommendation", () => {
     });
   });
 
-  test("a split repo recommends off (contested)", async () => {
+  test("a genuinely split repo (enough evidence) recommends off (contested)", async () => {
+    // 2 i-prefix / 2 bare = 50/50 above the min-sample floor → no dominant → off.
+    const files: IFixtureFile[] = [
+      { path: "src/a.ts", content: "export interface IUser { id: string; }" },
+      { path: "src/b.ts", content: "export interface IOrder { n: number; }" },
+      { path: "src/c.ts", content: "export interface Order { n: number; }" },
+      { path: "src/d.ts", content: "export interface Widget { n: number; }" },
+    ];
+
+    await withRepo(files, async (cwd) => {
+      const report = await scanRepo(cwd);
+
+      expect(report.interfaces.total).toBe(4);
+      expect(recommendConventions(report).interfaces).toBe("off");
+    });
+  });
+
+  test("too few interfaces to generalize → house default, never a 1–2 file inference", async () => {
+    // A 1-i-prefix / 1-bare split is too small to infer anything (the old code
+    // returned "off", silently DISABLING naming enforcement from 2 files). Below
+    // the min-sample floor it falls back to the house default instead.
     const files: IFixtureFile[] = [
       { path: "src/a.ts", content: "export interface IUser { id: string; }" },
       { path: "src/b.ts", content: "export interface Order { n: number; }" },
@@ -79,7 +99,8 @@ describe("interface naming scan + recommendation", () => {
     await withRepo(files, async (cwd) => {
       const report = await scanRepo(cwd);
 
-      expect(recommendConventions(report).interfaces).toBe("off");
+      expect(report.interfaces.total).toBe(2);
+      expect(recommendConventions(report).interfaces).toBe("i-prefix");
     });
   });
 
@@ -111,6 +132,23 @@ describe("enum scan", () => {
         expect(recommendConventions(await scanRepo(cwd)).enums).toBe("ban");
       }
     );
+  });
+
+  test("an enum only in a test file or .d.ts does NOT disable the ban", async () => {
+    // A fixture enum in a `.test.ts`, or an ambient enum in a `.d.ts`, is not the
+    // repo's source policy — it must not flip the whole-repo enum ban to allow.
+    const files: IFixtureFile[] = [
+      { path: "src/real.ts", content: "export const x = 1;" },
+      { path: "src/e.test.ts", content: "enum Fixture { A, B }" },
+      { path: "types/ambient.d.ts", content: "declare enum Ambient { X, Y }" },
+    ];
+
+    await withRepo(files, async (cwd) => {
+      const report = await scanRepo(cwd);
+
+      expect(report.enums.fileCount).toBe(0);
+      expect(recommendConventions(report).enums).toBe("ban");
+    });
   });
 });
 

@@ -129,10 +129,23 @@ export async function scanRepo(cwd: string): Promise<IScanReport> {
   let enumFiles = 0;
   let filesScanned = 0;
 
+  // Collect + SORT before sampling: `Glob.scan` yields in filesystem order,
+  // which isn't stable across machines/runs, so at/above the MAX_FILES cap the
+  // recommendation depended on WHICH files were seen (a large repo could infer
+  // different rules run-to-run). A lexical sort makes the sampled set — and thus
+  // the inferred conventions — deterministic.
+  const all: string[] = [];
+
   for await (const rel of new Glob("**/*.{ts,tsx}").scan({
     cwd,
     onlyFiles: true,
   })) {
+    all.push(rel);
+  }
+
+  all.sort();
+
+  for (const rel of all) {
     if (ignored(rel)) {
       continue;
     }
@@ -147,8 +160,18 @@ export async function scanRepo(cwd: string): Promise<IScanReport> {
       continue;
     }
 
+    // Ambient declarations (`.d.ts`) are generated/third-party, not the repo's
+    // AUTHORED convention — never let them decide a rule.
+    if (rel.endsWith(".d.ts")) {
+      continue;
+    }
+
     try {
-      if (tallyFile(await file.text(), rel, iface)) {
+      const hasEnum = tallyFile(await file.text(), rel, iface);
+
+      // A test-file enum (a fixture) is not the repo's source policy — a single
+      // one must not flip the whole-repo enum ban off.
+      if (hasEnum && !TEST_FILE.test(rel)) {
         enumFiles += 1;
       }
     } catch {
@@ -238,9 +261,16 @@ function dominant<T>(a: { v: T; n: number }, b: { v: T; n: number }): T | null {
   return null;
 }
 
+/** Below this many interfaces there isn't enough evidence to infer a house
+ *  convention — one or two examples would let a single file flip the whole
+ *  repo's naming rule (or disable it). Fall back to the tsforge default. */
+const MIN_INTERFACE_SAMPLE = 3;
+
 function recommendInterfaces(scan: IInterfaceScan): IConventions["interfaces"] {
-  if (scan.total === 0) {
-    return "i-prefix"; // greenfield → tsforge house style
+  if (scan.total < MIN_INTERFACE_SAMPLE) {
+    // Too few to generalize (incl. greenfield total===0) → the house default,
+    // never an inference from 1–2 files.
+    return "i-prefix";
   }
 
   const winner = dominant<IConventions["interfaces"]>(
@@ -248,7 +278,8 @@ function recommendInterfaces(scan: IInterfaceScan): IConventions["interfaces"] {
     { v: "bare-pascal-case", n: scan.bare }
   );
 
-  // A genuinely split repo: don't impose a contested naming rule.
+  // A genuinely split repo (enough evidence, but contested): don't impose a
+  // contested naming rule.
   return winner ?? "off";
 }
 
