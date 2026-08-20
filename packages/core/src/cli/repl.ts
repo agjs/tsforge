@@ -1196,6 +1196,26 @@ export async function repl(args: ICliArgs): Promise<number> {
     return [...peeled.steer];
   };
 
+  // Show `● reviewing…` (spinner + live status) while `fn` runs, then restore the
+  // prior status. Shared by the manual /review command and the after-green review —
+  // both run AFTER the turn's spinner has stopped, so without this the bar reads
+  // "done" while the model is actually reviewing.
+  const withReviewingStatus = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const prev = lastStatus;
+
+    lastStatus = "reviewing";
+    spinner.start();
+    paneScreen.setStatus(statusInfo());
+
+    try {
+      return await fn();
+    } finally {
+      spinner.stop();
+      lastStatus = prev;
+      paneScreen.setStatus(statusInfo());
+    }
+  };
+
   // Post-work agent review (interactive): after a turn lands GREEN and actually
   // changed code, review THIS turn's files and surface findings the gate can't —
   // then offer `/reviewfix` to hand them to the agent (report-then-fix). Scoped to
@@ -1219,7 +1239,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     try {
-      const review = await reviewChange(provider, args.dir, { files: changed });
+      const review = await withReviewingStatus(() =>
+        reviewChange(provider, args.dir, { files: changed })
+      );
 
       if (review.findings.length === 0) {
         return; // clean — stay quiet, don't nag on every green turn
@@ -1600,7 +1622,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         break;
 
       case "review":
-        await runReviewCommand(provider, args.dir, arg, echo, transcriptCols());
+        // Store the findings so /reviewfix can act on a manual review too (not just
+        // the automatic after-green one). Plain text; empty when clean.
+        lastReviewFindings = await withReviewingStatus(() =>
+          runReviewCommand(provider, args.dir, arg, echo, transcriptCols())
+        );
         break;
 
       case "reviewfix":
