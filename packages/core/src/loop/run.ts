@@ -809,8 +809,18 @@ async function handleModelResponse(args: {
         announceTaskDone(args.report, args.taskId, settled.cycles);
       }
 
+      // Merge edits/regressions like the tool-call and readonly terminals below
+      // — settleGate's result omits them, relying on the caller to attach. This
+      // branch used to return `settled` RAW, so a run that edited + regressed and
+      // then parked via narration-while-red (or flipped green on a non-edit turn)
+      // reported regressions:undefined, which the sweep sums as 0 — zeroing the
+      // regression signal for exactly the runs that stalled after regressing.
       return {
-        action: settled,
+        action: {
+          ...settled,
+          edits: args.state.edits,
+          regressions: args.state.regressions,
+        },
         readonlyStreak: args.readonlyStreak,
         readonlyRecoveries: args.readonlyRecoveries,
         historyMetaStreak: args.historyMetaStreak,

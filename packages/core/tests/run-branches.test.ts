@@ -71,6 +71,28 @@ test("stuck when the model never makes the goalpost pass", async () => {
   }
 });
 
+test("a stuck terminal from a narration (no-tool-call) turn reports edits/regressions as numbers", async () => {
+  // The no-tool-call settle terminal used to return settleGate's result RAW,
+  // which omits edits/regressions. The sweep does `r.regressions ?? 0`, so an
+  // undefined here silently zeroed the regression signal for exactly the runs
+  // that stalled while narrating. They must be numbers (like the other terminals).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-noedit-metrics-"));
+
+  try {
+    const r = await runTask(
+      { id: "1", accept: "test -f done.txt", files: ["done.txt"] },
+      dir,
+      scripted([STOP]) // never creates the file → red → narrate → stuck
+    );
+
+    expect(r.status).toBe("stuck");
+    expect(typeof r.regressions).toBe("number");
+    expect(typeof r.edits).toBe("number");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("done when the model creates the file the goalpost needs", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-done-"));
 
