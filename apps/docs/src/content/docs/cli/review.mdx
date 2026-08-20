@@ -47,6 +47,27 @@ The usual failure of AI review is confident nonsense. tsforge runs an adversaria
 
 When a `tsconfig.json` is present, it also feeds the reviewer the callers of each changed export, computed from the type graph, so the regression check looks at concrete call sites instead of guessing.
 
+## Which model reviews
+
+By default the **main model reviews its own work**. You can point review at a different model, or run a **panel** of several, in [`models.json`](/inference/models-json/):
+
+```json
+{
+  "active": "local",
+  "models": {
+    "local": { "baseUrl": "http://localhost:8000/v1", "model": "deepseek-v4-flash" },
+    "haiku": { "baseUrl": "https://api.anthropic.com/v1", "model": "claude-haiku-4-5", "apiKeyEnv": "ANTHROPIC_API_KEY" }
+  },
+  "reviewModels": ["haiku"]
+}
+```
+
+- **One entry** — a dedicated reviewer (e.g. a fast, sharp model; a small instruction-tuned model often reviews better and cheaper than a big one).
+- **Several entries** — a panel: each reviews independently and their findings are pooled and deduped, which catches more real issues.
+- **Absent** — the main model reviews.
+
+For a quick one-off without editing the file, set `TSFORGE_REVIEW_MODEL` (naming a `models` entry) or the trio `TSFORGE_REVIEW_BASE_URL` / `TSFORGE_REVIEW_MODEL` / `TSFORGE_REVIEW_API_KEY` for an ad-hoc reviewer. While reviewing, the status bar shows `● reviewing…` (or `● reviewing ×N` for a panel).
+
 ## Coverage on large changes
 
 Review covers up to `TSFORGE_REVIEW_MAX_FILES` changed files (default **100**) per run, and reads up to `TSFORGE_REVIEW_DIFF_CHARS` (default **12000**) of each file's diff. Excess files are queued through the same [concurrency](/guardrails/config/) limit, not dropped — raise the caps for very large changes. If a run does hit a cap, the report says so loudly (`⚠ coverage: reviewed N of M …`) so a partial review never reads as a clean bill of health.

@@ -69,6 +69,11 @@ export interface IReviewOptions {
    *  (the DeepSeek thinking latch), so parallel units must not share one.
    *  Absent ⇒ every unit reuses the single `provider` (fine at concurrency 1). */
   providerFactory?: () => IProvider;
+  /** Reviewer model(s) that run the FIND pass. When set (length ≥ 1), each file is
+   *  reviewed by every reviewer and their findings are pooled + deduped (a panel).
+   *  Absent/empty ⇒ the single `provider` reviews (the default: the main model
+   *  reviews its own work). Verify always uses `provider`. */
+  reviewProviders?: readonly IProvider[];
   /** Attribution events (`agent_spawned`/`agent_result` per unit) for the
    *  ledger and the fan-out progress line. */
   onEvent?: Reporter;
@@ -573,6 +578,111 @@ async function safeVerify(
   }
 }
 
+/** Collapse duplicate findings from a reviewer panel: same file+line+lens is one
+ *  issue, kept at its highest severity (first-wins on a tie). A single reviewer
+ *  never needs this (its verify ids already disambiguate same-line findings). */
+function dedupeFindings(findings: readonly IRepoFinding[]): IRepoFinding[] {
+  const byKey = new Map<string, IRepoFinding>();
+
+  for (const f of findings) {
+    const key = `${f.file}:${String(f.line)}:${f.lens}`;
+    const prev = byKey.get(key);
+
+    if (
+      prev === undefined ||
+      SEVERITY_RANK[f.severity] < SEVERITY_RANK[prev.severity]
+    ) {
+      byKey.set(key, f);
+    }
+  }
+
+  return [...byKey.values()];
+}
+
+interface IFindOutcome {
+  file: string;
+  truncated: boolean;
+  found: IRepoFinding[];
+  onChange: IRepoFinding[];
+}
+
+/** Shared, per-run inputs for the find pass (so the per-file unit takes one arg). */
+interface IFindContext {
+  cwd: string;
+  base: string;
+  staged: boolean;
+  untracked: ReadonlySet<string>;
+  system: string;
+  svc: TsService | null;
+  gateFailingRules: readonly string[];
+  log: (m: string) => void;
+}
+
+/** The reviewer panel from options: the configured providers (logging a panel of
+ *  >1), or null when none are set (⇒ the caller uses the single main provider). */
+function reviewerPanel(
+  reviewProviders: readonly IProvider[] | undefined,
+  log: (m: string) => void
+): readonly IProvider[] | null {
+  if (reviewProviders === undefined || reviewProviders.length === 0) {
+    return null;
+  }
+
+  if (reviewProviders.length > 1) {
+    log(`review panel: ${reviewProviders.length} reviewers`);
+  }
+
+  return reviewProviders;
+}
+
+/** Find pass for ONE file: diff it once, run every reviewer over that diff, pool
+ *  the findings, and keep only those on a changed line. Extracted from reviewChange
+ *  so the orchestrator stays flat. Returns null when aborted. */
+async function findFileOutcome(
+  file: string,
+  findProviders: readonly IProvider[],
+  ctx: IFindContext,
+  signal: AbortSignal
+): Promise<IFindOutcome | null> {
+  if (signal.aborted) {
+    return null;
+  }
+
+  const { diff, truncated, ranges } = await fileDiff(
+    ctx.cwd,
+    ctx.base,
+    file,
+    ctx.staged,
+    ctx.untracked.has(file)
+  );
+  const found: IRepoFinding[] = [];
+
+  for (const rp of findProviders) {
+    found.push(
+      ...(await safeFind(
+        rp,
+        ctx.system,
+        ctx.svc,
+        ctx.cwd,
+        file,
+        diff,
+        ctx.gateFailingRules,
+        ctx.log,
+        signal
+      ))
+    );
+  }
+
+  // A finding on a pre-existing (unchanged) line isn't a regression in THIS change.
+  // Skip the filter when no hunks parsed (can't tell), so we never drop everything.
+  const onChange =
+    ranges.length === 0
+      ? found
+      : found.filter((f) => lineInRanges(f.line, ranges));
+
+  return { file, truncated, found, onChange };
+}
+
 /**
  * Review the change you're on (working tree vs the auto-detected base, including
  * uncommitted edits). Per-file find pass guided by the senior-review lenses, then
@@ -615,6 +725,9 @@ export async function reviewChange(
   // caller blast-radius signal. Built once; falls back gracefully when absent.
   const svc: TsService | null = await buildTsService(cwd);
   const makeUnitProvider = opts.providerFactory ?? ((): IProvider => provider);
+  // Reviewer panel: when configured, every file is reviewed by EACH reviewer and
+  // the findings pooled + deduped. Null ⇒ the single provider reviews (default).
+  const reviewers = reviewerPanel(opts.reviewProviders, log);
   const onUnit = unitReporter(opts.onEvent);
   // cap=1 (the default) IS the original sequential path — one local-model
   // server isn't swamped unless the config opts into parallel fan-out. Results
@@ -627,51 +740,28 @@ export async function reviewChange(
     ...(onUnit === undefined ? {} : { onUnit }),
   });
 
+  const findCtx: IFindContext = {
+    cwd,
+    base,
+    staged,
+    untracked,
+    system,
+    svc,
+    gateFailingRules,
+    log,
+  };
   const findOutcomes = await scheduler.runParallel(
     files.map((file) => ({
       id: `find:${file}`,
-      run: async (
-        signal: AbortSignal
-      ): Promise<{
-        file: string;
-        truncated: boolean;
-        found: IRepoFinding[];
-        onChange: IRepoFinding[];
-      } | null> => {
-        if (signal.aborted) {
-          return null;
-        }
-
-        const { diff, truncated, ranges } = await fileDiff(
-          cwd,
-          base,
+      // One find per reviewer (or a single fresh provider when no panel); the diff
+      // is computed once per file and shared across reviewers.
+      run: (signal: AbortSignal): Promise<IFindOutcome | null> =>
+        findFileOutcome(
           file,
-          staged,
-          untracked.has(file)
-        );
-        const found = await safeFind(
-          makeUnitProvider(),
-          system,
-          svc,
-          cwd,
-          file,
-          diff,
-          gateFailingRules,
-          log,
+          reviewers ?? [makeUnitProvider()],
+          findCtx,
           signal
-        );
-
-        // Keep only findings ON a changed line — a finding on pre-existing code
-        // the change didn't touch is not a regression in THIS change. Skip the
-        // filter when no hunks parsed (can't tell), so we never silently drop
-        // everything.
-        const onChange =
-          ranges.length === 0
-            ? found
-            : found.filter((f) => lineInRanges(f.line, ranges));
-
-        return { file, truncated, found, onChange };
-      },
+        ),
     }))
   );
 
@@ -700,11 +790,16 @@ export async function reviewChange(
     raw.push(...outcome.onChange);
   }
 
+  // A reviewer panel produces overlapping findings (same file+line+lens from
+  // several models) — collapse them before verify so we don't verify duplicates.
+  // A single reviewer path is untouched (no dedup) to keep behavior identical.
+  const pooled = reviewers === null ? raw : dedupeFindings(raw);
+
   const doVerify = opts.verify ?? true;
   const verifyOutcomes = await scheduler.runParallel(
     // The index makes ids unique when the reviewer cites the same line twice —
     // duplicate ids would collapse distinct units in the tracker and ledger.
-    raw.map((finding, index) => ({
+    pooled.map((finding, index) => ({
       id: `verify:${finding.file}:${finding.line}#${String(index)}`,
       run: async (signal: AbortSignal): Promise<IVerifiedFinding | null> => {
         if (signal.aborted) {

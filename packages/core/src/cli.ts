@@ -32,14 +32,23 @@ import { validate } from "./validate";
 import { composeGate } from "./gate/gate-runner";
 import { judgeStage } from "./loop/boringstack/gate-stages";
 import type { OpenAICompatibleProvider } from "./inference";
-import { resolveActiveModel, resolveModelByName } from "./models-config";
+import {
+  resolveActiveModel,
+  resolveModelByName,
+  loadModelsConfig,
+} from "./models-config";
 import type { ITask } from "./spec";
 import { runShellCommand } from "./lib/fs";
 import { currentVersion } from "./update-check";
 import { trace } from "./lib/trace";
 import { repl } from "./cli/repl";
 import { runMapCommand, runTraceCommand } from "./cli/repl-commands";
-import { makeProvider, modelForRun, envNumber } from "./cli/model-setup";
+import {
+  makeProvider,
+  resolveReviewProviders,
+  modelForRun,
+  envNumber,
+} from "./cli/model-setup";
 import { makeReporter, resolveLogPath } from "./cli/logging";
 import { resolveGate } from "./cli/gate-setup";
 import {
@@ -112,6 +121,8 @@ async function runOnce(args: ICliArgs): Promise<number> {
       : envNumber("TSFORGE_THINKING_BUDGET");
   const { entry } = await modelForRun(args);
   const provider = makeProvider(entry);
+  // Configured reviewer model(s); empty ⇒ the main model reviews (the default).
+  const reviewProviders = resolveReviewProviders(await loadModelsConfig());
   const report = makeReporter(logFile, "cli");
   const profile = resolveCliProfile(args.profile);
   const result = await runTask(task, args.dir, provider, {
@@ -123,6 +134,7 @@ async function runOnce(args: ICliArgs): Promise<number> {
     // Honor `--policy-mode` in one-shot too (validated in main()); without this
     // the documented flag was a silent no-op on the headless path.
     ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
+    ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
     // `--with-review` runs reviewRepair below (review + one repair cycle), so
     // suppress runTask's own report-only review to avoid reviewing twice.
     ...(args.withReview ? { suppressReview: true } : {}),
@@ -138,6 +150,7 @@ async function runOnce(args: ICliArgs): Promise<number> {
   if (ok && args.withReview) {
     await reviewRepair(provider, args.dir, task, modelAgent(provider), {
       ...(args.base.length > 0 ? { base: args.base } : {}),
+      ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
       onEvent: report,
     });
   }

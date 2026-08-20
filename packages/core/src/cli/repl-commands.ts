@@ -107,7 +107,8 @@ export async function runReviewCommand(
   dir: string,
   base: string,
   out: (s: string) => void = STDOUT,
-  columns?: number
+  columns?: number,
+  reviewProviders: readonly IProvider[] = []
 ): Promise<string> {
   out(
     `${paint("reviewing the current change…", STYLE.dim, columns !== undefined)}\n`
@@ -117,6 +118,7 @@ export async function runReviewCommand(
   try {
     const report = await reviewChange(provider, dir, {
       ...(base.length > 0 ? { base } : {}),
+      ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
       log: (m) => {
         out(`  ↳ ${m}\n`);
       },

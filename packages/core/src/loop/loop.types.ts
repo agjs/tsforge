@@ -1,4 +1,5 @@
 import type { ErrorParser } from "../validate";
+import type { IProvider } from "../inference";
 import type { ProfileId } from "../config/profiles";
 import type { PolicyMode } from "../policy";
 import type { IGate } from "../gate/gate-runner";
@@ -219,6 +220,10 @@ export interface IRunOptions {
    *  afterwards — the one-shot `--with-review` path runs `reviewRepair`, so it would
    *  otherwise review twice. Independent of the global TSFORGE_NO_REVIEW toggle. */
   suppressReview?: boolean;
+  /** Reviewer model(s) for the post-green review phase. Empty/absent ⇒ the main
+   *  model reviews. Resolved once by the driver from models.json `reviewModels` /
+   *  the TSFORGE_REVIEW_* envs. */
+  reviewProviders?: readonly IProvider[];
   /** Rule profile override (from a recipe); defaults to tsforge.config.json. */
   profile?: ProfileId;
   /** Policy-mode override (from the `--policy-mode` CLI flag); when set it wins
