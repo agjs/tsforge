@@ -14,6 +14,14 @@ tsforge review --with-gate     # run the gate first; skip what it already covers
 
 Inside a session, the same review is available as `/review`.
 
+## Automatic after green
+
+You don't have to remember to run it. When a task lands **green** — in an interactive session and in headless runs alike — tsforge automatically reviews what just changed and surfaces its findings. The gate proves the change compiles, lints, and passes tests; this catches the substance the gate can't — an inverted condition, an unhandled edge case, a secret in a log line.
+
+It **reports** — it never edits your code on its own. Each finding comes with a concrete failure scenario and, when the reviewer is confident, a suggested fix. In an interactive session, if you want the agent to act on them, run **`/reviewfix`** and it hands the findings back to the agent to address (which then gets reviewed in turn). The auto phase reviews only the **current unit of work** (the files that turn touched), not the whole branch, so it stays fast and relevant.
+
+Turn the phase off with `TSFORGE_NO_REVIEW=1` — eval sweeps and cost-sensitive headless runs set this. The explicit `tsforge review` command and `/review` always work regardless.
+
 ## Gate-aware review
 
 With `--with-gate`, tsforge runs [the gate](/loop/gate-floor/) once before reviewing and tells the reviewer **which rules are already failing**, so it won't spend its attention re-reporting a type or lint error the gate loop will fix anyway. The review focuses on the behaviour of the code the gate already accepts (exactly the part the gate is blind to). The report notes how many gate rules were skipped. Without the flag, review runs as before (no gate run).
@@ -28,6 +36,8 @@ It looks at what you changed (working tree plus uncommitted edits, against the a
 - **Business logic**: money rounding, auth gating, invalid state transitions.
 - **Data and concurrency**: races, partial writes.
 - **API and contracts**: breaking a response shape or a serialized format.
+- **Security**: injection (SQL/command/path/XSS), a leaked secret, an ungated privileged path, unsafe deserialization or SSRF.
+- **Consistency**: a change that reimplements or diverges from how this codebase already does the same thing.
 
 Types, structure, and style are out of scope. [The gate](/loop/gate-floor/) already enforces those. Review is for judgment, not lint.
 
