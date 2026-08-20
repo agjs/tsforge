@@ -10,6 +10,61 @@ import type {
   ITsContext,
 } from "./lsp.types";
 
+/** Offset of the first identifier TOKEN named `symbol` in `sf`, preferring a
+ *  DECLARATION name (so `type_at`/`impact` land on the definition, not an
+ *  earlier `import { X }` use — both resolve the same symbol for references, but
+ *  the declaration is the more useful anchor). Returns undefined when the name
+ *  appears only in comments/strings/not at all. Skips comments and string
+ *  literals intrinsically: those are not Identifier nodes. */
+function firstIdentifierOffset(
+  sf: ts.SourceFile,
+  symbol: string
+): number | undefined {
+  let declPos: number | undefined;
+  let usePos: number | undefined;
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === symbol) {
+      const pos = node.getStart(sf);
+
+      usePos ??= pos;
+
+      if (declPos === undefined && isDeclarationName(node)) {
+        declPos = pos;
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sf);
+
+  return declPos ?? usePos;
+}
+
+/** True when `id` is the NAME of a declaration (class/function/interface/type/
+ *  enum/variable/param/property/method) rather than a reference to one. */
+function isDeclarationName(id: ts.Identifier): boolean {
+  const parent = id.parent;
+
+  return (
+    (ts.isClassDeclaration(parent) ||
+      ts.isFunctionDeclaration(parent) ||
+      ts.isInterfaceDeclaration(parent) ||
+      ts.isTypeAliasDeclaration(parent) ||
+      ts.isEnumDeclaration(parent) ||
+      ts.isModuleDeclaration(parent) ||
+      ts.isVariableDeclaration(parent) ||
+      ts.isParameter(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isMethodSignature(parent) ||
+      ts.isBindingElement(parent)) &&
+    parent.name === id
+  );
+}
+
 /**
  * Quick-fixes safe to apply automatically — they align with our strict gate.
  * Deliberately EXCLUDES:
@@ -664,12 +719,49 @@ export class TsService {
 
   /**
    * Ergonomic position lookup: the model addresses symbols by NAME, not byte
-   * offset. Returns the offset of the first word-boundary occurrence of `symbol`
-   * in `file`, or undefined. Crude but practical (rename re-validates via the
-   * gate; references/typeAt are read-only).
+   * offset. Returns the offset of the first real IDENTIFIER TOKEN named `symbol`,
+   * or undefined.
+   *
+   * Token-aware on purpose: a naive `\b`-regex matched the name inside comments,
+   * string literals, or an earlier `import { X }` line and returned that offset —
+   * at which `getReferencesAtPosition` finds no symbol and the tool reports
+   * "no references to X", so the model concludes a live symbol is dead and
+   * deletes it. Walking the AST for an Identifier node skips comments/strings
+   * (they aren't identifiers) and lands on a position TS can actually resolve.
+   * Uses the program's SourceFile so the offset is consistent with the program
+   * that references/type_at then query; falls back to a standalone parse for a
+   * file outside the tsconfig, then to the old regex if it can't be read/parsed.
    */
   positionOfSymbol(file: string, symbol: string): number | undefined {
-    const text = ts.sys.readFile(this.toAbs(file));
+    const abs = this.toAbs(file);
+    const sf =
+      this.service.getProgram()?.getSourceFile(abs) ??
+      this.parseStandalone(abs);
+
+    // A parsed file is authoritative: if it has no identifier of this name, the
+    // answer is honestly `undefined` — do NOT regex-fall-back, or a name that
+    // exists only in a comment/string would resolve to that non-token offset,
+    // the exact bug this rewrite closes. The regex is the last resort ONLY when
+    // the file couldn't be parsed at all.
+    return sf === undefined
+      ? this.regexPosition(abs, symbol)
+      : firstIdentifierOffset(sf, symbol);
+  }
+
+  /** Parse a file NOT in the program (outside the tsconfig scope) into a
+   *  throwaway SourceFile so identifier lookup still works for it. */
+  private parseStandalone(abs: string): ts.SourceFile | undefined {
+    const text = ts.sys.readFile(abs);
+
+    return text === undefined
+      ? undefined
+      : ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true);
+  }
+
+  /** Last-resort word-boundary match (a file that parsed to no identifier of
+   *  this name, or couldn't be read as a SourceFile). */
+  private regexPosition(abs: string, symbol: string): number | undefined {
+    const text = ts.sys.readFile(abs);
 
     if (text === undefined) {
       return undefined;
@@ -689,8 +781,20 @@ export class TsService {
     this.service.dispose();
   }
 
-  /** 1-based line number of a byte offset in a file (for readable tool output). */
+  /** 1-based line number of a UTF-16 offset in a file (for readable tool output).
+   *  Uses the program's SourceFile line map: (a) the offset came from that same
+   *  program, so line and offset agree even if disk has since diverged (a
+   *  disk-read here would count lines in DIFFERENT content and mispoint the
+   *  model), and (b) it's a precomputed binary search, not an O(filesize)
+   *  whole-file slice per reference. Falls back to a disk read only for a file
+   *  outside the program. */
   private lineOf(file: string, position: number): number {
+    const sf = this.service.getProgram()?.getSourceFile(file);
+
+    if (sf !== undefined) {
+      return sf.getLineAndCharacterOfPosition(position).line + 1;
+    }
+
     const text = ts.sys.readFile(file) ?? "";
 
     return text.slice(0, position).split("\n").length;
