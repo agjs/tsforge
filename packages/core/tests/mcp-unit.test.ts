@@ -234,6 +234,35 @@ describe("mcp: registry", () => {
     expect(count).toBe(1);
   });
 
+  test("serverNames() returns the SANITIZED identity (matches the wire tool name)", async () => {
+    // A server whose config name has a `.` is advertised as `mcp__my_server__…`
+    // and the policy classifier parses `my_server` back out. serverNames() must
+    // return that same sanitized identity, or the registered-server check denies
+    // every tool from the server as "unregistered".
+    const registry = new McpRegistry();
+
+    await registry.addServer("my.server", new FakeTransport([ECHO_TOOL]));
+
+    expect(registry.toolSchemas()[0]?.function.name).toBe(
+      "mcp__my_server__echo"
+    );
+    expect(registry.serverNames()).toEqual(["my_server"]);
+  });
+
+  test("callTool caps an oversized result from an untrusted server", async () => {
+    const registry = new McpRegistry();
+
+    await registry.addServer(
+      "big",
+      new FakeTransport([ECHO_TOOL], () => Promise.resolve("x".repeat(200_000)))
+    );
+
+    const out = await registry.callTool("mcp__big__echo", {});
+
+    expect(out.length).toBeLessThan(200_000);
+    expect(out).toContain("MCP result truncated");
+  });
+
   test("closeAll closes every transport", async () => {
     const registry = new McpRegistry();
     const transport = new FakeTransport([ECHO_TOOL]);
