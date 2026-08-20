@@ -89,6 +89,33 @@ export const LENSES: readonly ILens[] = [
     example:
       "Renaming a JSON response field, breaking every client that reads the old name.",
   },
+  {
+    id: "security",
+    title: "Security",
+    focus:
+      "Could this change be exploited, leak data, or run something it shouldn't?",
+    questions: [
+      "Untrusted input reaching a query, shell, filesystem path, or HTML sink (SQL/command/path injection, XSS)?",
+      "A secret, token, or key logged, returned, or committed; a credential in code?",
+      "A privileged action reachable without the authz/authn check that guards its peers?",
+      "Unsafe deserialization, an open redirect, or SSRF from a user-supplied URL?",
+    ],
+    example:
+      "Building a SQL string with a request parameter instead of a parameterized query.",
+  },
+  {
+    id: "consistency",
+    title: "Consistency with the codebase",
+    focus:
+      "Does the change follow how THIS codebase already does the same thing?",
+    questions: [
+      "Is there an existing helper/pattern for this that the change reimplements or bypasses?",
+      "Does it handle errors / results differently from its siblings (e.g. throw where peers return a result)?",
+      "Does it diverge from the established convention a caller or reviewer would rely on?",
+    ],
+    example:
+      "Throwing on a not-found where every sibling function returns null, so callers written for the pattern break.",
+  },
 ];
 
 /** Compact rubric text for a single lens, injected into the find prompt. */

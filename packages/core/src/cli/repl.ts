@@ -42,6 +42,8 @@ import {
   Session,
   PLAN_APPROVED_NOTE,
   isEphemeralUserInject,
+  reviewChange,
+  formatReport,
   type Reporter,
   type ILoopEvent,
 } from "../loop";
@@ -1159,6 +1161,9 @@ export async function repl(args: ICliArgs): Promise<number> {
   let lastTurnsToGreen: number | null = null;
   let lastElapsedMs = 0;
   let lastStatus = "ready";
+  // The last post-green review's formatted findings, kept so `/reviewfix` can hand
+  // them to the agent to address (the "offer to fix" half of report-then-fix).
+  let lastReviewFindings = "";
 
   // Set when the user types approve mid-turn (or it was drained from the steer
   // queue). Must NOT be injected as chat — that leaves plan mode on, withholds
@@ -1190,6 +1195,43 @@ export async function repl(args: ICliArgs): Promise<number> {
     return [...peeled.steer];
   };
 
+  // Post-work agent review (interactive): after a turn lands GREEN and actually
+  // changed code, review THIS turn's files and surface findings the gate can't —
+  // then offer `/reviewfix` to hand them to the agent (report-then-fix). Scoped to
+  // the turn's new files so it doesn't re-review the whole branch each turn. Never
+  // throws (a review error must not disturb the session); toggle with
+  // TSFORGE_NO_REVIEW. Reads `lastReviewFindings` for the fix affordance.
+  const reviewAfterGreen = async (
+    status: string,
+    touchedBefore: ReadonlySet<string>
+  ): Promise<void> => {
+    lastReviewFindings = "";
+
+    if (status !== "done" || flags.noReview()) {
+      return;
+    }
+
+    const changed = session.touchedFiles.filter((f) => !touchedBefore.has(f));
+
+    if (changed.length === 0) {
+      return; // nothing this turn touched — no work to review
+    }
+
+    try {
+      const review = await reviewChange(provider, args.dir, { files: changed });
+
+      if (review.findings.length === 0) {
+        return; // clean — stay quiet, don't nag on every green turn
+      }
+
+      lastReviewFindings = formatReport(review);
+      echo(`\n${lastReviewFindings}\n`);
+      echo("↳ /reviewfix to have the agent address these findings.\n");
+    } catch {
+      // A review failure (git/model/fs) is non-fatal — the turn already succeeded.
+    }
+  };
+
   // Run one user-driven exchange: fresh abort controller, time it, record the
   // outcome for the status line, persist. `run` gets the live signal + a steer
   // drain so in-flight user messages reach the model.
@@ -1202,6 +1244,9 @@ export async function repl(args: ICliArgs): Promise<number> {
   ): Promise<void> => {
     active = new AbortController();
     const started = performance.now();
+    // Snapshot the change-set BEFORE the turn so the after-green review scopes to
+    // what THIS exchange touched, not the whole accumulated branch diff.
+    const touchedBefore = new Set(session.touchedFiles);
 
     lastStatus = "working"; // reflected live on the bar (● working) during the turn
     spinner.start();
@@ -1238,6 +1283,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     await persist();
+    // `lastStatus` holds this turn's terminal status here (only reached when `run`
+    // resolved — a throw skips past this via the finally). Review only on green.
+    await reviewAfterGreen(lastStatus, touchedBefore);
   };
 
   // Free-text user sends route through here: resolve `@file` mentions to inlined
@@ -1548,6 +1596,22 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       case "review":
         await runReviewCommand(provider, args.dir, arg);
+        break;
+
+      case "reviewfix":
+        if (lastReviewFindings.length === 0) {
+          echo("no review findings to fix (run a change first, or /review).\n");
+        } else {
+          // Hand the last review's findings to the agent as the next instruction —
+          // the fix turn itself re-triggers the after-green review on its edits.
+          await drive((opts) =>
+            session.send(
+              `Address these code-review findings in the change you just made. For each, either fix it or briefly say why it is not a real problem:\n\n${lastReviewFindings}`,
+              opts
+            )
+          );
+        }
+
         break;
 
       case "map":

@@ -17,6 +17,9 @@ export const ENV_FLAG = {
   notionRaw: "TSFORGE_NOTION_RAW",
   noSentry: "TSFORGE_NO_SENTRY",
   sentryRaw: "TSFORGE_SENTRY_RAW",
+  // Post-work agent review (auto after a task goes green). On by default; eval
+  // sweeps and cost-sensitive headless runs set this to skip the review phase.
+  noReview: "TSFORGE_NO_REVIEW",
   basicInput: "TSFORGE_BASIC_INPUT",
   noDelegation: "TSFORGE_NO_DELEGATION",
   expertRescue: "TSFORGE_EXPERT_RESCUE",

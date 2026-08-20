@@ -123,6 +123,9 @@ async function runOnce(args: ICliArgs): Promise<number> {
     // Honor `--policy-mode` in one-shot too (validated in main()); without this
     // the documented flag was a silent no-op on the headless path.
     ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
+    // `--with-review` runs reviewRepair below (review + one repair cycle), so
+    // suppress runTask's own report-only review to avoid reviewing twice.
+    ...(args.withReview ? { suppressReview: true } : {}),
   });
   const ok = result.status === RUN_STATUS.done;
 

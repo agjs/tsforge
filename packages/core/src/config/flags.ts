@@ -56,6 +56,10 @@ export const flags = {
   noSentry: (): boolean => isOn(ENV_FLAG.noSentry),
   /** Re-expose the raw `mcp__sentry__*` tools alongside the curated verbs. */
   sentryRaw: (): boolean => isOn(ENV_FLAG.sentryRaw),
+  /** Kill-switch for the post-work agent review phase (auto review after a task
+   *  goes green). On by default; set TSFORGE_NO_REVIEW=1 to skip it — used by eval
+   *  sweeps (determinism/cost) and any run that doesn't want the extra pass. */
+  noReview: (): boolean => isOn(ENV_FLAG.noReview),
   /** Fall back to basic readline input (no multiline editor) in interactive mode.
    *  Default OFF — the editor is on. Set to "1" to disable the editor. */
   basicInput: (): boolean => isOn(ENV_FLAG.basicInput),
