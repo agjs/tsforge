@@ -23,7 +23,7 @@ inventory, see the hand-drawn map on [Internals](/internals/).
 | `self-harness` | Lets the harness propose, trial, and keep edits to its own prompts and rules | optional | 15 | 3k | 2 | 9 |
 | `config` | tsforge.config.json, profiles, recipes, agent specs, and external plugins | core | 12 | 3k | 8 | 8 |
 | `scaffold` | Stands up a new project from an archetype and configures its gate | optional | 15 | 3k | 3 | 3 |
-| `(root)` | CLI entry, model registry, session persistence — the loose files in src/ | core | 6 | 2k | 6 | 15 |
+| `(root)` | CLI entry, model registry, session persistence — the loose files in src/ | core | 6 | 3k | 6 | 15 |
 | `editor` | The terminal input-line editor behind the REPL prompt | core | 10 | 2k | 2 | 2 |
 | `gate` | Composes and runs the deterministic gate: linter, stages, tool paths | core | 15 | 2k | 5 | 8 |
 | `reviewers` | Independent review panel that grades a change before it is trusted | optional | 9 | 2k | 1 | 3 |
@@ -56,8 +56,8 @@ buries the ones someone can actually go and break.
 
 | Pair | One way | The other |
 | --- | --- | --- |
-| `(root)` ↔ `cli` | `cli.ts:29` → `./cli/args` | `cli/config-menu.ts:10` → `../models-config` |
-| `(root)` ↔ `gate` | `cli.ts:31` → `./gate/gate-runner` | `gate/core-gate.ts:3` → `../update-check` |
+| `(root)` ↔ `cli` | `cli.ts:30` → `./cli/args` | `cli/config-menu.ts:10` → `../models-config` |
+| `(root)` ↔ `gate` | `cli.ts:32` → `./gate/gate-runner` | `gate/core-gate.ts:3` → `../update-check` |
 | `(root)` ↔ `inference` | `classify.ts:1` → `./inference` | `inference/image-gen.ts:4` → `../models-config` |
 | `(root)` ↔ `loop` | `cli.ts:13` → `./loop` | `loop/expert-handoff.ts:21` → `../models-config` |
 | `agent` ↔ `inference` | `agent/agent-runner.ts:18` → `../inference` | `inference/wire.ts:9` → `../agent` |
@@ -67,7 +67,7 @@ buries the ones someone can actually go and break.
 | `cli` ↔ `render` | `cli/banner.ts:9` → `../render` | `render/command-menu.ts:2` → `../cli/commands` |
 | `config` ↔ `rule-packs` | `config/external-plugins.ts:5` → `../rule-packs` | `rule-packs/index.ts:131` → `../config/plugin-fingerprint` |
 | `editor` ↔ `render` | `editor/view.ts:2` → `../render/style` | `render/frame/input-seq.ts:1` → `../../editor/segments` |
-| `eval` ↔ `loop` | `eval/failure-class.ts:1` → `../loop/loop.types` | `loop/loop.types.ts:5` → `../eval/failure-class` |
+| `eval` ↔ `loop` | `eval/failure-class.ts:1` → `../loop/loop.types` | `loop/loop.types.ts:6` → `../eval/failure-class` |
 | `inference` ↔ `loop` | `inference/wire.ts:10` → `../loop/context-hygiene` | `loop/assistant-message.ts:1` → `../inference` |
 | `loop` ↔ `render` | `loop/worklist/panel.ts:3` → `../../render/frame/ansi-plain` | `render/agent-tree.ts:8` → `../loop/loop.types` |
 | `loop` ↔ `self-harness` | `loop/feedback/rule-docs.ts:3` → `../../self-harness/overlay` | `self-harness/build-evidence.ts:3` → `../loop` |
@@ -94,20 +94,20 @@ Async functions returning an exit code, declared under the CLI — the commands.
 
 | Function | Declared |
 | --- | --- |
-| `agentsMode` | `cli.ts:346` |
-| `greenfieldMode` | `cli.ts:644` |
+| `agentsMode` | `cli.ts:350` |
+| `greenfieldMode` | `cli.ts:651` |
 | `harnessDiagnoseMode` | `cli/harness-diagnose-mode.ts:211` |
 | `harnessReviewMode` | `cli/harness-review-mode.ts:684` |
-| `main` | `cli.ts:755` |
-| `mapMode` | `cli.ts:482` |
-| `recipesMode` | `cli.ts:501` |
+| `main` | `cli.ts:762` |
+| `mapMode` | `cli.ts:486` |
+| `recipesMode` | `cli.ts:505` |
 | `repl` | `cli/repl.ts:753` |
-| `reviewMode` | `cli.ts:181` |
-| `runOnce` | `cli.ts:93` |
+| `reviewMode` | `cli.ts:185` |
+| `runOnce` | `cli.ts:94` |
 | `runTraceCommand` | `cli/repl-commands.ts:118` |
-| `scaffoldMode` | `cli.ts:726` |
-| `setupMode` | `cli.ts:490` |
-| `traceMode` | `cli.ts:552` |
+| `scaffoldMode` | `cli.ts:733` |
+| `setupMode` | `cli.ts:494` |
+| `traceMode` | `cli.ts:556` |
 
 ## Imports that leave `src/`
 

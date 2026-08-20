@@ -24,6 +24,7 @@ import {
   cliUsage,
   resolveCliProfile,
   profileFlagError,
+  policyModeFlagError,
   valueFlagError,
   type ICliArgs,
 } from "./cli/args";
@@ -119,6 +120,9 @@ async function runOnce(args: ICliArgs): Promise<number> {
     ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
     ...(args.scout ? { scout: true } : {}),
     ...(profile === undefined ? {} : { profile }),
+    // Honor `--policy-mode` in one-shot too (validated in main()); without this
+    // the documented flag was a silent no-op on the headless path.
+    ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
   });
   const ok = result.status === RUN_STATUS.done;
 
@@ -595,6 +599,9 @@ function greenfieldDeps(
         gate,
         ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
         ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+        ...(isPolicyMode(args.policyMode)
+          ? { policyMode: args.policyMode }
+          : {}),
       });
 
       return {
@@ -828,6 +835,21 @@ export async function main(): Promise<number> {
 
   if (profileErr !== null) {
     process.stdout.write(`${profileErr}\n`);
+
+    return 1;
+  }
+
+  // A typo'd `--policy-mode` must fail loudly for the same reason — but the
+  // stakes are higher: an unvalidated value was silently discarded and the
+  // session fell to a MORE PERMISSIVE posture (plan-first off, or a config
+  // bypassPermissions winning). A safety flag never fails open on a typo.
+  const policyErr = policyModeFlagError(
+    args.policyMode,
+    raw.includes("--policy-mode")
+  );
+
+  if (policyErr !== null) {
+    process.stdout.write(`${policyErr}\n`);
 
     return 1;
   }
