@@ -214,6 +214,11 @@ export interface IRunOptions {
    *  the model must still implement the feature, and the per-feature browser/judge
    *  layers decide whether it's done. */
   requireRed?: boolean;
+  /** Suppress the post-green agent-review phase for THIS run (the auto review that
+   *  fires in `finish()` on a done result). Set by callers that run their OWN review
+   *  afterwards — the one-shot `--with-review` path runs `reviewRepair`, so it would
+   *  otherwise review twice. Independent of the global TSFORGE_NO_REVIEW toggle. */
+  suppressReview?: boolean;
   /** Rule profile override (from a recipe); defaults to tsforge.config.json. */
   profile?: ProfileId;
   /** Policy-mode override (from the `--policy-mode` CLI flag); when set it wins

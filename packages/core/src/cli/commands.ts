@@ -54,6 +54,10 @@ export const COMMANDS: readonly ICommandSpec[] = [
     summary: "review the current change (logic, regressions, edge cases)",
   },
   {
+    name: "/reviewfix",
+    summary: "have the agent address the last post-work review's findings",
+  },
+  {
     name: "/map",
     arg: "[status|forget]",
     summary: "build a structural map of the repo to prime the agent",

@@ -94,20 +94,20 @@ Async functions returning an exit code, declared under the CLI — the commands.
 
 | Function | Declared |
 | --- | --- |
-| `agentsMode` | `cli.ts:350` |
-| `greenfieldMode` | `cli.ts:651` |
+| `agentsMode` | `cli.ts:353` |
+| `greenfieldMode` | `cli.ts:654` |
 | `harnessDiagnoseMode` | `cli/harness-diagnose-mode.ts:211` |
 | `harnessReviewMode` | `cli/harness-review-mode.ts:684` |
-| `main` | `cli.ts:762` |
-| `mapMode` | `cli.ts:486` |
-| `recipesMode` | `cli.ts:505` |
-| `repl` | `cli/repl.ts:778` |
-| `reviewMode` | `cli.ts:185` |
+| `main` | `cli.ts:765` |
+| `mapMode` | `cli.ts:489` |
+| `recipesMode` | `cli.ts:508` |
+| `repl` | `cli/repl.ts:780` |
+| `reviewMode` | `cli.ts:188` |
 | `runOnce` | `cli.ts:94` |
 | `runTraceCommand` | `cli/repl-commands.ts:118` |
-| `scaffoldMode` | `cli.ts:733` |
-| `setupMode` | `cli.ts:494` |
-| `traceMode` | `cli.ts:556` |
+| `scaffoldMode` | `cli.ts:736` |
+| `setupMode` | `cli.ts:497` |
+| `traceMode` | `cli.ts:559` |
 
 ## Imports that leave `src/`
 

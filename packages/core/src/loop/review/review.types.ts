@@ -26,8 +26,11 @@ export interface IRepoFinding {
   lens: string;
   /** The problem, stated concretely. */
   claim: string;
-  /** Why it's a problem. */
+  /** Why it's a problem — ideally a concrete failure scenario / execution trace. */
   reason: string;
+  /** Optional concrete fix for the flagged lines (what "offer to fix" acts on).
+   *  Absent when the reviewer had no confident suggestion. */
+  suggestedFix?: string;
 }
 
 /** A finding after the adversarial-verify pass. */

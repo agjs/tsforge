@@ -8,6 +8,21 @@ import { flags } from "../src/config";
 afterEach(() => {
   delete process.env.TSFORGE_NO_NEAR_GREEN_CHECKPOINT;
   delete process.env.TSFORGE_NO_NEAR_GREEN_ROTATION;
+  delete process.env.TSFORGE_NO_REVIEW;
+});
+
+// The post-work agent review is DEFAULT ON (first-class after-green phase); the
+// TSFORGE_NO_REVIEW kill-switch disables it (eval sweeps / cost-sensitive runs).
+test("noReview is OFF by default (review on); the kill-switch turns review off", () => {
+  delete process.env.TSFORGE_NO_REVIEW;
+  expect(flags.noReview()).toBe(false);
+
+  process.env.TSFORGE_NO_REVIEW = "1";
+  expect(flags.noReview()).toBe(true);
+
+  // Any non-"1" value leaves review ON (the FLAG_ON contract).
+  process.env.TSFORGE_NO_REVIEW = "0";
+  expect(flags.noReview()).toBe(false);
 });
 
 test("nearGreenCheckpoint is ON by default; the kill-switch disables it", () => {

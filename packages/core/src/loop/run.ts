@@ -68,6 +68,8 @@ import {
 } from "./ttsr-init";
 import { resolveImageCapabilityFlags } from "./tools/image-tools";
 import { resolveGithubCapability } from "./tools/github-ops";
+import { reviewChange, formatReport } from "./review/review-change";
+import { flags } from "../config";
 import {
   type ILoopCtx,
   type ILoopState,
@@ -1282,6 +1284,37 @@ export async function runTask(
 
   const finish = async (result: IRunResult): Promise<IRunResult> => {
     await consolidateLessons(cwd, events, runId, report);
+
+    // Post-work agent review: after a task lands GREEN, read what changed and
+    // surface the substance the gate can't (logic/security/edge-cases). Report
+    // only here (headless has no human to "offer a fix" to); the repair path is
+    // the explicit `--with-review` (reviewRepair). Toggle off with TSFORGE_NO_REVIEW.
+    if (
+      result.status === RUN_STATUS.done &&
+      opts.suppressReview !== true &&
+      !flags.noReview()
+    ) {
+      try {
+        const review = await reviewChange(provider, cwd, {
+          log: (m) => {
+            report({ kind: "tool", task: task.id, message: `review: ${m}` });
+          },
+          onEvent: report,
+        });
+
+        report({
+          kind: "tool",
+          task: task.id,
+          message: formatReport(review),
+        });
+      } catch (err) {
+        report({
+          kind: "tool",
+          task: task.id,
+          message: `review skipped: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
 
     return result;
   };
