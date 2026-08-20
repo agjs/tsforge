@@ -136,6 +136,9 @@ describe("tryExpertRescue", () => {
       expect(await Bun.file(join(dir, "x.ts")).text()).toBe(
         "export const s = String(v);\n"
       );
+      // The expert's write is recorded in the change-set, so change-scoped
+      // meta-rules enforce on it (they used to skip a file only the expert touched).
+      expect(ctx.tool.touched?.has("x.ts")).toBe(true);
       // Guards + steer level reset so the primary model gets a fresh run.
       // R4 should be recorded for the block (novelty gate).
       expect(state.steerLevel).toBe(0);

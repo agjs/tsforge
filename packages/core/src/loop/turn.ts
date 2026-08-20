@@ -1873,6 +1873,13 @@ export async function tryExpertRescue(
     return false;
   }
 
+  // Record the expert's write in the change-set. Every model-driven write goes
+  // through recordTouched; the expert write did not, so a file the expert
+  // created/repaired (that the model never touched itself) was invisible to the
+  // change-scoped meta-rules (runMetaRulesStep reads ctx.tool.touched) — e.g. a
+  // logic module the expert introduced would skip logic-files-require-test-sibling.
+  recordTouched(ctx, [targetFile]);
+
   // The expert fixed it — give the primary model a fresh run at the ladder to
   // verify and finish (reset guards + steer level; record R4 as tried for this block).
   state.triedLeversByBlock.set(
