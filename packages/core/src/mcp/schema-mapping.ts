@@ -10,15 +10,21 @@ export interface IToolSchema {
   };
 }
 
-/** OpenAI function names allow [a-zA-Z0-9_-]; replace anything else with "_". */
-function sanitize(value: string): string {
+/** OpenAI function names allow [a-zA-Z0-9_-]; replace anything else with "_".
+ *  This is the canonical MCP name normalization: the wire tool name the model
+ *  sees is `mcp__${sanitizeMcpName(server)}__${sanitizeMcpName(tool)}`, so the
+ *  SANITIZED server segment is the identity the policy layer parses back out of
+ *  a call name. Anything comparing against that identity (the registered-server
+ *  check) must sanitize too, or a server whose config name has a `.`/space is
+ *  advertised under one name but checked under another → wrongly denied. */
+export function sanitizeMcpName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
 /** The namespaced name advertised to the model for an MCP tool. The double-underscore
  *  separators mirror the conventional `mcp__<server>__<tool>` form. */
 export function mcpToolName(server: string, tool: string): string {
-  return `mcp__${sanitize(server)}__${sanitize(tool)}`;
+  return `mcp__${sanitizeMcpName(server)}__${sanitizeMcpName(tool)}`;
 }
 
 /** A tool with no declared parameters still needs a valid object schema. */

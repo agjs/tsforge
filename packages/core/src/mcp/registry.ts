@@ -1,10 +1,31 @@
 import type { IMcpTransport } from "./mcp.types";
-import { mapMcpTool, mcpToolName, type IToolSchema } from "./schema-mapping";
+import {
+  mapMcpTool,
+  mcpToolName,
+  sanitizeMcpName,
+  type IToolSchema,
+} from "./schema-mapping";
 
 interface IRegisteredTool {
   readonly server: string;
   readonly toolName: string;
   readonly transport: IMcpTransport;
+}
+
+/** Upper bound on an MCP tool result fed into the model's context (~64KB). An
+ *  external server is untrusted; an unbounded reply is a memory + context-flood
+ *  vector. Beyond this the result is truncated with a visible marker. */
+const MAX_MCP_RESULT_CHARS = 64_000;
+
+/** Cap an MCP result string, appending a truncation notice when it's clipped. */
+function capMcpResult(text: string): string {
+  if (text.length <= MAX_MCP_RESULT_CHARS) {
+    return text;
+  }
+
+  return `${text.slice(0, MAX_MCP_RESULT_CHARS)}\n… (MCP result truncated: ${String(
+    text.length
+  )} chars from an external server)`;
 }
 
 /**
@@ -60,14 +81,25 @@ export class McpRegistry {
     return this.byName.has(name);
   }
 
-  /** Distinct registered server names — the policy layer denies an
-   *  `mcp__<server>__*` call whose server isn't in this set. */
+  /** Distinct registered server IDENTITIES for the policy layer — the SANITIZED
+   *  server name, matching what the model's `mcp__<server>__*` call name carries
+   *  and what policy's classifier parses back out. Returning the raw config name
+   *  here (e.g. `my.server`) while the classifier sees `my_server` made every
+   *  tool from a server whose name has a `.`/space wrongly read as an
+   *  unregistered server and denied. */
   serverNames(): string[] {
-    return [...new Set([...this.byName.values()].map((t) => t.server))];
+    return [
+      ...new Set(
+        [...this.byName.values()].map((t) => sanitizeMcpName(t.server))
+      ),
+    ];
   }
 
   /** Call a registered MCP tool. Never throws: a transport failure is returned
-   *  as text so the model treats it as a tool result. */
+   *  as text so the model treats it as a tool result. The result is capped:
+   *  an external server is untrusted, and an unbounded result would blow up
+   *  memory and flood the model's context (the built-in `read`/shell paths are
+   *  bounded too) — an oversized reply is truncated with a visible notice. */
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
     const entry = this.byName.get(name);
 
@@ -76,7 +108,7 @@ export class McpRegistry {
     }
 
     try {
-      return await entry.transport.callTool(entry.toolName, args);
+      return capMcpResult(await entry.transport.callTool(entry.toolName, args));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
