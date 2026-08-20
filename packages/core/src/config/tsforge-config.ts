@@ -336,9 +336,36 @@ function validateConventions(
  *  loader stays simple. */
 /** A single policy rule — warn-and-drop: unknown/typed-wrong fields are dropped,
  *  an empty rule (matches everything) is a deliberate catch-all. */
+/** The only fields a policy rule may carry. An UNRECOGNIZED key (a typo like
+ *  `commandPrefixx`) is not ignored: a rule that keeps a valid matcher but loses
+ *  its intended NARROWING field would silently broaden — e.g. `{kind:"shell",
+ *  commandPrefixx:"npm test"}` becomes a match-ALL-shell `{kind:"shell"}`,
+ *  turning an `allow` for one command into an allow for every shell command.
+ *  Drop-with-warning instead, so a mistyped narrowing fails closed and loud. */
+const KNOWN_POLICY_RULE_FIELDS = new Set([
+  "kind",
+  "toolName",
+  "pathPattern",
+  "commandPrefix",
+  "commandPattern",
+  "mcpServer",
+]);
+
 function validatePolicyRule(parsed: unknown): IPolicyRule | undefined {
   if (!isRecord(parsed)) {
     warnConfig("tsforge.config.json: a policy rule must be an object");
+
+    return undefined;
+  }
+
+  const unknownKeys = Object.keys(parsed).filter(
+    (k) => !KNOWN_POLICY_RULE_FIELDS.has(k)
+  );
+
+  if (unknownKeys.length > 0) {
+    warnConfig(
+      `tsforge.config.json: policy rule has unrecognized field(s) ${unknownKeys.join(", ")} — dropped (a typo'd narrowing field must not silently broaden the rule's match)`
+    );
 
     return undefined;
   }

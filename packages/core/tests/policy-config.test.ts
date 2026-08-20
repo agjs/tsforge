@@ -111,6 +111,42 @@ describe("policy config parsing (warn-and-drop)", () => {
     );
   });
 
+  test("a rule with a typo'd NARROWING field is dropped, not silently broadened", async () => {
+    // `{ kind: "shell", commandPrefixx: "npm test" }` keeps a valid matcher
+    // (kind) but the typo'd narrowing is unrecognized. Silently ignoring it left
+    // `{ kind: "shell" }` — a match-ALL-shell rule — so an `allow` for one
+    // command became an allow for EVERY shell command, undoing a mode's shell
+    // deny. The rule must be dropped (fail closed), not broadened.
+    await withConfig(
+      {
+        policy: {
+          rules: { allow: [{ kind: "shell", commandPrefixx: "npm test" }] },
+        },
+      },
+      async (dir) => {
+        const allow = (await loadTsforgeConfig(dir)).policy?.rules?.allow ?? [];
+
+        expect(allow).toHaveLength(0);
+      }
+    );
+  });
+
+  test("a well-formed narrowing rule is kept intact", async () => {
+    await withConfig(
+      {
+        policy: {
+          rules: { allow: [{ kind: "shell", commandPrefix: "npm test" }] },
+        },
+      },
+      async (dir) => {
+        const rule = (await loadTsforgeConfig(dir)).policy?.rules?.allow?.[0];
+
+        expect(rule?.kind).toBe("shell");
+        expect(rule?.commandPrefix).toBe("npm test");
+      }
+    );
+  });
+
   test("a literal empty rule {} is preserved as an intentional catch-all", async () => {
     await withConfig({ policy: { rules: { deny: [{}] } } }, async (dir) => {
       const deny = (await loadTsforgeConfig(dir)).policy?.rules?.deny ?? [];
