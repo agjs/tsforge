@@ -77,6 +77,42 @@ describe("external-plugins: isRulePack", () => {
     expect(isRulePack({ id: "x" })).toBe(false);
     expect(isRulePack(null)).toBe(false);
   });
+
+  test("rejects a pack whose rules and rulesConfig keys disagree", () => {
+    const stub = { meta: {}, create: () => ({}) };
+
+    // A rule with a severity for every rule it defines → valid.
+    expect(
+      isRulePack({
+        id: "x",
+        description: "d",
+        rules: { r1: stub },
+        rulesConfig: { r1: "error" },
+      })
+    ).toBe(true);
+
+    // A rule present in `rules` but MISSING from `rulesConfig` would register as
+    // available yet never run (silently disabled) — must be rejected.
+    expect(
+      isRulePack({
+        id: "x",
+        description: "d",
+        rules: { r1: stub, r2: stub },
+        rulesConfig: { r1: "error" },
+      })
+    ).toBe(false);
+
+    // A severity for a rule that doesn't exist (ESLint would error at build) —
+    // rejected too.
+    expect(
+      isRulePack({
+        id: "x",
+        description: "d",
+        rules: { r1: stub },
+        rulesConfig: { r1: "error", ghost: "warn" },
+      })
+    ).toBe(false);
+  });
 });
 
 describe("external-plugins: loading", () => {
@@ -251,13 +287,14 @@ describe("external-plugins: content freeze (F19)", () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-plugin-drift-"));
     const entry = join(dir, "plugin.ts");
 
-    // Minimal valid pack (no createRule) — enough to register + fingerprint.
+    // Minimal valid pack — rules and rulesConfig keys agree (a severity for the
+    // one rule it defines), enough to register + fingerprint.
     await writeFile(
       entry,
       `export const pack = {
   id: "drift-pack",
   description: "strong",
-  rules: {},
+  rules: { "no-bar": { meta: {}, create: () => ({}) } },
   rulesConfig: { "no-bar": "error" },
 };
 `
