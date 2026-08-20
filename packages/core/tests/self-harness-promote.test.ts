@@ -287,4 +287,38 @@ describe("install and rollback", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("concurrent installs never interleave into a corrupt live overlay", async () => {
+    // A campaign install racing a manual one (or a relaunch) both wrote the same
+    // fixed `${live}.tmp`; the two writes interleaved and `rename` could publish
+    // a half-merged document. A per-write unique temp name makes the winner one
+    // whole overlay — never a byte-interleave of two.
+    const dir = await home();
+
+    try {
+      const a = {
+        ...emptyOverlay(),
+        promptBlocks: {
+          extra: { mode: "append" as const, text: "A".repeat(90_000) },
+        },
+      };
+      const b = {
+        ...emptyOverlay(),
+        promptBlocks: {
+          extra: { mode: "append" as const, text: "B".repeat(90_000) },
+        },
+      };
+
+      await Promise.all([installOverlay("m", a), installOverlay("m", b)]);
+
+      // The live file is exactly ONE of the two overlays, intact — not a splice.
+      const live = overlayPathFor("m");
+      const parsed = JSON.parse(await readFile(live, "utf8"));
+
+      expect([a, b]).toContainEqual(parsed);
+      expect(existsSync(`${live}.tmp`)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

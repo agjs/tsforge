@@ -204,8 +204,20 @@ export function parseOverlay(value: unknown): IHarnessOverlay | null {
   };
 }
 
+/** A learned prompt block past this many characters is bloat, not signal:
+ *  every future run pays for it in system-prompt size and dilution. An append
+ *  that would breach the ceiling is dropped (the block keeps what it has) rather
+ *  than growing without bound across a long campaign. */
+const MAX_BLOCK_CHARS = 8000;
+
 /** Compose two edits to the same prompt block: a replace supersedes what came
- *  before it; an append stacks below the existing edit. */
+ *  before it; an append stacks below the existing edit. Two safeguards on the
+ *  append path (a plain concat grew forever and duplicated on any re-merge):
+ *  - IDEMPOTENT: an append whose text is already present is a no-op, so
+ *    replaying/relaunching a campaign that reprocesses the same lineage can't
+ *    stack duplicate copies of the same learned guidance.
+ *  - BOUNDED: an append that would push the block past MAX_BLOCK_CHARS is
+ *    dropped, capping unbounded growth over many accepted rounds. */
 function composeBlockEdit(
   base: IPromptBlockEdit | undefined,
   patch: IPromptBlockEdit
@@ -214,7 +226,16 @@ function composeBlockEdit(
     return patch;
   }
 
-  return { mode: base.mode, text: `${base.text}\n${patch.text}` };
+  // Already contains this exact text (a re-merge of the same patch) → no-op.
+  if (base.text === patch.text || base.text.includes(patch.text)) {
+    return base;
+  }
+
+  const composed = `${base.text}\n${patch.text}`;
+
+  return composed.length > MAX_BLOCK_CHARS
+    ? base
+    : { mode: base.mode, text: composed };
 }
 
 /** Merge a candidate patch onto an overlay (both already validated). TTSR
