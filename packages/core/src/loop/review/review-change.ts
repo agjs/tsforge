@@ -95,7 +95,12 @@ function unitReporter(
   return (id, status): void => {
     const base = {
       task: REVIEW_TASK,
-      message: id,
+      // Human-readable node label for the live tree: `find:src/a.ts` → `review src/a.ts`,
+      // `verify:src/a.ts:12#3` → `verify src/a.ts:12`. The agentId keeps the raw id.
+      message: id
+        .replace(/^find:/, "review ")
+        .replace(/^verify:/, "verify ")
+        .replace(/#\d+$/, ""),
       agentId: `${REVIEW_TASK}:${id}`,
       parentTask: REVIEW_TASK,
     };
@@ -655,11 +660,13 @@ async function findFileOutcome(
     ctx.staged,
     ctx.untracked.has(file)
   );
-  const found: IRepoFinding[] = [];
-
-  for (const rp of findProviders) {
-    found.push(
-      ...(await safeFind(
+  // Reviewers fire CONCURRENTLY: a panel is independent providers (usually
+  // different remote hosts), so there's no reason to serialize them — that just
+  // multiplied latency by the reviewer count. safeFind never throws (errors → []),
+  // so this never rejects. A single-reviewer find is a one-element race (unchanged).
+  const perReviewer = await Promise.all(
+    findProviders.map((rp) =>
+      safeFind(
         rp,
         ctx.system,
         ctx.svc,
@@ -669,9 +676,10 @@ async function findFileOutcome(
         ctx.gateFailingRules,
         ctx.log,
         signal
-      ))
-    );
-  }
+      )
+    )
+  );
+  const found: IRepoFinding[] = perReviewer.flat();
 
   // A finding on a pre-existing (unchanged) line isn't a regression in THIS change.
   // Skip the filter when no hunks parsed (can't tell), so we never drop everything.

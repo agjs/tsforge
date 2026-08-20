@@ -1,7 +1,12 @@
 /** Self-contained REPL commands shared with the CLI's one-shot modes:
  *  /sessions, /map, /review, /trace, and the /metrics turns-to-green line. */
 import { buildAndPersistMap, mapStatus, forgetMap } from "../codebase";
-import { reviewChange, formatReport, formatReviewCard } from "../loop";
+import {
+  reviewChange,
+  formatReport,
+  formatReviewCard,
+  type Reporter,
+} from "../loop";
 import { STYLE, paint } from "../render";
 import type { IProvider } from "../inference";
 import { parseEventLog, formatTrace } from "../eval";
@@ -108,7 +113,9 @@ export async function runReviewCommand(
   base: string,
   out: (s: string) => void = STDOUT,
   columns?: number,
-  reviewProviders: readonly IProvider[] = []
+  reviewProviders: readonly IProvider[] = [],
+  onEvent?: Reporter,
+  concurrency?: number
 ): Promise<string> {
   out(
     `${paint("reviewing the current change…", STYLE.dim, columns !== undefined)}\n`
@@ -119,6 +126,9 @@ export async function runReviewCommand(
     const report = await reviewChange(provider, dir, {
       ...(base.length > 0 ? { base } : {}),
       ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
+      // Stream the fan-out into the live agent tree (visible progress).
+      ...(onEvent === undefined ? {} : { onEvent }),
+      ...(concurrency === undefined ? {} : { concurrency }),
       log: (m) => {
         out(`  ↳ ${m}\n`);
       },
