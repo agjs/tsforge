@@ -104,7 +104,7 @@ Async functions returning an exit code, declared under the CLI — the commands.
 | `repl` | `cli/repl.ts:782` |
 | `reviewMode` | `cli.ts:201` |
 | `runOnce` | `cli.ts:103` |
-| `runTraceCommand` | `cli/repl-commands.ts:150` |
+| `runTraceCommand` | `cli/repl-commands.ts:160` |
 | `scaffoldMode` | `cli.ts:749` |
 | `setupMode` | `cli.ts:510` |
 | `traceMode` | `cli.ts:572` |

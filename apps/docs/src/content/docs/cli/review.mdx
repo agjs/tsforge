@@ -68,6 +68,8 @@ By default the **main model reviews its own work**. You can point review at a di
 
 For a quick one-off without editing the file, set `TSFORGE_REVIEW_MODEL` (naming a `models` entry) or the trio `TSFORGE_REVIEW_BASE_URL` / `TSFORGE_REVIEW_MODEL` / `TSFORGE_REVIEW_API_KEY` for an ad-hoc reviewer. While reviewing, the status bar shows `● reviewing…` (or `● reviewing ×N` for a panel).
 
+**Live progress.** The review streams into the same agent-tree UI as delegated subagents: each file (and each finding being verified) appears as a node that goes pending → running → done, so you can watch it advance instead of waiting on a silent prompt. A panel's reviewers run **concurrently** (they're independent — usually different remote endpoints), and files fan out several at a time, so a large review isn't one-call-at-a-time.
+
 ## Coverage on large changes
 
 Review covers up to `TSFORGE_REVIEW_MAX_FILES` changed files (default **100**) per run, and reads up to `TSFORGE_REVIEW_DIFF_CHARS` (default **12000**) of each file's diff. Excess files are queued through the same [concurrency](/guardrails/config/) limit, not dropped — raise the caps for very large changes. If a run does hit a cap, the report says so loudly (`⚠ coverage: reviewed N of M …`) so a partial review never reads as a clean bill of health.

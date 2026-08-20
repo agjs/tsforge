@@ -793,6 +793,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     id,
     gateLabel: initialGateLabel,
     logFile,
+    report,
     resumed,
     activeModelEntry,
     autoGate,
@@ -806,6 +807,12 @@ export async function repl(args: ICliArgs): Promise<number> {
     reviewProviders.length > 1
       ? `reviewing ×${String(reviewProviders.length)}`
       : "reviewing";
+  // File-level fan-out for the review. A configured panel is remote + independent
+  // (e.g. OpenRouter), so it's safe to overlap several files at once (a floor of 4)
+  // instead of one-at-a-time. Self-review (the main model, one endpoint) respects
+  // the configured delegation cap so a serial endpoint isn't swamped.
+  const reviewConcurrency = (): number =>
+    reviewProviders.length > 0 ? Math.max(delegationCap, 4) : delegationCap;
 
   // Load delegation inputs HERE — before readline is created below. Any `await`
   // between `createInterface` and the `rl.on("line")` listener would yield the
@@ -1252,6 +1259,10 @@ export async function repl(args: ICliArgs): Promise<number> {
       const review = await withReviewingStatus(() =>
         reviewChange(provider, args.dir, {
           files: changed,
+          // Stream the fan-out into the live agent tree so each file/finding node
+          // appears → runs → completes (visible progress, not a silent wait).
+          onEvent: report,
+          concurrency: reviewConcurrency(),
           ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
         })
       );
@@ -1269,6 +1280,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       );
     } catch {
       // A review failure (git/model/fs) is non-fatal — the turn already succeeded.
+    } finally {
+      // Clear the review's live nodes so they don't linger until the next turn.
+      resetTree();
     }
   };
 
@@ -1636,17 +1650,25 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       case "review":
         // Store the findings so /reviewfix can act on a manual review too (not just
-        // the automatic after-green one). Plain text; empty when clean.
-        lastReviewFindings = await withReviewingStatus(() =>
-          runReviewCommand(
-            provider,
-            args.dir,
-            arg,
-            echo,
-            transcriptCols(),
-            reviewProviders
-          )
-        );
+        // the automatic after-green one). Plain text; empty when clean. `report` +
+        // concurrency stream the fan-out into the live agent tree (visible progress).
+        try {
+          lastReviewFindings = await withReviewingStatus(() =>
+            runReviewCommand(
+              provider,
+              args.dir,
+              arg,
+              echo,
+              transcriptCols(),
+              reviewProviders,
+              report,
+              reviewConcurrency()
+            )
+          );
+        } finally {
+          resetTree();
+        }
+
         break;
 
       case "reviewfix":

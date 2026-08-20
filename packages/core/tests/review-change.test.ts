@@ -298,6 +298,39 @@ test("a reviewer panel pools findings and dedups same file:line:lens", async () 
   expect(line2).toHaveLength(1);
 });
 
+test("reviewers in a panel fire CONCURRENTLY, not one after another", async () => {
+  // Each reviewer's find call bumps an in-flight counter and holds briefly. If the
+  // panel ran serially the max in-flight would be 1; concurrently it reaches 2.
+  let inFlight = 0;
+  let maxInFlight = 0;
+
+  const reviewer = (): IProvider => ({
+    async complete(messages) {
+      const sys = messages.find((m) => m.role === "system")?.content ?? "";
+
+      if (sys.includes("verifying a code-review finding")) {
+        return {
+          content: JSON.stringify({ real: true, verdict: "" }),
+          toolCalls: [],
+        };
+      }
+
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 25));
+      inFlight -= 1;
+
+      return { content: FINDINGS, toolCalls: [] };
+    },
+  });
+
+  await reviewChange(stub(FINDINGS, true), repo, {
+    reviewProviders: [reviewer(), reviewer()],
+  });
+
+  expect(maxInFlight).toBeGreaterThanOrEqual(2);
+});
+
 test("the security and consistency lenses ship in the rubric", () => {
   const ids = LENSES.map((l) => l.id);
 
