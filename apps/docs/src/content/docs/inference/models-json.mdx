@@ -164,6 +164,23 @@ Env overrides (an ad-hoc backend without editing the file): `TSFORGE_VISION_BASE
 `apiKeyEnv` is the **name of an environment variable**, not the key. Putting a literal `sk-...` as its value makes tsforge look up an env var named `sk-...` → no auth. Use `apiKey` for an inline key.
 :::
 
+## Who reviews: `reviewModels`
+
+By default the active model runs the post-work [code review](/cli/review/) on its own work. To use a different reviewer — or a **panel** — add a top-level `reviewModels` array (a sibling of `active`/`models`), each value naming a `models` entry:
+
+```json
+{
+  "active": "local",
+  "models": {
+    "local": { "baseUrl": "http://localhost:8000/v1", "model": "deepseek-v4-flash" },
+    "haiku": { "baseUrl": "https://api.anthropic.com/v1", "model": "claude-haiku-4-5", "apiKeyEnv": "ANTHROPIC_API_KEY" }
+  },
+  "reviewModels": ["haiku"]
+}
+```
+
+One entry is a dedicated reviewer; several form a panel whose findings are pooled and deduped (more real issues caught). Absent ⇒ the active model reviews. A single ad-hoc reviewer can also be set by env — `TSFORGE_REVIEW_MODEL` (names a `models` entry) or the `TSFORGE_REVIEW_BASE_URL` / `_MODEL` / `_API_KEY` trio — which wins over `reviewModels`. (This is separate from `reviewPanel`, which is only for `tsforge harness-review` on tsforge's own PRs.)
+
 ### Any other provider: `extraBody` / `extraHeaders`
 
 When a provider needs a param or auth scheme tsforge doesn't model, express it directly. `extraBody` is merged **last** (so it overrides anything), and `extraHeaders` can set a non-Bearer scheme:

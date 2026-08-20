@@ -71,7 +71,7 @@ import { renderEditor } from "../editor/view";
 import { flags } from "../config/flags";
 import type { OpenAICompatibleProvider } from "../inference";
 import type { IModelEntry } from "../models-config";
-import { resolveCapabilityModel } from "../models-config";
+import { resolveCapabilityModel, loadModelsConfig } from "../models-config";
 import {
   renderStatus,
   userBubble,
@@ -127,6 +127,7 @@ import {
   envNumber,
   providerConfig,
   makeProvider,
+  resolveReviewProviders,
   warnDefaultModelOnRemote,
   runModelCommand,
   modelForRun,
@@ -797,6 +798,15 @@ export async function repl(args: ICliArgs): Promise<number> {
     autoGate,
   } = await initReplSession(args);
 
+  // Reviewer model(s) for the review phase — from models.json `reviewModels` or the
+  // TSFORGE_REVIEW_* envs. Empty ⇒ the main model reviews (the default). Resolved
+  // once at boot so the review call sites stay synchronous.
+  const reviewProviders = resolveReviewProviders(await loadModelsConfig());
+  const reviewStatusLabel = (): string =>
+    reviewProviders.length > 1
+      ? `reviewing ×${String(reviewProviders.length)}`
+      : "reviewing";
+
   // Load delegation inputs HERE — before readline is created below. Any `await`
   // between `createInterface` and the `rl.on("line")` listener would yield the
   // event loop with readline live but unlistened, dropping the first typed line
@@ -1203,7 +1213,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   const withReviewingStatus = async <T>(fn: () => Promise<T>): Promise<T> => {
     const prev = lastStatus;
 
-    lastStatus = "reviewing";
+    lastStatus = reviewStatusLabel();
     spinner.start();
     paneScreen.setStatus(statusInfo());
 
@@ -1240,7 +1250,10 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     try {
       const review = await withReviewingStatus(() =>
-        reviewChange(provider, args.dir, { files: changed })
+        reviewChange(provider, args.dir, {
+          files: changed,
+          ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
+        })
       );
 
       if (review.findings.length === 0) {
@@ -1625,7 +1638,14 @@ export async function repl(args: ICliArgs): Promise<number> {
         // Store the findings so /reviewfix can act on a manual review too (not just
         // the automatic after-green one). Plain text; empty when clean.
         lastReviewFindings = await withReviewingStatus(() =>
-          runReviewCommand(provider, args.dir, arg, echo, transcriptCols())
+          runReviewCommand(
+            provider,
+            args.dir,
+            arg,
+            echo,
+            transcriptCols(),
+            reviewProviders
+          )
         );
         break;
 

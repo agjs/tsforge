@@ -8,13 +8,16 @@ import {
   PROVIDER_DEFAULTS,
   OpenAICompatibleProvider,
   type IOpenAICompatibleConfig,
+  type IProvider,
 } from "../inference";
 import {
   resolveActiveModel,
   setActiveModel,
   loadModelsConfig,
   resolveApiKey,
+  modelByName,
   type IModelEntry,
+  type IModelsConfig,
 } from "../models-config";
 import { isRecord } from "../lib/guards";
 import { trace } from "../lib/trace";
@@ -142,6 +145,41 @@ export function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
 
 export function makeProvider(entry: IModelEntry): OpenAICompatibleProvider {
   return new OpenAICompatibleProvider(providerConfig(entry));
+}
+
+/**
+ * The provider(s) that run the post-work code review, in precedence order:
+ *   1. `TSFORGE_REVIEW_BASE_URL` + `_MODEL` (+ `_API_KEY`) — an ad-hoc single reviewer;
+ *   2. `TSFORGE_REVIEW_MODEL` alone — names a `models` entry;
+ *   3. `models.json` `reviewModels: [...]` — one or several `models` entries (a panel).
+ * Returns `[]` when nothing is configured; callers then fall back to the MAIN model
+ * (the default: the model reviews its own work). Names in `reviewModels` are validated
+ * at config load, so the map here can't miss.
+ */
+export function resolveReviewProviders(cfg: IModelsConfig): IProvider[] {
+  const envBase = process.env.TSFORGE_REVIEW_BASE_URL;
+  const envModel = process.env.TSFORGE_REVIEW_MODEL;
+
+  if (envBase !== undefined && envBase.length > 0 && envModel !== undefined) {
+    const entry: IModelEntry = {
+      baseUrl: envBase,
+      model: envModel,
+      apiKey: process.env.TSFORGE_REVIEW_API_KEY,
+    };
+
+    return [makeProvider(entry)];
+  }
+
+  if (envModel !== undefined && envModel.length > 0) {
+    const entry = modelByName(cfg.models, envModel);
+
+    return entry === undefined ? [] : [makeProvider(entry)];
+  }
+
+  return (cfg.reviewModels ?? [])
+    .map((name) => modelByName(cfg.models, name))
+    .filter((e): e is IModelEntry => e !== undefined)
+    .map(makeProvider);
 }
 
 /** Catch the common footgun: a cloud baseUrl paired with the leftover qwen

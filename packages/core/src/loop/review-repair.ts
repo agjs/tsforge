@@ -23,6 +23,8 @@ export interface IReviewRepairOptions {
   staged?: boolean;
   parse?: ErrorParser;
   onEvent?: Reporter;
+  /** Reviewer model(s) for the find pass; empty/absent ⇒ the main `provider`. */
+  reviewProviders?: readonly IProvider[];
 }
 
 /** Turn verified findings into the gate-style error set the implement agent
@@ -61,6 +63,9 @@ export async function reviewRepair(
 
   const review = await reviewChange(provider, cwd, {
     ...(opts.base === undefined ? {} : { base: opts.base }),
+    ...(opts.reviewProviders !== undefined && opts.reviewProviders.length > 0
+      ? { reviewProviders: opts.reviewProviders }
+      : {}),
     staged: opts.staged ?? false,
     verify: true,
     log,

@@ -104,6 +104,11 @@ export interface IModelsConfig {
   capabilities?: Partial<Record<CapabilityName, string>>;
   /** Optional panel of model + binary reviewers for collaborative review. */
   reviewPanel?: IReviewPanel;
+  /** Optional model(s) that run the post-work code review — each names a `models`
+   *  entry. One entry ⇒ a dedicated reviewer; several ⇒ a panel whose findings are
+   *  pooled + deduped. Absent ⇒ the active model reviews its own work. Distinct
+   *  from `reviewPanel` (which drives `tsforge harness-review` on tsforge's own PRs). */
+  reviewModels?: string[];
 }
 
 export interface IReviewerModel {
@@ -540,13 +545,45 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
 
   const capabilities = parseCapabilities(raw.capabilities, models);
   const reviewPanel = parseReviewPanel(raw.reviewPanel, models);
+  const reviewModels = parseReviewModels(raw.reviewModels, models);
 
   const withCaps =
     capabilities === undefined
       ? { active: raw.active, models }
       : { active: raw.active, models, capabilities };
+  const withPanel =
+    reviewPanel === undefined ? withCaps : { ...withCaps, reviewPanel };
 
-  return reviewPanel === undefined ? withCaps : { ...withCaps, reviewPanel };
+  return reviewModels === undefined
+    ? withPanel
+    : { ...withPanel, reviewModels };
+}
+
+/** Validate the optional `reviewModels` list: an array of names, each pointing at
+ *  a real model entry. Fail loud at load so a typo isn't discovered at review time. */
+function parseReviewModels(
+  raw: unknown,
+  models: Record<string, IModelEntry>
+): string[] | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(raw) || !raw.every((n) => typeof n === "string")) {
+    throw new Error(
+      "models.json: reviewModels must be an array of model names"
+    );
+  }
+
+  for (const name of raw) {
+    if (modelByName(models, name) === undefined) {
+      throw new Error(
+        `models.json: reviewModels entry "${name}" is not one of: ${Object.keys(models).join(", ")}`
+      );
+    }
+  }
+
+  return raw.length > 0 ? [...raw] : undefined;
 }
 
 /** Validate the optional `capabilities` block: known keys only, each pointing at

@@ -67,7 +67,7 @@ buries the ones someone can actually go and break.
 | `cli` ↔ `render` | `cli/banner.ts:9` → `../render` | `render/command-menu.ts:2` → `../cli/commands` |
 | `config` ↔ `rule-packs` | `config/external-plugins.ts:5` → `../rule-packs` | `rule-packs/index.ts:131` → `../config/plugin-fingerprint` |
 | `editor` ↔ `render` | `editor/view.ts:2` → `../render/style` | `render/frame/input-seq.ts:1` → `../../editor/segments` |
-| `eval` ↔ `loop` | `eval/failure-class.ts:1` → `../loop/loop.types` | `loop/loop.types.ts:6` → `../eval/failure-class` |
+| `eval` ↔ `loop` | `eval/failure-class.ts:1` → `../loop/loop.types` | `loop/loop.types.ts:7` → `../eval/failure-class` |
 | `inference` ↔ `loop` | `inference/wire.ts:10` → `../loop/context-hygiene` | `loop/assistant-message.ts:1` → `../inference` |
 | `loop` ↔ `render` | `loop/review/format-card.ts:1` → `../../render` | `render/agent-tree.ts:8` → `../loop/loop.types` |
 | `loop` ↔ `self-harness` | `loop/feedback/rule-docs.ts:3` → `../../self-harness/overlay` | `self-harness/build-evidence.ts:3` → `../loop` |
@@ -94,20 +94,20 @@ Async functions returning an exit code, declared under the CLI — the commands.
 
 | Function | Declared |
 | --- | --- |
-| `agentsMode` | `cli.ts:353` |
-| `greenfieldMode` | `cli.ts:654` |
+| `agentsMode` | `cli.ts:366` |
+| `greenfieldMode` | `cli.ts:667` |
 | `harnessDiagnoseMode` | `cli/harness-diagnose-mode.ts:211` |
 | `harnessReviewMode` | `cli/harness-review-mode.ts:684` |
-| `main` | `cli.ts:765` |
-| `mapMode` | `cli.ts:489` |
-| `recipesMode` | `cli.ts:508` |
-| `repl` | `cli/repl.ts:781` |
-| `reviewMode` | `cli.ts:188` |
-| `runOnce` | `cli.ts:94` |
-| `runTraceCommand` | `cli/repl-commands.ts:148` |
-| `scaffoldMode` | `cli.ts:736` |
-| `setupMode` | `cli.ts:497` |
-| `traceMode` | `cli.ts:559` |
+| `main` | `cli.ts:778` |
+| `mapMode` | `cli.ts:502` |
+| `recipesMode` | `cli.ts:521` |
+| `repl` | `cli/repl.ts:782` |
+| `reviewMode` | `cli.ts:201` |
+| `runOnce` | `cli.ts:103` |
+| `runTraceCommand` | `cli/repl-commands.ts:150` |
+| `scaffoldMode` | `cli.ts:749` |
+| `setupMode` | `cli.ts:510` |
+| `traceMode` | `cli.ts:572` |
 
 ## Imports that leave `src/`
 

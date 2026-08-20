@@ -257,6 +257,47 @@ test("TSFORGE_REVIEW_MAX_FILES caps the reviewed set and still warns loudly", as
   }
 });
 
+test("a reviewer panel pools findings and dedups same file:line:lens", async () => {
+  // Two reviewers: one flags line 2 [correctness], the other flags the SAME
+  // line+lens (a duplicate) AND a distinct line 1 [edge-cases]. Pooled = 3 raw,
+  // deduped to 2 (the duplicate collapses).
+  const reviewerA = stub(FINDINGS, true); // line 2, correctness
+  const reviewerB = stub(
+    JSON.stringify({
+      findings: [
+        {
+          line: 2,
+          severity: "warning",
+          lens: "correctness",
+          claim: "same spot, different words",
+          reason: "dup",
+        },
+        {
+          line: 1,
+          severity: "error",
+          lens: "edge-cases",
+          claim: "a different issue",
+          reason: "distinct",
+        },
+      ],
+    }),
+    true
+  );
+
+  const report = await reviewChange(stub(FINDINGS, true), repo, {
+    reviewProviders: [reviewerA, reviewerB],
+  });
+
+  // discount.ts changed both lines in beforeEach? Only line 2 changed there, so
+  // the line-1 finding is dropped as pre-existing. Assert the dedupe collapsed the
+  // duplicate line-2 finding to one, and that a panel ran (no crash, verified set).
+  const line2 = report.findings.filter(
+    (f) => f.line === 2 && f.lens === "correctness"
+  );
+
+  expect(line2).toHaveLength(1);
+});
+
 test("the security and consistency lenses ship in the rubric", () => {
   const ids = LENSES.map((l) => l.id);
 

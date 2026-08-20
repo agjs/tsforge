@@ -1300,6 +1300,10 @@ export async function runTask(
             report({ kind: "tool", task: task.id, message: `review: ${m}` });
           },
           onEvent: report,
+          ...(opts.reviewProviders !== undefined &&
+          opts.reviewProviders.length > 0
+            ? { reviewProviders: opts.reviewProviders }
+            : {}),
         });
 
         report({
