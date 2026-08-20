@@ -1,0 +1,41 @@
+---
+title: Sentry
+description: "Read a Sentry issue and its stacktrace to fix the bug, and resolve the issue once the fix has shipped."
+---
+
+[Sentry](https://sentry.io) is where bugs surface. tsforge can read an issue — the error, its culprit, how often it happens, and the stacktrace — so the agent can fix it, and mark the issue resolved once the fix has shipped. A Sentry bug is usually already linked to a [Linear](/integrations/linear/) card, so the two integrations meet in the middle: read the error here, work the card's branch there.
+
+Sentry is a **curated integration over MCP** — see [MCP servers](/integrations/mcp/) for the shared model (capability = consent, curated verbs, opt-in).
+
+## Turn it on
+
+Add a `sentry` MCP server to `tsforge.config.json`, bridging the remote server to stdio with `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "sentry": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.sentry.dev/sse"]
+    }
+  }
+}
+```
+
+The server **must be keyed exactly `sentry`**. Once it connects, an interactive session prints `↳ sentry: on`. Force it off with `TSFORGE_NO_SENTRY=1`.
+
+## The tools
+
+- **`sentry_read`** (read-only): `issue` (one issue by id — title, culprit, level, how many times it's happened, permalink, and the latest event's stacktrace) and `search` (find issues matching a query). Use it to understand a bug before fixing it.
+- **`sentry_write`**: `resolve` — mark an issue resolved, once the fix has actually shipped. Deliberately narrow: no deleting or bulk-mutating issues.
+
+## When they're active
+
+Reads are available in every mode, including [plan mode](/cli/plan-mode/). The `resolve` write follows capability-as-consent: allowed interactively, denied while planning or running unattended. See [Permissions & policy](/guardrails/policy/).
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_NO_SENTRY` | off | withhold the Sentry tools even when the server is connected (`=1`) |
+| `TSFORGE_SENTRY_RAW` | off | also advertise the raw `mcp__sentry__*` tools alongside the curated verbs (`=1`) |
+
+→ [MCP servers](/integrations/mcp/) · [Linear](/integrations/linear/) · [Environment variables](/reference/flags/)
