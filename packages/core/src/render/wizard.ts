@@ -977,10 +977,22 @@ export function runWizard(
 
     stdin.on("keypress", onKey);
 
-    if (view === undefined) {
-      out(`${ENTER_ALT}${HIDE_CURSOR}`);
-    }
+    // The initial enter + first draw run OUTSIDE onKey, so a synchronous throw
+    // here (a renderFrame bug, a width-math edge on a pathological terminal size)
+    // would abandon the Promise executor with the terminal stranded on the alt
+    // screen, raw mode on, cursor hidden — no keypress can ever reach finish().
+    // Route a failure through the same finish() restore and resolve as cancelled,
+    // mirroring onKey's own catch. finish() swallows a throwing `out`, so it
+    // can't itself throw back out here.
+    try {
+      if (view === undefined) {
+        out(`${ENTER_ALT}${HIDE_CURSOR}`);
+      }
 
-    draw();
+      draw();
+    } catch {
+      state = cancelled;
+      finish();
+    }
   });
 }

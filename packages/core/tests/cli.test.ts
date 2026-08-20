@@ -579,6 +579,23 @@ test("repl product path never constructs or installs StatusBar", async () => {
   expect(src).not.toMatch(/import\s*\{[^}]*\bStatusBar\b/);
 });
 
+test("repl restores the terminal on SIGTERM and SIGHUP (not just normal exit)", async () => {
+  // A signal the process doesn't handle terminates it WITHOUT firing 'exit', so
+  // the pane TUI would be left on the alt screen with mouse tracking + a colored
+  // cursor. Both signals must be wired to paneScreen.leave(). Source-scanned
+  // (the true check needs a pty + signal harness) — mirrors the StatusBar guard.
+  const src = await Bun.file(
+    new URL("../src/cli/repl.ts", import.meta.url)
+  ).text();
+
+  expect(src).toContain('"SIGTERM"');
+  expect(src).toContain('"SIGHUP"');
+  // The handler must actually restore (leave the pane screen) and re-raise the
+  // signal, not merely register a no-op listener.
+  expect(src).toContain("paneScreen.leave()");
+  expect(src).toContain("process.kill(process.pid, sig)");
+});
+
 test("agents subcommand: list mode, ids+task mode, recipe fill", () => {
   const list = parseArgs(["agents"]);
 

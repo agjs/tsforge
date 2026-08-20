@@ -716,6 +716,39 @@ function maybeWritePlanModeIntro(planMode: boolean): void {
   process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
 }
 
+/**
+ * Wire terminal restoration for a pane-TUI session. `'exit'` covers a normal
+ * return/`process.exit`. But a signal the process doesn't HANDLE terminates it
+ * WITHOUT firing 'exit', leaving the pane on the alternate screen with SGR
+ * mouse tracking on and a colored/hidden cursor — spewing `\x1b[<…M` into the
+ * shell until a blind `reset`. SIGHUP (closed tab / ssh drop) and SIGTERM (a
+ * supervisor, `timeout tsforge …`) are the vectors; the editor's readline
+ * SIGINT handler covers Ctrl+C, and in raw editor mode Ctrl+C arrives as a
+ * keypress not a signal, so only these two need wiring. On a signal we restore,
+ * then re-raise with the default disposition so the exit status still reflects
+ * the signal (128+n). `leave`/`close` are idempotent. The editor handle is read
+ * through a getter because it's assigned later, inside the prompt loop.
+ */
+function installTerminalRestore(
+  paneScreen: { leave: () => void },
+  getEditor: () => { close: () => void } | null
+): void {
+  const restore = (): void => {
+    getEditor()?.close();
+    paneScreen.leave();
+  };
+
+  process.on("exit", restore);
+
+  for (const sig of ["SIGTERM", "SIGHUP"] as const) {
+    process.on(sig, () => {
+      restore();
+      process.removeAllListeners(sig);
+      process.kill(process.pid, sig);
+    });
+  }
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -2310,11 +2343,10 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Without that cleanup the shell sees Ctrl+C as literal `;5;99~` junk.
   let editorForExit: { close: () => void } | null = null;
 
-  // Restore the terminal even on an unexpected exit (leave/close are idempotent).
-  process.on("exit", () => {
-    editorForExit?.close();
-    paneScreen.leave();
-  });
+  // Restore the terminal on normal exit AND on the signals that would otherwise
+  // terminate the process without firing 'exit' (SIGTERM/SIGHUP). See
+  // installTerminalRestore.
+  installTerminalRestore(paneScreen, () => editorForExit);
 
   // Wipe the visible terminal. Pane console: clear scrollback + repaint. Pipes:
   // plain CSI wipe.
