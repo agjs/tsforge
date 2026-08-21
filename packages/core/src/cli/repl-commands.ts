@@ -1,12 +1,7 @@
 /** Self-contained REPL commands shared with the CLI's one-shot modes:
  *  /sessions, /map, /review, /trace, and the /metrics turns-to-green line. */
 import { buildAndPersistMap, mapStatus, forgetMap } from "../codebase";
-import {
-  reviewChange,
-  formatReport,
-  formatReviewCard,
-  type Reporter,
-} from "../loop";
+import { review, formatReport, formatReviewCard, type Reporter } from "../loop";
 import { STYLE, paint } from "../render";
 import type { IProvider } from "../inference";
 import { parseEventLog, formatTrace } from "../eval";
@@ -123,7 +118,7 @@ export async function runReviewCommand(
 
   // Guard the REPL: a review error (git/fs/model) must not crash the session.
   try {
-    const report = await reviewChange(provider, dir, {
+    const report = await review(provider, dir, {
       ...(base.length > 0 ? { base } : {}),
       ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
       // Stream the fan-out into the live agent tree (visible progress).

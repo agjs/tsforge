@@ -1,8 +1,8 @@
-// Eval for `tsforge review`: run the reviewer against repos with PLANTED bugs
-// (known ground truth) and measure recall (did it find the plant?) and false
-// positives (did it invent issues?), A/B'ing the adversarial-verify pass on/off.
-// Review can't be test-graded (a test leaks the answer), so we grade against
-// planted defects instead. Writes a record to evals/runs/.
+// Eval for `tsforge review`: run the agentic reviewer against repos with PLANTED
+// bugs (known ground truth) and measure recall (did it find the plant?) and false
+// positives (did it invent issues?). Review can't be test-graded (a test leaks the
+// answer), so we grade against planted defects instead. Writes a record to
+// evals/runs/.
 //
 // Run: bun run packages/core/scripts/review-eval.ts   (uses ~/.tsforge/models.json)
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenAICompatibleProvider } from "../src/inference";
-import { reviewChange } from "../src/loop/review";
+import { review } from "../src/loop/review";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 
 interface IScenario {
@@ -94,13 +94,12 @@ const NEAR = 3;
 
 async function score(
   provider: OpenAICompatibleProvider,
-  s: IScenario,
-  verify: boolean
+  s: IScenario
 ): Promise<IScore> {
   const dir = setup(s);
 
   try {
-    const report = await reviewChange(provider, dir, { verify });
+    const report = await review(provider, dir);
     const onPlant = (line: number): boolean => Math.abs(line - s.line) <= NEAR;
     const hits = report.findings.filter(
       (f) => f.file === s.file && onPlant(f.line)
@@ -121,24 +120,22 @@ async function score(
 }
 
 interface IVariantAgg {
-  variant: string;
   recall: number;
   avgFalsePositives: number;
   scores: { id: string; score: IScore }[];
 }
 
 async function runVariant(
-  provider: OpenAICompatibleProvider,
-  verify: boolean
+  provider: OpenAICompatibleProvider
 ): Promise<IVariantAgg> {
   const scores: { id: string; score: IScore }[] = [];
 
   for (const s of SCENARIOS) {
-    const sc = await score(provider, s, verify);
+    const sc = await score(provider, s);
 
     scores.push({ id: s.id, score: sc });
     process.stdout.write(
-      `  [${verify ? "verify=on " : "verify=off"}] ${s.id}: found=${sc.found ? "yes" : "no"} fp=${sc.falsePositives}\n`
+      `  ${s.id}: found=${sc.found ? "yes" : "no"} fp=${sc.falsePositives}\n`
     );
   }
 
@@ -146,7 +143,6 @@ async function runVariant(
   const fpTotal = scores.reduce((n, x) => n + x.score.falsePositives, 0);
 
   return {
-    variant: verify ? "verify=on" : "verify=off",
     recall: found / scores.length,
     avgFalsePositives: fpTotal / scores.length,
     scores,
@@ -158,18 +154,12 @@ const { entry } = await resolveActiveModel();
 
 process.stdout.write(`review-eval: model ${entry.model}\n`);
 
-const variants = [
-  await runVariant(provider, true),
-  await runVariant(provider, false),
-];
+const result = await runVariant(provider);
 
 process.stdout.write("\n=== review-eval summary ===\n");
-
-for (const v of variants) {
-  process.stdout.write(
-    `${v.variant}: recall ${(v.recall * 100).toFixed(0)}%  avg false-positives ${v.avgFalsePositives.toFixed(2)}\n`
-  );
-}
+process.stdout.write(
+  `recall ${(result.recall * 100).toFixed(0)}%  avg false-positives ${result.avgFalsePositives.toFixed(2)}\n`
+);
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const runsDir = join(import.meta.dir, "..", "..", "..", "evals", "runs");
@@ -178,6 +168,6 @@ const out = join(runsDir, `review-eval-${stamp}.json`);
 mkdirSync(runsDir, { recursive: true });
 writeFileSync(
   out,
-  `${JSON.stringify({ model: entry.model, variants }, null, 2)}\n`
+  `${JSON.stringify({ model: entry.model, result }, null, 2)}\n`
 );
 process.stdout.write(`\nsaved ${out}\n`);

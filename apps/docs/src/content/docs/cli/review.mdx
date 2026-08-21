@@ -26,6 +26,10 @@ Turn the phase off with `TSFORGE_NO_REVIEW=1` — eval sweeps and cost-sensitive
 
 With `--with-gate`, tsforge runs [the gate](/loop/gate-floor/) once before reviewing and tells the reviewer **which rules are already failing**, so it won't spend its attention re-reporting a type or lint error the gate loop will fix anyway. The review focuses on the behaviour of the code the gate already accepts (exactly the part the gate is blind to). The report notes how many gate rules were skipped. Without the flag, review runs as before (no gate run).
 
+## How it reviews
+
+The reviewer is an **agent**, not a one-shot prompt. It's given the whole change and the same tools you'd use: it reads the full diff (`git_context`), then **navigates the codebase** — opens the surrounding files, follows a changed function to its callers and definitions (`find_references`, `type_at`), checks types (`diagnostics`) — so it judges the change with real cross-file context instead of one file in isolation. A panel of reviewers each does this independently and their findings are pooled + deduped.
+
 ## What it reviews
 
 It looks at what you changed (working tree plus uncommitted edits, against the auto-detected base branch, no commit or push required) through a built-in senior-reviewer rubric:
@@ -43,9 +47,9 @@ Types, structure, and style are out of scope. [The gate](/loop/gate-floor/) alre
 
 ## Why the findings are trustworthy
 
-The usual failure of AI review is confident nonsense. tsforge runs an adversarial verification pass: every candidate finding is re-checked against the actual code, and anything the code doesn't confirm, or that can't cite a real line, gets dropped. You get a short list of real issues instead of a wall of maybes.
+The usual failure of AI review is confident nonsense. Two things keep the findings grounded. First, the reviewer investigates before it speaks: it's read-only and must cite a real `file:line` for every finding — anything without a concrete location it actually looked at is dropped, not shown. Second, a panel pools independent reviewers and dedupes, so a real issue that several reviewers land on stands out while one reviewer's stray guess doesn't. You get a short list of real issues instead of a wall of maybes.
 
-When a `tsconfig.json` is present, it also feeds the reviewer the callers of each changed export, computed from the type graph, so the regression check looks at concrete call sites instead of guessing.
+When a `tsconfig.json` is present, the reviewer can follow the callers of each changed export through the type graph (`find_references` / `type_at`), so the regression check looks at concrete call sites instead of guessing.
 
 ## Which model reviews
 
@@ -68,21 +72,17 @@ By default the **main model reviews its own work**. You can point review at a di
 
 For a quick one-off without editing the file, set `TSFORGE_REVIEW_MODEL` (naming a `models` entry) or the trio `TSFORGE_REVIEW_BASE_URL` / `TSFORGE_REVIEW_MODEL` / `TSFORGE_REVIEW_API_KEY` for an ad-hoc reviewer. While reviewing, the status bar shows `● reviewing…` (or `● reviewing ×N` for a panel).
 
-**Live progress.** The review streams into the same agent-tree UI as delegated subagents: each file (and each finding being verified) appears as a node that goes pending → running → done, so you can watch it advance instead of waiting on a silent prompt. A panel's reviewers run **concurrently** (they're independent — usually different remote endpoints), and files fan out several at a time, so a large review isn't one-call-at-a-time.
-
-## Coverage on large changes
-
-Review covers up to `TSFORGE_REVIEW_MAX_FILES` changed files (default **100**) per run, and reads up to `TSFORGE_REVIEW_DIFF_CHARS` (default **12000**) of each file's diff. Excess files are queued through the same [concurrency](/guardrails/config/) limit, not dropped — raise the caps for very large changes. If a run does hit a cap, the report says so loudly (`⚠ coverage: reviewed N of M …`) so a partial review never reads as a clean bill of health.
+**Live progress.** The review streams into the same agent-tree UI as delegated subagents: each reviewer appears as a node that goes pending → running → done, so you can watch it advance instead of waiting on a silent prompt. A panel's reviewers run **concurrently** (they're independent — usually different remote endpoints), so a panel isn't one-reviewer-at-a-time.
 
 ## Parallel review
 
-By default the per-file find pass and per-finding verify pass run one model call at a time. If your endpoint genuinely batches concurrent requests (e.g. vllm with `max_num_seqs` headroom), set [`agents.concurrency`](/guardrails/config/) in `tsforge.config.json`:
+A panel's reviewers are independent, so they run concurrently. The number in flight at once is capped by [`agents.concurrency`](/guardrails/config/) in `tsforge.config.json` (default 1):
 
 ```json
 { "agents": { "concurrency": 4 } }
 ```
 
-Review then fans out up to that many calls at once (each with a fresh provider) and prints a live `agents: 2 running, 5/16 done (…)` progress line. Results are identical in structure and order to a sequential run; only the wall-clock changes (≈2× measured at cap 8 on a batching endpoint). Keep the cap a couple below your server's `max_num_seqs` so an interactive session is never starved, and leave it at 1 for endpoints that serialize requests anyway.
+Keep the cap a couple below your endpoint's `max_num_seqs` so an interactive session is never starved. With a single reviewer (the default) there's nothing to fan out, so the cap has no effect.
 
 ## In CI
 

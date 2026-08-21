@@ -8,33 +8,53 @@ import type { IAgent } from "../src/agent";
 import type { ITask } from "../src/spec";
 import { reviewRepair } from "../src/loop";
 
-/** Provider that answers find + verify passes (keyed on the system prompt). */
-function stub(findings: string, verifyReal: boolean): IProvider {
-  return {
-    async complete(messages) {
-      const sys = messages.find((m) => m.role === "system")?.content ?? "";
-      const body = sys.includes("verifying a code-review finding")
-        ? JSON.stringify({ real: verifyReal, verdict: "judged" })
-        : findings;
+/** A provider that drives one review AGENT: first call → investigate (git_context
+ *  diff, the read-only step the runner requires before a result), then →
+ *  agent_result. `withFinding` false ⇒ a clean review (no findings). */
+function stub(withFinding: boolean): IProvider {
+  let calls = 0;
 
-      return { content: body, toolCalls: [] };
+  return {
+    async complete() {
+      calls += 1;
+
+      if (calls === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            { id: "t1", name: "git_context", arguments: { op: "diff" } },
+          ],
+        };
+      }
+
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "t2",
+            name: "agent_result",
+            arguments: {
+              summary: withFinding ? "found one issue" : "looks correct",
+              findings: withFinding
+                ? [
+                    {
+                      detail:
+                        "subtraction is reversed; returns a negative discount",
+                      source: "discount.ts:2",
+                      confidence: "high",
+                    },
+                  ]
+                : [],
+            },
+          },
+        ],
+      };
     },
   };
 }
 
-const ONE_FINDING = JSON.stringify({
-  findings: [
-    {
-      line: 2,
-      severity: "error",
-      lens: "correctness",
-      claim: "subtraction is reversed",
-      reason: "returns a negative discount",
-    },
-  ],
-});
-
-const NO_FINDINGS = JSON.stringify({ findings: [] });
+const ONE_FINDING = true;
+const NO_FINDINGS = false;
 
 /** A fake implement agent that writes a fixed string and records being called. */
 function fakeAgent(repo: string, write: string): IAgent & { calls: number } {
@@ -81,12 +101,7 @@ afterEach(() => {
 
 test("no verified findings → no repair, agent never called", async () => {
   const agent = fakeAgent(repo, "should not be written");
-  const res = await reviewRepair(
-    stub(NO_FINDINGS, true),
-    repo,
-    task("true"),
-    agent
-  );
+  const res = await reviewRepair(stub(NO_FINDINGS), repo, task("true"), agent);
 
   expect(res.findings).toBe(0);
   expect(res.repaired).toBe(false);
@@ -98,7 +113,7 @@ test("verified finding + a repair that keeps the gate green → repaired, kept",
   // gate passes only when the file contains REPAIRED; the agent writes it.
   const agent = fakeAgent(repo, "// REPAIRED\nconst x = price - off;\n");
   const res = await reviewRepair(
-    stub(ONE_FINDING, true),
+    stub(ONE_FINDING),
     repo,
     task("grep -q REPAIRED discount.ts"),
     agent
@@ -115,7 +130,7 @@ test("verified finding + a repair that breaks the gate → reverted, file restor
   // gate requires REPAIRED, but the agent writes garbage that lacks it → revert.
   const agent = fakeAgent(repo, "// BROKEN garbage\n");
   const res = await reviewRepair(
-    stub(ONE_FINDING, true),
+    stub(ONE_FINDING),
     repo,
     task("grep -q REPAIRED discount.ts"),
     agent
@@ -141,7 +156,7 @@ test("an agent that throws mid-repair still rolls the workspace back, then rethr
 
   await expect(
     reviewRepair(
-      stub(ONE_FINDING, true),
+      stub(ONE_FINDING),
       repo,
       task("grep -q REPAIRED discount.ts"),
       throwingAgent
@@ -167,7 +182,7 @@ test("a reverted batch reports its mutation count (multi-file accounting)", asyn
   const reverts: number[] = [];
 
   await reviewRepair(
-    stub(ONE_FINDING, true),
+    stub(ONE_FINDING),
     repo,
     task("grep -q REPAIRED discount.ts"),
     multiEditAgent,
@@ -188,7 +203,7 @@ test("a revert emits a `reverted` accounting event", async () => {
   const agent = fakeAgent(repo, "// BROKEN\n");
 
   await reviewRepair(
-    stub(ONE_FINDING, true),
+    stub(ONE_FINDING),
     repo,
     task("grep -q REPAIRED discount.ts"),
     agent,

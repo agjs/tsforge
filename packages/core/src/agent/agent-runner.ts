@@ -341,6 +341,11 @@ export interface IAgentResult {
   durationMs: number;
   /** Every event the agent emitted, agentId-tagged (for replay/tests). */
   events: ILoopEvent[];
+  /** For a structured agent (`outputMode: "structured"`) that finished with an
+   *  `agent_result` call, the RAW arguments of that call (`{ summary, findings }`)
+   *  — so a caller can pool typed findings instead of re-parsing `output`. Absent
+   *  on text agents, salvage, or a non-result terminal. */
+  structured?: unknown;
 }
 
 /**
@@ -660,7 +665,8 @@ export class AgentRunner {
       status: IAgentResult["status"],
       output: string,
       turns: number,
-      outputKind: IAgentResult["outputKind"] = "answer"
+      outputKind: IAgentResult["outputKind"] = "answer",
+      structuredResult?: unknown
     ): IAgentResult => ({
       status,
       output,
@@ -668,6 +674,9 @@ export class AgentRunner {
       turns,
       durationMs: performance.now() - start,
       events,
+      ...(structuredResult === undefined
+        ? {}
+        : { structured: structuredResult }),
     });
 
     // Shared progress so an abort/error mid-run reports the TRUE turn count
@@ -738,7 +747,8 @@ export class AgentRunner {
         status: IAgentResult["status"],
         output: string,
         turns: number,
-        outputKind?: IAgentResult["outputKind"]
+        outputKind?: IAgentResult["outputKind"],
+        structuredResult?: unknown
       ) => IAgentResult;
       progress: { turns: number; lastText: string };
       partial: () => { output: string; kind: IAgentResult["outputKind"] };
@@ -833,7 +843,13 @@ export class AgentRunner {
         // force a real tool call next.
         if (resultCall !== undefined) {
           if (hasInvestigated || !hasRealTools) {
-            return finish("done", resultPayload(resultCall.arguments), turn);
+            return finish(
+              "done",
+              resultPayload(resultCall.arguments),
+              turn,
+              "answer",
+              resultCall.arguments
+            );
           }
 
           steerInvestigateFirst(ctx, resultCalls);

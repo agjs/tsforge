@@ -53,14 +53,8 @@ export interface IReviewReport {
    *  empty/omitted when review ran without a gate signal. Optional so a report from
    *  an older/external caller (without the field) stays valid. */
   gateFailingRules?: string[];
-  /** Total changed source files detected BEFORE the MAX_FILES cap. When greater
-   *  than `changedFiles.length`, coverage was partial (the rest were not reviewed)
-   *  and the report must say so rather than read as complete. */
+  /** Total changed source files detected. Differs from `changedFiles.length` only
+   *  when the caller scoped the review to a subset (`opts.files`). Kept for report
+   *  bookkeeping. */
   totalChangedFiles?: number;
-  /** Files whose diff was truncated at the per-file char cap — the review saw only
-   *  a prefix of the change, so a problem past the cut is invisible. */
-  truncatedFiles?: string[];
-  /** Raw candidate findings dropped because they landed on pre-existing (unchanged)
-   *  lines rather than a line the change actually touched. */
-  preexisting?: number;
 }
