@@ -1,7 +1,13 @@
 /** Self-contained REPL commands shared with the CLI's one-shot modes:
  *  /sessions, /map, /review, /trace, and the /metrics turns-to-green line. */
 import { buildAndPersistMap, mapStatus, forgetMap } from "../codebase";
-import { review, formatReport, formatReviewCard, type Reporter } from "../loop";
+import {
+  review,
+  formatReport,
+  formatReviewCard,
+  type Reporter,
+  type IReviewReport,
+} from "../loop";
 import { STYLE, paint } from "../render";
 import type { IProvider } from "../inference";
 import { parseEventLog, formatTrace } from "../eval";
@@ -100,8 +106,9 @@ export async function runMapCommand(
 
 /** `/review` in the REPL — review the current change and print findings. `out` is
  *  the pane-aware sink; when `columns` is given the findings render as a colored,
- *  width-wrapped card (the TUI), otherwise plain text (CLI/pipe). Returns the PLAIN
- *  findings text (empty when clean/errored) so the caller can hand it to `/reviewfix`. */
+ *  width-wrapped card (the TUI), otherwise plain text (CLI/pipe). Returns the
+ *  structured report so the caller can seed `/reviewfix`'s task list; null when the
+ *  review errored (git/fs/model). */
 export async function runReviewCommand(
   provider: IProvider,
   dir: string,
@@ -111,7 +118,7 @@ export async function runReviewCommand(
   reviewProviders: readonly IProvider[] = [],
   onEvent?: Reporter,
   concurrency?: number
-): Promise<string> {
+): Promise<IReviewReport | null> {
   out(
     `${paint("reviewing the current change…", STYLE.dim, columns !== undefined)}\n`
   );
@@ -136,15 +143,13 @@ export async function runReviewCommand(
 
     out(`\n${rendered}\n`);
 
-    // Plain text (never the colored card) so /reviewfix hands the agent readable
-    // findings, not ANSI. Empty when there's nothing to act on.
-    return report.findings.length > 0 ? formatReport(report) : "";
+    return report;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
     out(`\nreview failed: ${message}\n`);
 
-    return "";
+    return null;
   }
 }
 
