@@ -1,7 +1,6 @@
 import { STYLE, paint, GLYPH } from "../../render";
 import { wrapToWidth } from "../../render/ansi";
 import { displayWidth } from "../../render/width";
-import { reviewMaxFiles, reviewDiffChars } from "./review-change";
 import type { IReviewReport, IVerifiedFinding, Severity } from "./review.types";
 
 /** Findings shown worst-first (matches the plain formatReport ordering). */
@@ -87,46 +86,23 @@ function renderFinding(
   return lines;
 }
 
-/** Coverage / truncation / gate notes — mirror formatReport's, in dim/yellow.
- *  These MUST render even with zero findings (a capped run isn't "all clear"). */
+/** Gate-aware note — mirrors formatReport's, in dim. Renders even with zero
+ *  findings. (The agentic reviewer reads the whole change with no file cap or diff
+ *  truncation, so there are no coverage/truncation notes to show.) */
 function noteLines(report: IReviewReport, color: boolean): string[] {
-  const reviewed = report.changedFiles.length;
-  const total = report.totalChangedFiles ?? reviewed;
-  const truncated = report.truncatedFiles ?? [];
   const gateRules = report.gateFailingRules ?? [];
-  const out: string[] = [];
 
-  if (total > reviewed) {
-    out.push(
-      paint(
-        `${GLYPH.warn} coverage: reviewed ${String(reviewed)} of ${String(total)} changed file(s); ${String(total - reviewed)} not reviewed (cap ${String(reviewMaxFiles())}) — raise TSFORGE_REVIEW_MAX_FILES or re-run scoped.`,
-        STYLE.yellow,
-        color
-      )
-    );
+  if (gateRules.length === 0) {
+    return [];
   }
 
-  if (truncated.length > 0) {
-    out.push(
-      paint(
-        `${GLYPH.warn} ${String(truncated.length)} file(s) had diffs truncated at ${String(reviewDiffChars())} chars — review saw only a prefix: ${truncated.join(", ")}`,
-        STYLE.yellow,
-        color
-      )
-    );
-  }
-
-  if (gateRules.length > 0) {
-    out.push(
-      paint(
-        `(gate-aware: skipped ${String(gateRules.length)} failing gate rule(s) the gate already covers)`,
-        STYLE.dim,
-        color
-      )
-    );
-  }
-
-  return out;
+  return [
+    paint(
+      `(gate-aware: skipped ${String(gateRules.length)} failing gate rule(s) the gate already covers)`,
+      STYLE.dim,
+      color
+    ),
+  ];
 }
 
 /**

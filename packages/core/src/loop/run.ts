@@ -68,7 +68,8 @@ import {
 } from "./ttsr-init";
 import { resolveImageCapabilityFlags } from "./tools/image-tools";
 import { resolveGithubCapability } from "./tools/github-ops";
-import { reviewChange, formatReport } from "./review/review-change";
+import { formatReport } from "./review/review-change";
+import { review } from "./review/review-agents";
 import { flags } from "../config";
 import {
   type ILoopCtx,
@@ -1295,7 +1296,7 @@ export async function runTask(
       !flags.noReview()
     ) {
       try {
-        const review = await reviewChange(provider, cwd, {
+        const result = await review(provider, cwd, {
           log: (m) => {
             report({ kind: "tool", task: task.id, message: `review: ${m}` });
           },
@@ -1309,7 +1310,7 @@ export async function runTask(
         report({
           kind: "tool",
           task: task.id,
-          message: formatReport(review),
+          message: formatReport(result),
         });
       } catch (err) {
         report({

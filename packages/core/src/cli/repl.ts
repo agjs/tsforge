@@ -42,7 +42,7 @@ import {
   Session,
   PLAN_APPROVED_NOTE,
   isEphemeralUserInject,
-  reviewChange,
+  review,
   formatReport,
   formatReviewCard,
   type Reporter,
@@ -1256,25 +1256,26 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     try {
-      const review = await withReviewingStatus(() =>
-        reviewChange(provider, args.dir, {
+      const result = await withReviewingStatus(() =>
+        review(provider, args.dir, {
           files: changed,
-          // Stream the fan-out into the live agent tree so each file/finding node
+          // Stream the fan-out into the live agent tree so each reviewer node
           // appears → runs → completes (visible progress, not a silent wait).
           onEvent: report,
           concurrency: reviewConcurrency(),
+          contextWindow,
           ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
         })
       );
 
-      if (review.findings.length === 0) {
+      if (result.findings.length === 0) {
         return; // clean — stay quiet, don't nag on every green turn
       }
 
       // Display the colored, wrapped card in the pane; keep a PLAIN copy for
       // /reviewfix (the agent gets text, never ANSI escapes).
-      lastReviewFindings = formatReport(review);
-      echo(`\n${formatReviewCard(review, transcriptCols(), true)}\n`);
+      lastReviewFindings = formatReport(result);
+      echo(`\n${formatReviewCard(result, transcriptCols(), true)}\n`);
       echo(
         `${paint("↳ /reviewfix", STYLE.dim, true)} to have the agent address these findings.\n`
       );

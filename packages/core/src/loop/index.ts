@@ -87,11 +87,12 @@ export {
   type ISendResult,
 } from "./session";
 export {
-  reviewChange,
+  review,
+  reviewAgents,
   formatReport,
   formatReviewCard,
   LENSES,
-  type IReviewOptions,
+  type IReviewAgentsOptions,
   type IReviewReport,
   type IVerifiedFinding,
 } from "./review";

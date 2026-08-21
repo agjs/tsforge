@@ -7,31 +7,57 @@ import type { IProvider } from "../src/inference";
 import { runReviewCommand } from "../src/cli/repl-commands";
 import { stripSgr } from "../src/render";
 
-/** Same two-pass stub as review-change.test.ts: find vs verify keyed on prompt. */
-function stub(findings: string, verifyReal: boolean): IProvider {
-  return {
-    async complete(messages) {
-      const sys = messages.find((m) => m.role === "system")?.content ?? "";
-      const body = sys.includes("verifying a code-review finding")
-        ? JSON.stringify({ real: verifyReal, verdict: "judged" })
-        : findings;
+/** A provider that drives one review AGENT: first call → investigate (git_context
+ *  diff, the read-only step the runner requires before a result), then →
+ *  agent_result. `finding` null ⇒ a clean review (no findings). */
+function reviewerStub(
+  finding: { source: string; detail: string } | null
+): IProvider {
+  let calls = 0;
 
-      return { content: body, toolCalls: [] };
+  return {
+    async complete() {
+      calls += 1;
+
+      if (calls === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            { id: "t1", name: "git_context", arguments: { op: "diff" } },
+          ],
+        };
+      }
+
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "t2",
+            name: "agent_result",
+            arguments: {
+              summary: finding === null ? "looks correct" : "found one issue",
+              findings:
+                finding === null
+                  ? []
+                  : [
+                      {
+                        detail: finding.detail,
+                        source: finding.source,
+                        confidence: "high",
+                      },
+                    ],
+            },
+          },
+        ],
+      };
     },
   };
 }
 
-const FINDINGS = JSON.stringify({
-  findings: [
-    {
-      line: 2,
-      severity: "error",
-      lens: "correctness",
-      claim: "subtraction is reversed",
-      reason: "returns a negative discount",
-    },
-  ],
-});
+const FINDING = {
+  source: "discount.ts:2",
+  detail: "subtraction is reversed; returns a negative discount",
+};
 
 let repo: string;
 const git = (...a: string[]): void =>
@@ -65,7 +91,7 @@ afterEach(() => {
 test("returns the plain findings text when there are findings (feeds /reviewfix)", async () => {
   const out: string[] = [];
   const findings = await runReviewCommand(
-    stub(FINDINGS, true),
+    reviewerStub(FINDING),
     repo,
     "",
     (s) => out.push(s),
@@ -79,9 +105,9 @@ test("returns the plain findings text when there are findings (feeds /reviewfix)
 });
 
 test("returns an empty string when the review is clean (so /reviewfix says nothing to fix)", async () => {
-  // Verify rejects the finding ⇒ zero verified findings ⇒ empty return.
+  // The agent reports no findings ⇒ empty return.
   const findings = await runReviewCommand(
-    stub(FINDINGS, false),
+    reviewerStub(null),
     repo,
     "",
     () => {},
@@ -95,7 +121,7 @@ test("still renders to the sink (the display path is unaffected)", async () => {
   let printed = "";
 
   await runReviewCommand(
-    stub(FINDINGS, true),
+    reviewerStub(FINDING),
     repo,
     "",
     (s) => {

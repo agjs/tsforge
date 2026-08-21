@@ -79,26 +79,6 @@ test("no changed files → a single quiet line", () => {
   expect(card).toContain("No changed files");
 });
 
-test("coverage-capped and truncated runs render loud notes (never read as complete)", () => {
-  const card = stripSgr(
-    formatReviewCard(
-      report({
-        findings: [],
-        changedFiles: ["a.ts"],
-        totalChangedFiles: 50,
-        truncatedFiles: ["big.ts"],
-      }),
-      100,
-      true
-    )
-  );
-
-  expect(card).toContain("reviewed 1 of 50");
-  expect(card).toContain("not reviewed");
-  expect(card).toContain("truncated");
-  expect(card).toContain("big.ts");
-});
-
 test("gate-aware note renders when rules were skipped", () => {
   const card = stripSgr(
     formatReviewCard(

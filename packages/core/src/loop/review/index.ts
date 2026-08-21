@@ -1,12 +1,15 @@
 export {
-  reviewChange,
   formatReport,
-  changedLineRanges,
-  reviewMaxFiles,
-  reviewDiffChars,
-  type IReviewOptions,
+  detectBase,
+  collectChangedFiles,
+  dedupeFindings,
 } from "./review-change";
 export { formatReviewCard } from "./format-card";
+export {
+  review,
+  reviewAgents,
+  type IReviewAgentsOptions,
+} from "./review-agents";
 export { LENSES } from "./lenses";
 export type {
   ILens,

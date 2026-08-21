@@ -2,7 +2,7 @@
 import {
   runTask,
   RUN_STATUS,
-  reviewChange,
+  review,
   reviewRepair,
   formatReport,
   runGreenfield,
@@ -221,22 +221,20 @@ async function reviewMode(args: ICliArgs): Promise<number> {
     process.stdout.write(`agents: fan-out enabled (cap ${concurrency})\n`);
   }
 
-  const report = await reviewChange(makeProvider(entry), args.dir, {
+  // Configured reviewer model(s); empty ⇒ the primary model reviews.
+  const reviewProviders = resolveReviewProviders(await loadModelsConfig());
+
+  const report = await review(makeProvider(entry), args.dir, {
     ...(args.base.length > 0 ? { base: args.base } : {}),
     staged: args.staged,
     ...(rules.length > 0 ? { gateFailingRules: rules } : {}),
+    ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
     log: (m) => process.stdout.write(`  ↳ ${m}\n`),
     concurrency,
-    // Fresh providers + the progress line only matter above cap 1; at 1 the
-    // shared primary provider is the exact pre-fan-out behavior (no overhead).
-    ...(concurrency > 1
-      ? {
-          providerFactory: () => makeProvider(entry),
-          onEvent: makeAgentSummaryTracker((line) =>
-            process.stdout.write(`  ↳ ${line}\n`)
-          ),
-        }
-      : {}),
+    // Each reviewer runs as a live agent; summarize the fan-out to the transcript.
+    onEvent: makeAgentSummaryTracker((line) =>
+      process.stdout.write(`  ↳ ${line}\n`)
+    ),
   });
 
   process.stdout.write(`\n${formatReport(report)}\n`);

@@ -3,7 +3,7 @@ import type { IAgent } from "../agent";
 import type { IProvider } from "../inference";
 import { validate, runAccept } from "../validate";
 import type { ErrorParser, ErrorSet } from "../validate";
-import { reviewChange } from "./review/review-change";
+import { review } from "./review/review-agents";
 import type { IVerifiedFinding } from "./review/review.types";
 import { snapshotFiles, restoreFiles } from "./file-snapshot";
 import type { Reporter } from "./loop.types";
@@ -41,8 +41,8 @@ function findingsToErrors(findings: readonly IVerifiedFinding[]): ErrorSet {
 }
 
 /**
- * After a task is green, run the adversarial functional review (`reviewChange`)
- * and feed any VERIFIED findings into exactly ONE repair cycle: snapshot →
+ * After a task is green, run the agentic functional review (`review`) and feed
+ * any findings into exactly ONE repair cycle: snapshot →
  * implement against the findings → re-gate → keep only if still green, else roll
  * back. The deterministic gate stays the authority for "done": a fix that breaks
  * it is reverted, never shipped. Distinct from `withGate` (which only makes the
@@ -61,17 +61,16 @@ export async function reviewRepair(
     report({ kind: "tool", task: task.id, message: m });
   };
 
-  const review = await reviewChange(provider, cwd, {
+  const result = await review(provider, cwd, {
     ...(opts.base === undefined ? {} : { base: opts.base }),
     ...(opts.reviewProviders !== undefined && opts.reviewProviders.length > 0
       ? { reviewProviders: opts.reviewProviders }
       : {}),
     staged: opts.staged ?? false,
-    verify: true,
     log,
   });
 
-  const { findings } = review;
+  const { findings } = result;
 
   if (findings.length === 0) {
     report({
