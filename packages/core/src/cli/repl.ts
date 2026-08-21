@@ -43,10 +43,10 @@ import {
   PLAN_APPROVED_NOTE,
   isEphemeralUserInject,
   review,
-  formatReport,
   formatReviewCard,
   type Reporter,
   type ILoopEvent,
+  type IReviewReport,
 } from "../loop";
 import { runPlanning } from "../loop/planning/run-planning";
 import type { IPlanConstraints } from "../loop/planning/plan-types";
@@ -148,14 +148,45 @@ import {
   pendingPlanBadge,
   seedWorklistFromPlan,
   persistPlanDocument,
+  normalizePlanDraft,
   goalFromMessages,
   loadPlan,
 } from "../loop/worklist";
-import type { IPlanDocument } from "../loop/worklist";
+import type { IPlanDocument, IChecklistItemDraft } from "../loop/worklist";
 
 /** A unique-enough id for a new session (time + a little randomness). */
 function newSessionId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Guidance handed to the agent after `/reviewfix` seeds the worklist. Short on
+ *  purpose — the task list carries the findings; this only sets the protocol. */
+const REVIEWFIX_INSTRUCTION =
+  "I've added the code-review findings to your task list. Work them ONE AT A TIME: `task_focus` the first open finding, address it (fix the code, or if it isn't a real problem say why in one line), then `task_complete` it — which only succeeds once the gate is green — and move to the next. Don't batch them.";
+
+const REVIEWFIX_SEVERITY_RANK = { error: 0, warning: 1, info: 2 };
+
+/** One worklist task per review finding, worst-severity first (the worklist enforces
+ *  top-to-bottom focus order, so the highest-risk issue is worked first). Title is
+ *  the claim; detail carries file:line, lens, the reason, and any suggested fix.
+ *  Exported for tests. */
+export function reviewFindingsToDrafts(
+  report: IReviewReport
+): IChecklistItemDraft[] {
+  const sorted = [...report.findings].sort(
+    (a, b) =>
+      REVIEWFIX_SEVERITY_RANK[a.severity] - REVIEWFIX_SEVERITY_RANK[b.severity]
+  );
+
+  return sorted.map((f): IChecklistItemDraft => {
+    const where = `${f.file}:${String(f.line)} [${f.lens}] (${f.severity})`;
+    const detail =
+      f.suggestedFix === undefined
+        ? `${where}\n${f.reason}`
+        : `${where}\n${f.reason}\nSuggested fix: ${f.suggestedFix}`;
+
+    return { title: f.claim, detail, files: [f.file], kind: "modify" };
+  });
 }
 
 /** Wide approval — the staged-web checkpoint explicitly prompted "type
@@ -1179,9 +1210,10 @@ export async function repl(args: ICliArgs): Promise<number> {
   let lastTurnsToGreen: number | null = null;
   let lastElapsedMs = 0;
   let lastStatus = "ready";
-  // The last post-green review's formatted findings, kept so `/reviewfix` can hand
-  // them to the agent to address (the "offer to fix" half of report-then-fix).
-  let lastReviewFindings = "";
+  // The last review's report (structured findings), kept so `/reviewfix` can seed
+  // the worklist — one task per finding — and hand the agent a real map to work
+  // through (the "offer to fix" half of report-then-fix). null ⇒ nothing to fix.
+  let lastReviewReport: IReviewReport | null = null;
 
   // Set when the user types approve mid-turn (or it was drained from the steer
   // queue). Must NOT be injected as chat — that leaves plan mode on, withholds
@@ -1243,7 +1275,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     status: string,
     touchedBefore: ReadonlySet<string>
   ): Promise<void> => {
-    lastReviewFindings = "";
+    lastReviewReport = null;
 
     if (status !== "done" || flags.noReview()) {
       return;
@@ -1272,9 +1304,9 @@ export async function repl(args: ICliArgs): Promise<number> {
         return; // clean — stay quiet, don't nag on every green turn
       }
 
-      // Display the colored, wrapped card in the pane; keep a PLAIN copy for
-      // /reviewfix (the agent gets text, never ANSI escapes).
-      lastReviewFindings = formatReport(result);
+      // Display the colored, wrapped card in the pane; keep the structured report
+      // so /reviewfix can seed the worklist with one task per finding.
+      lastReviewReport = result;
       echo(`\n${formatReviewCard(result, transcriptCols(), true)}\n`);
       echo(
         `${paint("↳ /reviewfix", STYLE.dim, true)} to have the agent address these findings.\n`
@@ -1431,6 +1463,43 @@ export async function repl(args: ICliArgs): Promise<number> {
     await persist();
     echo("  ✓ plan approved — implementing\n");
     await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
+  };
+
+  /** Seed (or extend) the worklist from a review report — one task per finding —
+   *  then bind + paint it (mirrors approveBoundPlan). Appends to the active plan if
+   *  one is bound (keeping its focus + done items), else creates a new one. Returns
+   *  the persisted plan, or null if the draft was rejected. */
+  const seedReviewFixPlan = async (
+    report: IReviewReport
+  ): Promise<IPlanDocument | null> => {
+    const goal = "Address code-review findings";
+    const norm = normalizePlanDraft(
+      { goal, items: reviewFindingsToDrafts(report) },
+      goal
+    );
+
+    if (!norm.ok) {
+      echo(`  ✗ ${norm.error}\n`);
+
+      return null;
+    }
+
+    const activeId = session.getActivePlanId();
+    const existing = activeId === null ? null : loadPlan(args.dir, activeId);
+    const doc: IPlanDocument =
+      existing === null
+        ? norm.plan
+        : { ...existing, items: [...existing.items, ...norm.plan.items] };
+    const plan = persistPlanDocument(args.dir, doc);
+
+    if (existing === null) {
+      session.setActivePlanId(plan.id);
+    }
+
+    syncWorklistPanel(plan);
+    await persist();
+
+    return plan;
   };
 
   const discussInPlanMode = async (line: string): Promise<void> => {
@@ -1650,11 +1719,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         break;
 
       case "review":
-        // Store the findings so /reviewfix can act on a manual review too (not just
-        // the automatic after-green one). Plain text; empty when clean. `report` +
+        // Store the report so /reviewfix can act on a manual review too (not just
+        // the automatic after-green one). null when clean/errored. `report` +
         // concurrency stream the fan-out into the live agent tree (visible progress).
         try {
-          lastReviewFindings = await withReviewingStatus(() =>
+          lastReviewReport = await withReviewingStatus(() =>
             runReviewCommand(
               provider,
               args.dir,
@@ -1672,21 +1741,32 @@ export async function repl(args: ICliArgs): Promise<number> {
 
         break;
 
-      case "reviewfix":
-        if (lastReviewFindings.length === 0) {
+      case "reviewfix": {
+        const report = lastReviewReport;
+
+        if (report === null || report.findings.length === 0) {
           echo("no review findings to fix (run a change first, or /review).\n");
-        } else {
-          // Hand the last review's findings to the agent as the next instruction —
-          // the fix turn itself re-triggers the after-green review on its edits.
-          await drive((opts) =>
-            session.send(
-              `Address these code-review findings in the change you just made. For each, either fix it or briefly say why it is not a real problem:\n\n${lastReviewFindings}`,
-              opts
-            )
-          );
+          break;
         }
 
+        // Seed the worklist — one task per finding — so the Tasks rail becomes the
+        // map the agent works through (focus → fix → complete), instead of a single
+        // prose dump. Creates a plan if none is bound, else appends to the current
+        // one. The fix turns re-trigger the after-green review on their edits.
+        const plan = await seedReviewFixPlan(report);
+
+        if (plan === null) {
+          echo("couldn't build the fix task list.\n");
+          break;
+        }
+
+        echo(
+          `${paint(`↳ added ${String(report.findings.length)} finding(s) to the task list`, STYLE.dim, true)} — working them one at a time.\n`
+        );
+        await drive((opts) => session.send(REVIEWFIX_INSTRUCTION, opts));
+
         break;
+      }
 
       case "map":
         await runMapCommand(args.dir, arg, echo);

@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
 import { runReviewCommand } from "../src/cli/repl-commands";
-import { stripSgr } from "../src/render";
 
 /** A provider that drives one review AGENT: first call → investigate (git_context
  *  diff, the read-only step the runner requires before a result), then →
@@ -85,12 +84,12 @@ afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-// The /review → /reviewfix contract: the command must RETURN the plain findings so
-// the REPL can store them for /reviewfix (the bug was it returned nothing, so
-// /reviewfix always said "no findings" after a manual /review).
-test("returns the plain findings text when there are findings (feeds /reviewfix)", async () => {
+// The /review → /reviewfix contract: the command must RETURN the structured report
+// so the REPL can seed /reviewfix's task list (one task per finding). The bug it
+// guards was returning nothing, so /reviewfix always said "no findings".
+test("returns the structured report with grounded findings (feeds /reviewfix)", async () => {
   const out: string[] = [];
-  const findings = await runReviewCommand(
+  const report = await runReviewCommand(
     reviewerStub(FINDING),
     repo,
     "",
@@ -98,15 +97,17 @@ test("returns the plain findings text when there are findings (feeds /reviewfix)
     80
   );
 
-  expect(findings).toContain("subtraction is reversed");
-  expect(findings).toContain("discount.ts:2");
-  // Plain text (no ANSI) — /reviewfix hands it to the agent verbatim.
-  expect(stripSgr(findings)).toBe(findings);
+  expect(report).not.toBeNull();
+  expect(report?.findings).toHaveLength(1);
+  expect(report?.findings[0]).toMatchObject({
+    file: "discount.ts",
+    line: 2,
+    claim: expect.stringContaining("subtraction is reversed"),
+  });
 });
 
-test("returns an empty string when the review is clean (so /reviewfix says nothing to fix)", async () => {
-  // The agent reports no findings ⇒ empty return.
-  const findings = await runReviewCommand(
+test("returns a report with no findings when the review is clean (so /reviewfix says nothing to fix)", async () => {
+  const report = await runReviewCommand(
     reviewerStub(null),
     repo,
     "",
@@ -114,7 +115,8 @@ test("returns an empty string when the review is clean (so /reviewfix says nothi
     80
   );
 
-  expect(findings).toBe("");
+  expect(report).not.toBeNull();
+  expect(report?.findings).toHaveLength(0);
 });
 
 test("still renders to the sink (the display path is unaffected)", async () => {
