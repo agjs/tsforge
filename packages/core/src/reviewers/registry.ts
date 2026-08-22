@@ -234,3 +234,21 @@ export function resolvePanel(
 
   return { reviewers, minReviewers, skipped };
 }
+
+/** Warn when the resolved panel cannot satisfy its quorum floor. */
+export function warnPanelQuorum(panel: IPanel): void {
+  if (panel.reviewers.length >= panel.minReviewers) {
+    return;
+  }
+
+  const have = String(panel.reviewers.length);
+  const need = String(panel.minReviewers);
+  const skipped =
+    panel.skipped.length > 0
+      ? ` (${String(panel.skipped.length)} skipped: ${panel.skipped.map((s) => s.id).join(", ")})`
+      : "";
+
+  process.stderr.write(
+    `  ⚠ reviewPanel: only ${have} reviewer(s) resolved but minReviewers is ${need}${skipped} — harness-review will block with noQuorum until the panel is fixed.\n`
+  );
+}

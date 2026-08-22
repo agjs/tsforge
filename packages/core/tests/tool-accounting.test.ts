@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import {
 import { TsService } from "../src/lsp";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
 import { commandGate } from "../src/gate/gate-runner";
+import * as writeGuardMod from "../src/loop/write-guard";
 
 // P1 (review): add_dependency rewrites package.json even in a narrow-scoped task
 // where it isn't in the editable globs. That sanctioned manifest change MUST still
@@ -251,6 +252,70 @@ test("a move_file re-gates even though it is not an edit/create", async () => {
     // The moved file joins the change scope (so test-sibling et al. cover it).
     expect([...(ctx.tool.touched ?? [])]).toContain("lib/types.ts");
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Semantic mutations re-gate but skip the per-write guard (the model did not
+// hand-write those paths — runWriteGuard is for edit/create only).
+test("move_file re-gates without invoking runWriteGuard", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-wg-skip-"));
+  const guardSpy = spyOn(writeGuardMod, "runWriteGuard").mockResolvedValue(
+    "\n[write-guard-marker]"
+  );
+
+  try {
+    await Bun.write(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ES2022",
+          module: "ES2022",
+          moduleResolution: "bundler",
+          strict: true,
+          skipLibCheck: true,
+        },
+        include: ["**/*.ts"],
+      })
+    );
+    await Bun.write(
+      join(dir, "types.ts"),
+      "export interface IThing {\n  value: number;\n}\n"
+    );
+    await Bun.write(
+      join(dir, "use.ts"),
+      'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
+    );
+
+    const task = { id: "t", accept: "true", files: ["**/*"] };
+    const ctx: ILoopCtx = {
+      task,
+      cwd: dir,
+      tsService: new TsService(dir),
+      report: () => undefined,
+      messages: [],
+      tool: {},
+      gate: {
+        parse: undefined,
+        runner: commandGate(task, undefined),
+      },
+    };
+    const state = freshState();
+    const touched = await runToolCalls(
+      [
+        {
+          name: "move_file",
+          arguments: { from: "types.ts", to: "lib/types.ts" },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    expect(touched).toBe(true);
+    expect(guardSpy.mock.calls.length).toBe(0);
+  } finally {
+    guardSpy.mockRestore();
     await rm(dir, { recursive: true, force: true });
   }
 });

@@ -32,11 +32,11 @@ inventory, see the hand-drawn map on [Internals](/internals/).
 | `files` | Reading, creating, and hash-anchored editing of workspace files | core | 9 | 2k | 5 | 1 |
 | `policy` | Decides which actions are allowed in the current mode before they run | core | 5 | 1k | 5 | 3 |
 | `architecture` ⚠️ | Derives this map from source so the docs cannot drift from the code | optional | 8 | 1k | 0 | 0 |
+| `mcp` | Model Context Protocol client that exposes external servers as tools | optional | 8 | <1k | 2 | 1 |
 | `lsp` | TypeScript language service powering navigation and write-time diagnostics | optional | 3 | <1k | 4 | 0 |
 | `browser` | Headless Chromium oracle that render-checks a page as a gate stage | optional | 3 | <1k | 1 | 1 |
 | `infer-rules` | Scans a repo for its conventions and turns them into rule overrides | core | 7 | <1k | 5 | 2 |
 | `validate` | Runs the gate command and parses tool output into structured errors | core | 7 | <1k | 7 | 2 |
-| `mcp` | Model Context Protocol client that exposes external servers as tools | optional | 8 | <1k | 2 | 1 |
 | `spec` | Task and spec shapes, spec parsing, and test generation from intent | core | 6 | <1k | 6 | 6 |
 | `stack-detection` | Detects the project's stack and picks which rule packs apply | core | 4 | <1k | 8 | 1 |
 | `setup` | Onboarding wizard that writes a project's initial tsforge config | optional | 4 | <1k | 2 | 5 |
@@ -97,11 +97,11 @@ Async functions returning an exit code, declared under the CLI — the commands.
 | `agentsMode` | `cli.ts:364` |
 | `greenfieldMode` | `cli.ts:665` |
 | `harnessDiagnoseMode` | `cli/harness-diagnose-mode.ts:211` |
-| `harnessReviewMode` | `cli/harness-review-mode.ts:684` |
+| `harnessReviewMode` | `cli/harness-review-mode.ts:700` |
 | `main` | `cli.ts:776` |
 | `mapMode` | `cli.ts:500` |
 | `recipesMode` | `cli.ts:519` |
-| `repl` | `cli/repl.ts:813` |
+| `repl` | `cli/repl.ts:815` |
 | `reviewMode` | `cli.ts:201` |
 | `runOnce` | `cli.ts:103` |
 | `runTraceCommand` | `cli/repl-commands.ts:160` |

@@ -53,6 +53,8 @@ export interface IReviewReport {
    *  empty/omitted when review ran without a gate signal. Optional so a report from
    *  an older/external caller (without the field) stays valid. */
   gateFailingRules?: string[];
+  /** Reviewer labels that threw or failed before returning findings (agentic panel). */
+  failedReviewers?: string[];
   /** Total changed source files detected. Differs from `changedFiles.length` only
    *  when the caller scoped the review to a subset (`opts.files`). Kept for report
    *  bookkeeping. */
