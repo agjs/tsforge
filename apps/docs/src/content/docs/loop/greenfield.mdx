@@ -39,6 +39,10 @@ That last point is a deliberate rule: the evaluator never sees the generator's r
 
 ## Full-stack builds (BoringStack)
 
+A Phaser game scaffolded with [`tsforge scaffold --archetype phaser`](/scaffold/phaser/)
+uses the same plan-then-build flow with a game view-intent schema (scene / feature /
+content), not this resource/OpenAPI loop.
+
 A web app scaffolded with [`tsforge scaffold`](/scaffold/boringstack/) rides this same
 loop, with one resource (entity) per feature and a clear division of labor:
 

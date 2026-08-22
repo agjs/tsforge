@@ -1,6 +1,6 @@
 ---
 title: Greenfield scaffolding
-description: Stand up a new project from BoringStack (or its Astro static site) with the tsforge scaffold wizard.
+description: Stand up a new project from BoringStack, its Astro static site, or Phaser with the tsforge scaffold wizard.
 ---
 
 Use this when you want a **new project from scratch**. Instead of letting the model
@@ -12,12 +12,13 @@ committed in the BoringStack repo, which tsforge reads after cloning.
 For a Phaser 4 game, use the [Phaser archetype](/scaffold/phaser/) instead — that
 clones a different repo and does not use this fullstack manifest.
 
-## Two archetypes
+## Three archetypes
 
 | Archetype | What you get | Gate |
 | --- | --- | --- |
 | `boringstack` | The full stack: Bun + Elysia + Drizzle API (`apps/api`) + Vite/React UI (`apps/ui`), Postgres + Valkey, and whatever observability/billing/auth services your toggles enable | `cd apps/api && bun run validate` · `cd apps/ui && bun run validate` · `bun run check` |
 | `astro` | The Astro Starlight static site (`apps/docs`); no API, no Docker, no `.env` | `bun run build` |
+| `phaser` | A Phaser 4 TypeScript game from [Phaser-TypeScript-AI-First-Starter](/scaffold/phaser/); no Docker, no `.env` | `bun run check` |
 
 ## When it runs
 
@@ -55,7 +56,7 @@ blocking cross-rule violation. Off a TTY, it uses flags directly.
 | Flag | Meaning |
 | --- | --- |
 | `--dest <dir>` | Where to create the project (required) |
-| `--archetype <boringstack\|astro>` | Default `boringstack` |
+| `--archetype <boringstack\|astro\|phaser>` | Default `boringstack` |
 | `--stack <dev\|prod\|smoke>` | Default `dev` |
 | `--set KEY=VALUE` | Set a toggle/provider answer (repeatable). For example: `--set WITH_OBSERVABILITY=0` |
 | `--multi KEY=a,b` | Set a multi-select answer. For example: `--multi OAUTH_PROVIDERS=google,github` |

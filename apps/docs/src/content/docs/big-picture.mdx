@@ -25,7 +25,7 @@ flowchart TB
   end
   subgraph adapters["Adapters · stack-specific"]
     direction LR
-    BS["BoringStack (built)"] --- PH["Phaser (planned)"] --- DD["your own rules (via external-plugins)"]
+    BS["BoringStack (built)"] --- PH["Phaser (built)"] --- DD["your own rules (via external-plugins)"]
   end
   core --> seam --> adapters
 ```
