@@ -26,6 +26,7 @@ export default tseslint.config(
       // test itself lints them with `--no-ignore` to override this. SCOPED to the exact test location
       // (not a bare `**/…` glob) so it can't shadow real code that happens to share the sentinel name.
       "packages/core/src/loop/**/__adapter_boundary_*/**",
+      "packages/core/tests/fixtures/phaser-starter/**",
     ],
   },
   {

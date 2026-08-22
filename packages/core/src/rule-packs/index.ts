@@ -16,6 +16,7 @@ import { jwtCookiesPack } from "./jwt-cookies";
 import { moduleBoundariesPack } from "./module-boundaries";
 import { nextjsPack } from "./nextjs";
 import { oauthSecurityPack } from "./oauth-security";
+import { phaserPack } from "./phaser";
 import { reactComponentArchitecturePack } from "./react-component-architecture";
 import { runtimeBoundariesPack } from "./runtime-boundaries";
 import { securityPack } from "./security";
@@ -42,6 +43,7 @@ export const RULE_PACKS = {
   "module-boundaries": moduleBoundariesPack,
   nextjs: nextjsPack,
   "oauth-security": oauthSecurityPack,
+  phaser: phaserPack,
   "react-component-architecture": reactComponentArchitecturePack,
   "runtime-boundaries": runtimeBoundariesPack,
   security: securityPack,

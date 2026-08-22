@@ -698,4 +698,55 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     bad: 'import { Mesh } from "three";\nconst mesh = new Mesh();\nmesh.frustumCulled = false;',
     good: 'import { Mesh } from "three";\nconst mesh = new Mesh();\nmesh.frustumCulled = true;',
   },
+  "tsforge/no-global-phaser": {
+    what: 'Do not use a script-tag global `Phaser` or `require("phaser")`. Import from the `phaser` package so every module shares one copy.',
+    bad: "const game = new Phaser.Game();\n",
+    good: 'import * as Phaser from "phaser";\nconst game = new Phaser.Game();\n',
+  },
+  "tsforge/no-ignore-destroy": {
+    what: "Do not set `ignoreDestroy`. Scene/Group destroy will skip the object and you own the reference forever.",
+    bad: 'import * as Phaser from "phaser";\nexport function persist(obj: { ignoreDestroy: boolean }) {\n  obj.ignoreDestroy = true;\n  return Phaser;\n}\n',
+    good: 'import * as Phaser from "phaser";\nexport function persist(obj: { ignoreDestroy: boolean }) {\n  obj.ignoreDestroy = false;\n  return Phaser;\n}\n',
+  },
+  "tsforge/no-loader-in-update": {
+    what: "Do not call the Phaser Loader from `update`/`tick`. Queue assets in `preload` or a one-shot load path.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  update() {\n    this.load.image("hero", "hero.png");\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  preload() {\n    this.load.image("hero", "hero.png");\n  }\n  update() {\n    return;\n  }\n}\n',
+  },
+  "tsforge/no-phaser-alloc-in-update": {
+    what: "Do not construct Phaser GameObjects or Math/Geom objects inside `update`/`tick`. Create once and reuse; `setText` in the tick re-uploads a GPU texture.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  update() {\n    this.add.image(0, 0, "hero");\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.add.image(0, 0, "hero");\n  }\n  update() {\n    return;\n  }\n}\n',
+  },
+  "tsforge/no-phaser-import-in-pure-layers": {
+    what: "Do not import `phaser` from domain, content, shared, or features layers. Move engine code to runtime, app, game, or scenes.",
+    bad: 'import * as Phaser from "phaser";\nexport function playerSpeed(base: number): number {\n  return base + new Phaser.Math.Vector2().x;\n}\n',
+    good: "export function playerSpeed(base: number): number {\n  return base;\n}\n",
+    exampleFile: "src/domain/score.ts",
+  },
+  "tsforge/no-physics-collider-in-update": {
+    what: "Do not register Arcade overlap/collider handlers inside `update`/`tick`. Create them once in `create` or scene setup.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  update() {\n    this.physics.add.overlap(this, this, () => undefined);\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.physics.add.overlap(this, this, () => undefined);\n  }\n  update() {\n    return;\n  }\n}\n',
+  },
+  "tsforge/no-raw-scene-key-literal": {
+    what: "Pass scene keys as named constants, not string literals, to `scene.start`/`launch`/`stop` and Scene constructors.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.scene.start("World");\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nconst WORLD = "World";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.scene.start(WORLD);\n  }\n}\n',
+  },
+  "tsforge/no-raw-texture-key-literal": {
+    what: "Pass texture and audio keys as named constants, not string literals, to load/add/textures/sound APIs.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  preload() {\n    this.load.image("hero", "hero.png");\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nconst HERO = "hero";\nexport class Play extends Phaser.Scene {\n  preload() {\n    this.load.image(HERO, "hero.png");\n  }\n}\n',
+  },
+  "tsforge/no-unmanaged-global-listeners": {
+    what: "Do not attach window, document, Game, Registry, Scale, Animation, or Texture listeners from a Phaser.Scene. Use scene-owned `this.events` / `this.input`, or bind game-lifetime listeners in app bootstrap.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    window.addEventListener("resize", () => undefined);\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.input.on("pointerdown", () => undefined);\n  }\n}\n',
+  },
+  "tsforge/require-scene-shutdown-hook": {
+    what: "A Phaser.Scene that binds persistent listeners must register `Phaser.Scenes.Events.SHUTDOWN` so restarts do not leak callbacks.",
+    bad: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.input.on("pointerdown", () => undefined);\n  }\n}\n',
+    good: 'import * as Phaser from "phaser";\nexport class Play extends Phaser.Scene {\n  create() {\n    this.input.on("pointerdown", () => undefined);\n    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => undefined);\n  }\n}\n',
+  },
 };
