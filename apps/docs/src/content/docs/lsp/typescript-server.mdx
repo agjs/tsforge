@@ -21,7 +21,10 @@ Offered when tsforge detects real code to explore (existing repo, resumed sessio
 | `search` | ripgrep by text pattern |
 | `symbol_search` | find declarations by name |
 | `find_references` | all usages of a symbol |
+| `go_to_definition` | jump to where a symbol is declared |
 | `type_at` | inferred type at a position |
+| `impact` | blast radius: which files/lines reference a symbol (excluding its declaration) |
+| `symbol_context` | 360° view: type, definition site(s), and every reference in one call |
 | `diagnostics` | errors for one file on demand |
 | `rename_symbol` | rename across the project |
 | `move_file` | move/rename a file and rewrite every importer |

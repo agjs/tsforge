@@ -28,7 +28,7 @@ With `--with-gate`, tsforge runs [the gate](/loop/gate-floor/) once before revie
 
 ## How it reviews
 
-The reviewer is an **agent**, not a one-shot prompt. It's given the whole change and the same tools you'd use: it reads the full diff (`git_context`), then **navigates the codebase** — opens the surrounding files, follows a changed function to its callers and definitions (`find_references`, `type_at`), checks types (`diagnostics`) — so it judges the change with real cross-file context instead of one file in isolation. A panel of reviewers each does this independently and their findings are pooled + deduped.
+The reviewer is an **agent**, not a one-shot prompt. It's given the whole change and the same tools you'd use: it reads the full diff (`git_context`), then **navigates the codebase** — opens the surrounding files, follows a changed function to its callers and definitions (`find_references`, `go_to_definition`, `type_at`, `impact`), checks types (`diagnostics`) — so it judges the change with real cross-file context instead of one file in isolation. A panel of reviewers each does this independently and their findings are pooled + deduped.
 
 ## What it reviews
 
@@ -49,7 +49,7 @@ Types, structure, and style are out of scope. [The gate](/loop/gate-floor/) alre
 
 The usual failure of AI review is confident nonsense. Two things keep the findings grounded. First, the reviewer investigates before it speaks: it's read-only and must cite a real `file:line` for every finding — anything without a concrete location it actually looked at is dropped, not shown. Second, a panel pools independent reviewers and dedupes, so a real issue that several reviewers land on stands out while one reviewer's stray guess doesn't. You get a short list of real issues instead of a wall of maybes.
 
-When a `tsconfig.json` is present, the reviewer can follow the callers of each changed export through the type graph (`find_references` / `type_at`), so the regression check looks at concrete call sites instead of guessing.
+When a `tsconfig.json` is present, the reviewer can follow the callers of each changed export through the type graph (`find_references`, `go_to_definition`, `impact`, `type_at`), so the regression check looks at concrete call sites instead of guessing.
 
 ## Which model reviews
 

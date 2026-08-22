@@ -1,5 +1,6 @@
 import { relative } from "node:path";
 import { fileArg, TOOL_NAME, type ToolName } from "../../agent";
+import type { ITsLocation } from "../../lsp/lsp.types";
 import { runArgvCommand } from "../../lib/fs";
 import { allowedRoots, writable } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
@@ -213,7 +214,15 @@ function doMoveFile(
 type LspService = NonNullable<IToolContext["tsService"]>;
 
 /** The LSP tools that resolve a symbol position first (type_at, find_references,
- *  rename_symbol). Split out of doLsp to keep each function's branching small. */
+ *  go_to_definition, impact, symbol_context, rename_symbol). Split out of doLsp
+ *  to keep each function's branching small. */
+function formatLocations(
+  refs: readonly ITsLocation[],
+  rel: (abs: string) => string
+): string {
+  return refs.map((r) => `${rel(r.file)}:${r.line}`).join("\n");
+}
+
 function doSymbolLsp(
   name: ToolName,
   svc: LspService,
@@ -255,9 +264,87 @@ function doSymbolLsp(
 
     return refs.length === 0
       ? `no references to '${symbol}'`
-      : refs.map((r) => `${rel(r.file)}:${r.line}`).join("\n");
+      : formatLocations(refs, rel);
   }
 
+  if (name === TOOL_NAME.goToDefinition) {
+    const defs = svc.definition(file, pos);
+
+    ctx.report({
+      kind: "tool",
+      task: ctx.task,
+      message: `go_to_definition ${symbol} → ${defs.length}`,
+    });
+
+    return defs.length === 0
+      ? `no definition for '${symbol}'`
+      : formatLocations(defs, rel);
+  }
+
+  if (name === TOOL_NAME.impact) {
+    const blast = svc.impact(file, pos);
+
+    ctx.report({
+      kind: "tool",
+      task: ctx.task,
+      message: `impact ${symbol} → ${blast.total} in ${blast.fileCount} file(s)`,
+    });
+
+    if (blast.total === 0) {
+      return `no references to '${symbol}' outside its declaration`;
+    }
+
+    const lines = [
+      `${blast.total} reference(s) in ${blast.fileCount} file(s)`,
+      ...blast.files.map((f) => `${rel(f.file)}: ${f.lines.join(", ")}`),
+    ];
+
+    return lines.join("\n");
+  }
+
+  if (name === TOOL_NAME.symbolContext) {
+    return formatSymbolContext(svc, file, pos, symbol, ctx, rel);
+  }
+
+  return doRenameSymbol(svc, file, pos, symbol, args, ctx, rel);
+}
+
+function formatSymbolContext(
+  svc: LspService,
+  file: string,
+  pos: number,
+  symbol: string,
+  ctx: IToolContext,
+  rel: (abs: string) => string
+): string {
+  const symCtx = svc.context(file, pos);
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `symbol_context ${symbol}`,
+  });
+
+  const defBlock = formatLocations(symCtx.definition, rel);
+  const refBlock = formatLocations(symCtx.references, rel);
+  let out = `type: ${symCtx.type}\ndefinition:\n${defBlock}\nreferences (${symCtx.references.length}):\n${refBlock}`;
+
+  if (out.length > LOOP_LIMITS.maxToolOutputChars) {
+    out = `${out.slice(0, LOOP_LIMITS.maxToolOutputChars)}\n… (truncated)`;
+  }
+
+  return out;
+}
+
+function doRenameSymbol(
+  svc: LspService,
+  file: string,
+  pos: number,
+  symbol: string,
+  args: Record<string, unknown>,
+  ctx: IToolContext,
+  rel: (abs: string) => string
+): string {
   // rename_symbol — scope-enforced: a semantic rename can touch many files; it
   // must NOT edit read-only/out-of-scope ones.
   const newName = str(args, "newName");

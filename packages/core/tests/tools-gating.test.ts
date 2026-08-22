@@ -36,6 +36,9 @@ test("existing code gets the base tools PLUS the LSP nav set", () => {
   expect(n).toContain("create");
   expect(n).toContain("search");
   expect(n).toContain("find_references");
+  expect(n).toContain("go_to_definition");
+  expect(n).toContain("impact");
+  expect(n).toContain("symbol_context");
   expect(n).toContain("symbol_search");
   expect(n).toContain("rename_symbol");
   expect(tools.length).toBeGreaterThan(4);

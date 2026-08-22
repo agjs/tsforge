@@ -1,10 +1,17 @@
 import { test, expect } from "bun:test";
 import {
   filterFiles,
+  filterMentionItems,
   formatCompletionRows,
+  mentionInsertText,
   truncatePath,
   shouldOpenAtPicker,
+  type IMentionItem,
 } from "../src/render/file-menu";
+import { TsService } from "../src/lsp";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const FILES = [
   "src/cli.ts",
@@ -49,7 +56,8 @@ test("truncatePath: keeps the tail (filename) with a leading ellipsis when clipp
 });
 
 test("formatCompletionRows: one truncated row per file; selected gutter; no wrap", () => {
-  const rows = formatCompletionRows(FILES, 1, 40, false);
+  const items: IMentionItem[] = FILES.map((path) => ({ kind: "file", path }));
+  const rows = formatCompletionRows(items, 1, 40, false);
 
   expect(rows).toHaveLength(FILES.length);
   expect(rows[1]?.startsWith("▸")).toBe(true); // selected row marked
@@ -59,6 +67,101 @@ test("formatCompletionRows: one truncated row per file; selected gutter; no wrap
   }
 
   expect(rows.join("\n")).not.toContain(String.fromCharCode(27)); // color off ⇒ no ANSI
+});
+
+test("filterMentionItems: identifier query surfaces symbol prefix matches ahead of files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-mention-"));
+
+  try {
+    await writeFile(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ES2022",
+          module: "ES2022",
+          moduleResolution: "bundler",
+          strict: true,
+          skipLibCheck: true,
+        },
+        include: ["*.ts"],
+      })
+    );
+    await writeFile(
+      join(dir, "types.ts"),
+      "export interface IThing {\n  value: number;\n}\n"
+    );
+    await writeFile(
+      join(dir, "use.ts"),
+      'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
+    );
+
+    const svc = new TsService(dir);
+    const items = filterMentionItems(
+      ["src/types.ts", "src/use.ts"],
+      "ITh",
+      svc.symbols("ITh"),
+      (abs) => abs.replace(`${dir}/`, "")
+    );
+
+    expect(items[0]?.kind).toBe("symbol");
+
+    if (items[0]?.kind === "symbol") {
+      expect(items[0].name).toBe("IThing");
+      expect(items[0].file).toContain("types.ts");
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("filterMentionItems: path query stays file-only even when symbols are supplied", () => {
+  const symbols = [
+    {
+      name: "IThing",
+      kind: "interface",
+      file: "/tmp/types.ts",
+      line: 1,
+    },
+  ];
+
+  expect(
+    filterMentionItems(["src/types.ts", "src/use.ts"], "src/", symbols)
+  ).toEqual([
+    { kind: "file", path: "src/types.ts" },
+    { kind: "file", path: "src/use.ts" },
+  ]);
+});
+
+test("formatCompletionRows: symbol rows show kind, name, and file:line", () => {
+  const items: IMentionItem[] = [
+    {
+      kind: "symbol",
+      name: "IThing",
+      symbolKind: "interface",
+      file: "src/types.ts",
+      line: 3,
+    },
+  ];
+  const rows = formatCompletionRows(items, 0, 60, false);
+
+  expect(rows[0]).toContain("interface");
+  expect(rows[0]).toContain("IThing");
+  expect(rows[0]).toContain("types.ts:3");
+});
+
+test("mentionInsertText: file path vs symbol file:line anchor", () => {
+  expect(mentionInsertText({ kind: "file", path: "src/a.ts" })).toBe(
+    "src/a.ts"
+  );
+  expect(
+    mentionInsertText({
+      kind: "symbol",
+      name: "IThing",
+      symbolKind: "interface",
+      file: "src/types.ts",
+      line: 3,
+    })
+  ).toBe("src/types.ts:3");
 });
 
 test("formatCompletionRows: empty list still shows a 'no matching file' row", () => {
