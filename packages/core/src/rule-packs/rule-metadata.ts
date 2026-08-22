@@ -130,6 +130,21 @@ const RULE_ENTRIES: Readonly<Record<string, IRuleCatalogEntry>> = {
     tags: ["three"],
     falsePositiveRisk: "medium",
   },
+  "no-phaser-import-in-pure-layers": {
+    tier: "safety",
+    tags: ["phaser"],
+  },
+  "no-ignore-destroy": { tier: "safety", tags: ["phaser"] },
+  "no-unmanaged-global-listeners": { tier: "safety", tags: ["phaser"] },
+  "no-raw-scene-key-literal": {
+    tier: "architecture",
+    tags: ["phaser"],
+  },
+  "no-raw-texture-key-literal": {
+    tier: "architecture",
+    tags: ["phaser"],
+    falsePositiveRisk: "medium",
+  },
 };
 
 const PACK_DEFAULT_TIER: Readonly<Record<string, RuleTier>> = {
@@ -144,6 +159,7 @@ const PACK_DEFAULT_TIER: Readonly<Record<string, RuleTier>> = {
   drizzle: "framework",
   bullmq: "framework",
   three: "framework",
+  phaser: "framework",
   "comment-hygiene": "architecture",
   "code-flow": "framework",
 };

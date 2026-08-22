@@ -49,7 +49,7 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all twenty-two packs registered", () => {
+  test("should have all twenty-three packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
       "ai-sdk",
       "authorization",
@@ -65,6 +65,7 @@ describe("rule-packs: registry", () => {
       "module-boundaries",
       "nextjs",
       "oauth-security",
+      "phaser",
       "react-component-architecture",
       "runtime-boundaries",
       "security",

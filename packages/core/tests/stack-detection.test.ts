@@ -86,6 +86,29 @@ test("project with vitest in devDeps: detects test-conventions pack", async () =
   }
 });
 
+test("project with phaser: detects phaser pack from anyDeps", async () => {
+  const dir = await tempDir();
+
+  try {
+    const pkg = {
+      name: "phaser-app",
+      dependencies: {
+        phaser: "4.2.1",
+      },
+    };
+
+    await writeFile(join(dir, "package.json"), JSON.stringify(pkg));
+
+    const profile = await detectStack(dir);
+
+    expect(profile.packs).toContain("phaser");
+    expect(profile.confidence).toBe("certain");
+    expect(profile.reason.toLowerCase()).toContain("phaser");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("project with three: detects three pack from anyDeps", async () => {
   const dir = await tempDir();
 

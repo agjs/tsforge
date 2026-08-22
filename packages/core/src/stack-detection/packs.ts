@@ -226,6 +226,17 @@ export const PACK_REGISTRY = {
     guidance: "Keep i18n keys organized and validated.",
   } as const satisfies IRulePackDescriptor,
 
+  phaser: {
+    id: "phaser",
+    label: "Phaser",
+    description:
+      "Phaser 4 as a render substrate: scene shutdown ownership, no global emitter leaks, no Phaser factories in the tick, branded scene/texture keys",
+    category: "library",
+    appliesWhen: { anyDeps: ["phaser"] },
+    guidance:
+      "Phaser is a render substrate: scenes are views with a SHUTDOWN dispose path, Game/Registry/Scale/window listeners are game-lifetime and must be removed, do not construct GameObjects in update(), scene and texture keys are constants not string literals.",
+  } as const satisfies IRulePackDescriptor,
+
   three: {
     id: "three",
     label: "Three.js",

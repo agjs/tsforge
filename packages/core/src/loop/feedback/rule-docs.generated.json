@@ -479,6 +479,56 @@
     "bad": "",
     "good": ""
   },
+  "tsforge/no-global-phaser": {
+    "what": "Do not rely on a script-tag global `Phaser` identifier or `require('phaser')`. Import from the `phaser` package so the runtime is one module graph.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-ignore-destroy": {
+    "what": "Do not set GameObject.ignoreDestroy. Scene/Group destroy will skip the object and you own the reference forever.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-loader-in-update": {
+    "what": "Do not call the Phaser Loader from update/tick/preUpdate. Queue assets in preload or a declared runtime-load path.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-phaser-alloc-in-update": {
+    "what": "Do not construct Phaser GameObjects, Geom, or Math objects inside update/tick/preUpdate. Preallocate or pool; setText in the tick re-uploads a GPU texture.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-phaser-import-in-pure-layers": {
+    "what": "Do not import phaser from domain, content, shared, or features layers. Keep engine code in runtime, app, game, or scenes.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-physics-collider-in-update": {
+    "what": "Do not register Arcade overlap/collider handlers inside update/tick/preUpdate. Create them once in setup/create.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-raw-scene-key-literal": {
+    "what": "Pass scene keys as named constants, not string literals, to scene.start/launch/stop and Scene constructors.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-raw-texture-key-literal": {
+    "what": "Pass texture and audio keys as named constants, not string literals, to load/add/textures/sound APIs.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-unmanaged-global-listeners": {
+    "what": "Do not attach window/document/Game/Registry/Scale/Animation/Texture listeners from a Phaser.Scene. Scene-owned emitters are cleaned on shutdown; game-lifetime emitters belong in app bootstrap.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-scene-shutdown-hook": {
+    "what": "A Phaser.Scene that binds persistent listeners must register a SHUTDOWN (or DESTROY) handler so restarts do not leak callbacks.",
+    "bad": "",
+    "good": ""
+  },
   "tsforge/component-file-purity": {
     "what": "A component .tsx contains only imports and the component itself — types go to <feature>.types.ts, constants to <feature>.constants.ts, helpers to src/lib",
     "bad": "",
