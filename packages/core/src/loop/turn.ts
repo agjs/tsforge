@@ -31,6 +31,7 @@ import type {
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
+import { notifyGateRailChanged } from "./session-gate-view";
 import {
   attributionLeadIn,
   classifyFromGate,
@@ -504,6 +505,8 @@ export interface ILoopCtxTool {
   onPlanChanged?: IToolContext["onPlanChanged"];
   /** present_plan proposal callback (REPL renders pending plan). */
   onPlanPresented?: IToolContext["onPlanPresented"];
+  /** Gate rail refresh after settle / rollback. */
+  onGateChanged?: IToolContext["onGateChanged"];
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
@@ -2781,6 +2784,8 @@ export async function rollbackNearGreen(
       introducedNote +
       formPurityNote,
   });
+
+  notifyGateRailChanged(ctx, state);
 }
 
 /** WS-B: the red-gate rollback step. If the current result is a count SPRAY past a near-green
@@ -3098,6 +3103,8 @@ export async function settleGate(
 
     await polishOnGreen(ctx);
 
+    notifyGateRailChanged(ctx, state);
+
     // Do NOT emit kind:"done" here — Session Phase B may continue with an open
     // checklist (`⊙ gate green — checklist still open; continuing`). Callers that
     // truly finish announce via {@link announceTaskDone}.
@@ -3118,6 +3125,8 @@ export async function settleGate(
   const stuck = checkStuck(ctx, state, gateErrors, turn);
 
   if (stuck !== null) {
+    notifyGateRailChanged(ctx, state);
+
     // Ladder exhaustion is the rung where the EXPERT (R4) gets a shot before R5: if a
     // stronger model repairs the blocking file, keep looping instead of handing off.
     // The novelty gate inside tryExpertRescue prevents re-firing on the same block.
@@ -3134,6 +3143,8 @@ export async function settleGate(
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixSummary);
 
   await nearGreenCheckpointStep(ctx, state, curr, gateErrors);
+
+  notifyGateRailChanged(ctx, state);
 
   return null;
 }

@@ -11,55 +11,91 @@ Most users run `tsforge` and stay in the interactive session.
 
 ## Modes
 
-| Mode | How | When |
-| --- | --- | --- |
-| **Interactive** | `tsforge` | default: open-ended tasks, steering, exploration |
-| **One-shot** | `tsforge "task" --accept "gate cmd"` | drive a single task to green and exit |
-| **New app** | `tsforge scaffold` | stand up a full-stack [BoringStack](/scaffold/boringstack/) project, then build it with the [greenfield loop](/loop/greenfield/) |
-| **Plan mode** | default: **Shift+Tab** or `/plan` to switch | read-only explore → approve saves a project checklist → implement in-session. See [Plan mode](/cli/plan-mode/). |
+| Mode            | How                                         | When                                                                                                                             |
+| --------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Interactive** | `tsforge`                                   | default: open-ended tasks, steering, exploration                                                                                 |
+| **One-shot**    | `tsforge "task" --accept "gate cmd"`        | drive a single task to green and exit                                                                                            |
+| **New app**     | `tsforge scaffold`                          | stand up a full-stack [BoringStack](/scaffold/boringstack/) project, then build it with the [greenfield loop](/loop/greenfield/) |
+| **Plan mode**   | default: **Shift+Tab** or `/plan` to switch | read-only explore → approve saves a project checklist → implement in-session. See [Plan mode](/cli/plan-mode/).                  |
 
 ## Flags
 
-| Flag | Effect |
-| --- | --- |
-| `--dir <path>` | target project (default: cwd) |
-| `--files <globs>` | narrow editable scope (comma-separated); default is whole repo (vendored/generated files are [always excluded](/edit/engine/#vendored--read-only-scope)) |
-| `--accept` / `--gate <cmd>` | gate command for one-shot mode |
-| `--no-gate` | skip auto gate detection |
-| `--browser <html>` | append headless render check to gate |
-| `--plan` | force plan mode on for an interactive session. Plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
-| `--continue` / `-c` | resume latest saved session for this dir (restores `activePlanId`; Tasks rail reloads that plan) |
-| `--resume <id>` | resume a specific session |
-| `--log` | append JSONL event stream to `~/.tsforge/logs/` |
+| Flag                        | Effect                                                                                                                                                                                       |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dir <path>`              | target project (default: cwd)                                                                                                                                                                |
+| `--files <globs>`           | narrow editable scope (comma-separated); default is whole repo (vendored/generated files are [always excluded](/edit/engine/#vendored--read-only-scope))                                     |
+| `--accept` / `--gate <cmd>` | gate command for one-shot mode                                                                                                                                                               |
+| `--no-gate`                 | skip auto gate detection                                                                                                                                                                     |
+| `--browser <html>`          | append headless render check to gate                                                                                                                                                         |
+| `--plan`                    | force plan mode on for an interactive session. Plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
+| `--continue` / `-c`         | resume latest saved session for this dir (restores `activePlanId`; Tasks rail reloads that plan)                                                                                             |
+| `--resume <id>`             | resume a specific session                                                                                                                                                                    |
+| `--log`                     | append JSONL event stream to `~/.tsforge/logs/`                                                                                                                                              |
 
 Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL`. See [Environment variables](/reference/flags/).
 
 ## Slash commands
 
-| Command | Action |
-| --- | --- |
-| `/help` | list commands |
-| `/scaffold` | create a new full-stack project here (BoringStack / Astro) via the wizard |
-| `/plan` | toggle plan mode (on by default; approve saves the checklist and implements) |
-| `/config` | settings hub: model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
-| `/gate <cmd>` | set gate command (`/gate` alone clears) |
-| `/files <globs>` | set editable scope |
-| `/review [base]` | review your current change (logic, regressions, edge cases) |
-| `/map [status\|forget]` | build a structural map of the repo to prime the agent |
-| `/trace [logfile]` | summarize a `--log` run (calls, policy decisions, gate verdicts, turns-to-green) |
-| `/setup` | infer + write project conventions (the setup wizard) |
-| `/model [name]` | list models or switch active model |
-| `/sessions` | list saved sessions |
-| `/compact` | summarize conversation to free context |
-| `/clear` | reset conversation (keeps workspace + gate) |
-| `/cost` | rough token estimate |
-| `/metrics` | token totals + generation rate (tok/s) this session |
-| `/memory` | show coding lessons + project decisions (`/memory forget` clears them) |
-| `/exit` | quit (`/quit` is an alias) |
+| Command                 | Action                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `/help`                 | list commands                                                                                                            |
+| `/scaffold`             | create a new full-stack project here (BoringStack / Astro) via the wizard                                                |
+| `/plan`                 | toggle plan mode (on by default; approve saves the checklist and implements)                                             |
+| `/config`               | settings hub: model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
+| `/gate <cmd>`           | set gate command (`/gate` alone clears)                                                                                  |
+| `/files <globs>`        | set editable scope                                                                                                       |
+| `/review [base]`        | review your current change (logic, regressions, edge cases)                                                              |
+| `/map [status\|forget]` | build a structural map of the repo to prime the agent                                                                    |
+| `/trace [logfile]`      | summarize a `--log` run (calls, policy decisions, gate verdicts, turns-to-green)                                         |
+| `/setup`                | infer + write project conventions (the setup wizard)                                                                     |
+| `/model [name]`         | list models or switch active model                                                                                       |
+| `/sessions`             | list saved sessions                                                                                                      |
+| `/compact`              | summarize conversation to free context                                                                                   |
+| `/clear`                | reset conversation (keeps workspace + gate)                                                                              |
+| `/cost`                 | rough token estimate                                                                                                     |
+| `/metrics`              | token totals + generation rate (tok/s) this session                                                                      |
+| `/memory`               | show coding lessons + project decisions (`/memory forget` clears them)                                                   |
+| `/exit`                 | quit (`/quit` is an alias)                                                                                               |
 
 Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.
 
 **Shift+Tab** cycles the interactive mode (plan → normal → …); the current mode shows as a `◆` chip in the status bar.
+
+## Right rail (Tasks / Gate)
+
+On a tall enough terminal, tsforge opens a **two-column pane console**: transcript on the left, a right **rail** on the right. Default keybindings (all remappable — see below):
+
+| Action                        | Default chord                          |
+| ----------------------------- | -------------------------------------- |
+| Toggle rail                   | `ctrl+g`                               |
+| Cycle Tasks ↔ Gate            | `ctrl+shift+g`                         |
+| Focus rail / return to prompt | `Tab` / `Esc`                          |
+| Move selection                | `↑`/`↓` or `k`/`j` (when rail focused) |
+| Keymap overlay                | `?` (idle, empty prompt)               |
+
+**Tasks** shows the session checklist (plan items, verify hints, focused-task spinner while the agent runs). **Gate** lists structured gate errors from the last settle — rule, file:line, and a one-line rule doc for the selected row. Press **Enter** on a focused gate row to insert steer text (`fix <rule> at <file>:line`) into the prompt.
+
+File:line segments in the gate rail (and matching tool output lines) render as **OSC 8 hyperlinks** in supporting terminals. Disable with `TSFORGE_NO_OSC8=1`.
+
+Press **`?`** when idle to see your **effective** bindings (including overrides from config).
+
+### Remapping pane keys
+
+Logical chords live in config — never raw terminal bytes. **User-global** `~/.tsforge/config.json` wins over project `tsforge.config.json`:
+
+```json
+{
+  "tui": {
+    "keybindings": {
+      "pane.toggle": "ctrl+\\",
+      "pane.cycleSurface": "f6",
+      "keymap.show": "?"
+    }
+  }
+}
+```
+
+Supported modifiers: `ctrl`, `shift`, `alt`, `meta`. Keys: letters, `?`, `\`, `tab`, `escape`, `enter`, `up`, `down`, `f6`, … See [Configuration](/guardrails/config/#tui-keybindings).
 
 ## Status bar
 

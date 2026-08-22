@@ -1,7 +1,8 @@
+import type { IResolvedTuiKeybindings } from "../../config/tui-keybindings";
+import { matchPaneAction } from "../../config/tui-keybindings";
 import type { PaneFocus } from "./focus";
 import type { Scrollback } from "./scrollback";
 import { parseMouseReport } from "./ansi-plain";
-import { normalizePaneControlSeq } from "./input-seq";
 
 export type PaneKeyResult = "handled" | "passthrough" | "dump";
 
@@ -9,76 +10,130 @@ export interface IPaneKeyDeps {
   readonly focus: PaneFocus;
   readonly scrollback: Scrollback;
   readonly panelLen: number;
+  readonly keybindings: IResolvedTuiKeybindings;
+  /** When set, caps row selection (Gate rail: error rows only, not detail lines). */
+  selectableRowCount?: () => number;
   /** Wheel: positive = older / up; negative = newer / down. `col` is 1-based. */
   onWheel?(delta: number, col: number, row: number): void;
-  /** After Ctrl+G changes layout width — resize the prompt editor + rewrap rail. */
+  /** After pane toggle changes layout width — resize the prompt editor + rewrap rail. */
   onLayoutChange?(): void;
+  /** Enter on a focused gate row — insert steer text; return true when consumed. */
+  onGateEnter?(): boolean;
+  /** After pane toggle / surface cycle — recompose rail body. */
+  onRailRefresh?(): void;
   paint(): void;
   invalidate(): void;
 }
 
-/** Focus / panel navigation keys (Ctrl+G, Esc, Tab, j/k when panel-focused). */
-export function handleFocusKey(
-  seq: string,
-  deps: IPaneKeyDeps
-): PaneKeyResult | null {
-  const key = normalizePaneControlSeq(seq);
+function handleToggle(deps: IPaneKeyDeps): PaneKeyResult {
+  if (deps.focus.togglePanel(deps.panelLen > 0) === "changed") {
+    deps.invalidate();
+    deps.onLayoutChange?.();
+    deps.onRailRefresh?.();
+    deps.paint();
+  }
 
-  if (key === "\x07") {
-    if (deps.focus.togglePanel(deps.panelLen > 0) === "changed") {
-      // Layout width changes — invalidate the differential frame, not a body patch.
-      deps.invalidate();
-      deps.onLayoutChange?.();
+  return "handled";
+}
+
+function handleCycleSurface(deps: IPaneKeyDeps): PaneKeyResult {
+  if (deps.focus.cycleSurface() === "changed") {
+    deps.onRailRefresh?.();
+    deps.paint();
+  }
+
+  return "handled";
+}
+
+function handleUnfocus(deps: IPaneKeyDeps): PaneKeyResult {
+  if (deps.focus.escape() === "changed") {
+    deps.paint();
+
+    return "handled";
+  }
+
+  return "passthrough";
+}
+
+function handleTab(deps: IPaneKeyDeps, seq: string): PaneKeyResult | null {
+  if (seq !== "\t") {
+    return null;
+  }
+
+  if (!deps.focus.panelFocused) {
+    return "passthrough";
+  }
+
+  if (deps.focus.tab(deps.panelLen > 0) === "changed") {
+    deps.paint();
+
+    return "handled";
+  }
+
+  return "passthrough";
+}
+
+function handlePanelNav(seq: string, deps: IPaneKeyDeps): PaneKeyResult | null {
+  if (!deps.focus.panelFocused) {
+    return null;
+  }
+
+  const action = matchPaneAction(seq, deps.keybindings);
+
+  if (action === "pane.moveUp" || action === "pane.moveDown") {
+    const max = Math.max(0, (deps.selectableRowCount?.() ?? deps.panelLen) - 1);
+    const delta = action === "pane.moveUp" ? -1 : 1;
+
+    if (deps.focus.moveSelection(delta, max) === "changed") {
+      if (deps.focus.railSurface === "gate") {
+        deps.onRailRefresh?.();
+      }
+
       deps.paint();
     }
 
     return "handled";
   }
 
-  if (seq === "\x1b") {
-    if (deps.focus.escape() === "changed") {
-      deps.paint();
-
-      return "handled";
-    }
-
-    return "passthrough";
-  }
-
-  if (seq === "\t") {
-    // Don't steal Tab from the prompt editor (indent / completion). Only handle
-    // Tab when the panel already owns focus (return to prompt).
-    if (!deps.focus.panelFocused) {
-      return "passthrough";
-    }
-
-    if (deps.focus.tab(deps.panelLen > 0) === "changed") {
-      deps.paint();
-
-      return "handled";
-    }
-
-    return "passthrough";
-  }
-
-  if (!deps.focus.panelFocused) {
-    return null;
-  }
-
-  const max = Math.max(0, deps.panelLen - 1);
-  const up = seq === "\x1b[A" || seq === "\x1bOA" || seq === "k" || seq === "K";
-  const down =
-    seq === "\x1b[B" || seq === "\x1bOB" || seq === "j" || seq === "J";
-
-  if (up || down) {
-    if (deps.focus.moveSelection(up ? -1 : 1, max) === "changed") {
-      deps.paint();
-    }
+  if (
+    (seq === "\r" || seq === "\n") &&
+    deps.focus.railSurface === "gate" &&
+    deps.onGateEnter?.() === true
+  ) {
+    deps.paint();
 
     return "handled";
   }
 
   return null;
+}
+
+/** Focus / panel navigation keys (configurable via tui.keybindings). */
+export function handleFocusKey(
+  seq: string,
+  deps: IPaneKeyDeps
+): PaneKeyResult | null {
+  const action = matchPaneAction(seq, deps.keybindings);
+
+  if (action === "pane.toggle") {
+    return handleToggle(deps);
+  }
+
+  if (action === "pane.cycleSurface") {
+    return handleCycleSurface(deps);
+  }
+
+  if (action === "pane.unfocus" || seq === "\x1b") {
+    return handleUnfocus(deps);
+  }
+
+  const tab = handleTab(deps, seq);
+
+  if (tab !== null) {
+    return tab;
+  }
+
+  return handlePanelNav(seq, deps);
 }
 
 /**
@@ -89,7 +144,6 @@ export function handleScrollKey(
   seq: string,
   deps: IPaneKeyDeps
 ): PaneKeyResult | null {
-  // Don't steal ↑/↓ from the editor while typing.
   if (
     deps.focus.promptFocused &&
     !deps.focus.panelFocused &&
@@ -149,7 +203,6 @@ export function handleMouseKey(
   const report = parseMouseReport(seq);
 
   if (report === null) {
-    // Chunk with mouse noise but not a lone report — still swallow if present.
     if (seq.includes(`${String.fromCharCode(27)}[<`)) {
       return "handled";
     }
@@ -157,13 +210,9 @@ export function handleMouseKey(
     return null;
   }
 
-  // 64 = wheel up, 65 = wheel down (SGR). One row per notch — trackpads
-  // flood events; PaneScreen coalesces + body-patches so this stays smooth.
   if (report.button === 64 || report.button === 65) {
     const delta = report.button === 64 ? 1 : -1;
 
-    // onWheel owns paint (coalesced). Never invalidate here — that forced a
-    // full-frame rebuild per notch and made trackpads feel like molasses.
     deps.onWheel?.(delta, report.col, report.row);
   }
 

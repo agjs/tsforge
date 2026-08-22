@@ -225,6 +225,8 @@ export interface IRailHeaderOpts {
   readonly color?: boolean;
   /** Left label — default `Tasks`. */
   readonly title?: string;
+  /** When set, replaces the done/total chip on the right (Gate rail). */
+  readonly badge?: string;
 }
 
 /** Sticky rail title rows: label row + under-rule (borders the title cell). */
@@ -240,9 +242,11 @@ export function formatRailHeader(opts: IRailHeaderOpts): string {
   const trimmed = (opts.title ?? "Tasks").trim();
   const label = trimmed.length > 0 ? trimmed : "Tasks";
   const left = paint(label, CONSOLE.muted, color);
-  const countText = `${String(Math.max(0, opts.done))}/${String(Math.max(0, opts.total))}`;
+  const countText =
+    opts.badge ??
+    `${String(Math.max(0, opts.done))}/${String(Math.max(0, opts.total))}`;
   const right =
-    opts.total > 0
+    opts.badge !== undefined || opts.total > 0
       ? paint(countText, CONSOLE.bright, color)
       : paint(countText, CONSOLE.muted, color);
 

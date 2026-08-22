@@ -91,4 +91,7 @@ export const flags = {
    *  WS-B can't see it (the count never sprays). DEFAULT ON, deterministic (no network); kill with
    *  TSFORGE_NO_NEAR_GREEN_ROTATION=1. Generic — keyed only on rule/file, no stack knowledge. */
   nearGreenRotation: (): boolean => !isOn(ENV_FLAG.noNearGreenRotation),
+  /** OSC 8 file:line hyperlinks in the TUI (gate rail + transcript). Off when
+   *  TSFORGE_NO_OSC8=1 or stdout is not a TTY. */
+  osc8Links: (): boolean => !isOn(ENV_FLAG.noOsc8) && process.stdout.isTTY,
 };

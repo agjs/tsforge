@@ -6,6 +6,7 @@ import {
 } from "../src/render/frame/pane-keys";
 import { PaneFocus } from "../src/render/frame/focus";
 import { Scrollback } from "../src/render/frame/scrollback";
+import { resolveTuiKeybindings } from "../src/config/tui-keybindings";
 
 function deps(overrides: { panelLen?: number; paints?: number[] } = {}) {
   const focus = new PaneFocus();
@@ -17,6 +18,7 @@ function deps(overrides: { panelLen?: number; paints?: number[] } = {}) {
   return {
     focus,
     scrollback,
+    keybindings: resolveTuiKeybindings(),
     panelLen: overrides.panelLen ?? 3,
     paint: () => {
       paints.push(1);
@@ -58,6 +60,39 @@ describe("handleFocusKey", () => {
     d.focus.tab(true);
     expect(handleFocusKey("\x1b", d)).toBe("handled");
     expect(d.focus.promptFocused).toBe(true);
+  });
+
+  test("Enter on gate row invokes onGateEnter only when panel+gate focused", () => {
+    const d = {
+      ...deps({ panelLen: 2 }),
+      onGateEnter: () => true,
+    };
+
+    d.focus.railSurface = "gate";
+    d.focus.tab(true);
+    expect(handleFocusKey("\r", d)).toBe("handled");
+
+    d.focus.railSurface = "tasks";
+    expect(handleFocusKey("\r", d)).toBeNull();
+  });
+
+  test("cycle surface binding toggles railSurface", () => {
+    const bindings = resolveTuiKeybindings();
+    const d = {
+      ...deps(),
+      keybindings: bindings,
+      refreshed: 0,
+      onRailRefresh: () => {
+        d.refreshed += 1;
+      },
+    };
+
+    expect(d.focus.railSurface).toBe("tasks");
+    expect(handleFocusKey(`${String.fromCharCode(27)}[103;6u`, d)).toBe(
+      "handled"
+    );
+    expect(d.focus.railSurface).toBe("gate");
+    expect(d.refreshed).toBe(1);
   });
 });
 

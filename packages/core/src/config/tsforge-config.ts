@@ -22,6 +22,7 @@ import {
 } from "../infer-rules/conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import { parsePlugins, type IExternalPlugin } from "./external-plugins";
+import { parseProjectTuiKeybindings } from "./tui-keybindings";
 import { parseProviders } from "./providers-config";
 import type { IMemoryProviderConfig } from "./memory-provider.types";
 import {
@@ -108,6 +109,11 @@ export interface ITsforgeProjectConfig {
    */
   readonly providers?: {
     readonly memory?: IMemoryProviderConfig;
+  };
+
+  /** TUI settings (pane keybindings, etc.). */
+  readonly tui?: {
+    readonly keybindings?: Readonly<Record<string, string | readonly string[]>>;
   };
 }
 
@@ -621,6 +627,7 @@ function buildConfigFields(
     conventions?: Readonly<Partial<IConventions>>;
     agents?: { concurrency?: number };
     providers?: { memory?: IMemoryProviderConfig };
+    tui?: ITsforgeProjectConfig["tui"];
   } = {};
 
   if (parsed.profile !== undefined) {
@@ -677,6 +684,12 @@ function buildConfigFields(
   assignConventions(parsed, configFields);
   assignAgents(parsed, configFields);
   assignProviders(parsed, configFields);
+
+  const tuiBindings = parseProjectTuiKeybindings(parsed);
+
+  if (Object.keys(tuiBindings).length > 0) {
+    configFields.tui = { keybindings: tuiBindings };
+  }
 
   return configFields;
 }

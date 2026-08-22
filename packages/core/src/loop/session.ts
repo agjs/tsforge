@@ -181,6 +181,7 @@ import {
 } from "./turn";
 import { parkOrRaiseHand } from "./raise-hand";
 import type { IPlanDocument } from "./worklist/checklist.types";
+import { gateRailViewFromState, type IGateRailView } from "./session-gate-view";
 import {
   countOpen,
   formatPlanTree,
@@ -2001,6 +2002,16 @@ export class Session {
       this.pendingPlan = plan;
       fn?.(plan);
     };
+  }
+
+  /** Wire the Gate-rail refresh callback (REPL). */
+  setOnGateChanged(fn: ((view: IGateRailView) => void) | undefined): void {
+    this.ctx.tool.onGateChanged = fn;
+  }
+
+  /** Read-only gate rail snapshot from loop state. */
+  gateRailView(): IGateRailView {
+    return gateRailViewFromState(this.state, this.gate.trim().length > 0);
   }
 
   /** Last present_plan proposal, if any (not yet approved). */

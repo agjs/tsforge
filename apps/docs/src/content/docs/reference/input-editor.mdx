@@ -87,6 +87,10 @@ Withhold symbol search in the picker with `TSFORGE_NO_LSP_TOOLS=1` (file-only be
 
 An `@` mid-token (e.g. in an email address) does **not** open the picker — only `@` at the start of the line or after whitespace does.
 
+## Gate rail steer
+
+When the right rail is on the **Gate** surface and focused, **Enter** on a selected error row inserts steer text into the prompt (`fix <rule> at <file>:line`) and returns focus to the editor — same handoff as accepting an `@` symbol, but anchored on the gate error you picked.
+
 ## Keyboard interrupt
 
 | Key | Action |

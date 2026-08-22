@@ -56,7 +56,11 @@ def main() -> int:
                 buf += chunk
                 if ENTER_ALT in buf:
                     saw_enter = True
-                    # Ask the REPL to dump + leave via /copy then /exit.
+                    # Show rail, cycle to Gate, then exit.
+                    os.write(master, b"\x07")
+                    time.sleep(0.2)
+                    os.write(master, b"\x1b[103;6u")
+                    time.sleep(0.3)
                     os.write(master, b"/copy\n")
                     time.sleep(0.3)
                     os.write(master, b"/exit\n")
@@ -77,8 +81,14 @@ def main() -> int:
         sys.stderr.write(buf[-2000:].decode("utf-8", "replace"))
         return 1
 
+    text = buf.decode("utf-8", "replace")
+    if "Gate" not in text:
+        sys.stderr.write("e2e-iterm-panes: Gate rail title not observed after cycle\n")
+        return 1
+
     # Exit sequence is best-effort (process may already be gone).
     print("e2e-iterm-panes: alt-screen enter observed")
+    print("e2e-iterm-panes: Gate rail surface observed")
     if EXIT_ALT in buf:
         print("e2e-iterm-panes: alt-screen exit observed")
     return 0

@@ -80,6 +80,23 @@ Meta-rules use the same `rules` map. Example: `"workflow-permissions-explicit": 
 
 This project uses the strict profile, is treated as Elysia, keeps structured-logging rules, skips BullMQ rules, and softens one comment rule.
 
+## TUI keybindings
+
+Optional pane-console shortcuts under `tui.keybindings` in `tsforge.config.json`. Values are **OS-agnostic logical chords** (`ctrl+g`, `ctrl+shift+g`, `f6`, `?`, …) — tsforge normalizes Kitty CSI-u, xterm modifyOtherKeys, and legacy ctrl bytes at runtime.
+
+**User-global overrides** live in `~/.tsforge/config.json` (same schema) and win over project entries for the same action.
+
+| Action id | Default | Purpose |
+| --- | --- | --- |
+| `pane.toggle` | `ctrl+g` | show/hide the right rail |
+| `pane.cycleSurface` | `ctrl+shift+g` | Tasks ↔ Gate |
+| `pane.focus` | `tab` | focus rail when visible |
+| `pane.unfocus` | `escape` | return to prompt |
+| `pane.moveUp` / `pane.moveDown` | `up`/`k`, `down`/`j` | selection when rail focused |
+| `keymap.show` | `?` | idle keymap overlay |
+
+Invalid chords warn on stderr and are dropped. Editor keys (Shift+Enter, `@` picker, `/` palette) stay fixed in this release.
+
 ## External plugins
 
 Ship your own rule packs without recompiling tsforge. Each `plugins` entry names a module (or a path relative to the repo root) and, optionally, which exported packs to use; omit `packs` to load every exported pack. An export must be a valid rule pack (`id`, `description`, `rules`, `rulesConfig`) or it is skipped with a warning. A pack id can never shadow a built-in, and a rule name that collides with a built-in fails the build.

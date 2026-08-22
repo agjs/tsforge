@@ -158,6 +158,20 @@ import {
   loadPlan,
 } from "../loop/worklist";
 import type { IPlanDocument, IChecklistItemDraft } from "../loop/worklist";
+import {
+  formatGateLines,
+  gateRailBadge,
+  gateSteerText,
+} from "../loop/gate/panel";
+import type { IGateRailView } from "../loop/session-gate-view";
+import {
+  loadUserTuiKeybindings,
+  matchPaneAction,
+  parseProjectTuiKeybindings,
+  resolveTuiKeybindings,
+} from "../config/tui-keybindings";
+import { formatKeymapOverlay } from "../render/keymap-overlay";
+import { linkifyTranscriptLine } from "../render/osc8-link";
 
 /** A unique-enough id for a new session (time + a little randomness). */
 function newSessionId(): string {
@@ -1931,6 +1945,12 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Pane console — the only interactive UI on a TTY.
   const paneScreen = new PaneScreen(process.stdout);
+  const tuiKeybindings = resolveTuiKeybindings(
+    parseProjectTuiKeybindings(delegationConfig),
+    loadUserTuiKeybindings()
+  );
+
+  paneScreen.setKeybindings(tuiKeybindings);
   let exitCode = 0;
 
   /** Main-pane content width (or full tty when panes are not live). Menus,
@@ -2053,38 +2073,81 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   /** Paint the Tasks rail from the session-bound plan (or empty-rail hints). */
   let railPlan: IPlanDocument | null = null;
+  let gateView: IGateRailView = session.gateRailView();
   let worklistSpin = 0;
+  let keymapOpen = false;
 
-  const syncWorklistPanel = (
-    plan: IPlanDocument | null,
-    opts?: { readonly soft?: boolean }
-  ): void => {
-    railPlan = plan;
+  const railHasItems = (): boolean => {
+    if (paneScreen.focusState.railSurface === "gate") {
+      return gateView.gateConfigured;
+    }
+
+    return railPlan !== null && railPlan.items.length > 0;
+  };
+
+  const syncRailPanel = (opts?: {
+    readonly soft?: boolean;
+    readonly plan?: IPlanDocument | null;
+  }): void => {
+    if (opts?.plan !== undefined) {
+      railPlan = opts.plan;
+    }
 
     if (!panesLive()) {
       return;
     }
 
-    // Collapsed rail: panelInnerCols is 0; Math.max(12, 0) would rewrap at a
-    // fake 12-col width and leave fragmented text when the rail reopens.
     const cols = paneScreen.panelInnerCols();
+    const surface = paneScreen.focusState.railSurface;
+
+    paneScreen.focusState.syncHasItems(railHasItems());
 
     if (cols <= 0) {
       if (opts?.soft !== true) {
-        paneScreen.setWorklistBadge(worklistBadge(plan));
+        if (surface === "gate") {
+          paneScreen.setGateBadge(gateRailBadge(gateView));
+        } else {
+          paneScreen.setWorklistBadge(worklistBadge(railPlan));
+        }
       }
 
       return;
     }
 
-    const maxPending = Math.max(4, paneScreen.panelListBudgetRows());
-    // Spinner ticks only while a turn is live — drive the focused-task mark.
+    const maxRows = Math.max(4, paneScreen.panelListBudgetRows());
     const spinning = spinner.frameLabel().length > 0;
+    const focused = paneScreen.focusState.panelFocused;
+    const selection = paneScreen.focusState.selection;
+
+    if (surface === "gate") {
+      const sortedLen = gateView.errors.length;
+      const shown = Math.min(sortedLen, maxRows);
+
+      paneScreen.setGateSelectableRows(shown);
+
+      paneScreen.setPanel(
+        formatGateLines(gateView, {
+          columns: cols,
+          maxRows,
+          color: true,
+          cwd: args.dir,
+          ...(focused ? { showSelection: true, selectedIndex: selection } : {}),
+        }),
+        { soft: opts?.soft === true }
+      );
+
+      if (opts?.soft !== true) {
+        paneScreen.setGateBadge(gateRailBadge(gateView));
+        syncPaneChrome();
+      }
+
+      return;
+    }
 
     paneScreen.setPanel(
-      formatWorklistLines(plan, {
+      formatWorklistLines(railPlan, {
         columns: cols,
-        maxPending,
+        maxPending: maxRows,
         color: true,
         ...(spinning ? { currentFrame: worklistSpin } : {}),
       }),
@@ -2095,13 +2158,28 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    paneScreen.setWorklistBadge(worklistBadge(plan));
+    paneScreen.setWorklistBadge(worklistBadge(railPlan));
     syncPaneChrome();
   };
 
+  const syncWorklistPanel = (
+    plan: IPlanDocument | null,
+    opts?: { readonly soft?: boolean }
+  ): void => {
+    syncRailPanel({ ...opts, plan });
+  };
+
+  let handleGateEnter: (() => boolean) | null = null;
+
+  paneScreen.onGateEnter = (): boolean => handleGateEnter?.() ?? false;
+
   const wirePlanRail = (): void => {
     session.setOnPlanChanged((plan) => {
-      syncWorklistPanel(plan);
+      syncRailPanel({ plan });
+    });
+    session.setOnGateChanged((view) => {
+      gateView = view;
+      syncRailPanel();
     });
     session.setOnPlanPresented((plan) => {
       planDiscussed = true;
@@ -2131,13 +2209,17 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   wirePlanRail();
+  gateView = session.gateRailView();
+  syncRailPanel();
 
   /** Stream conversation text: main pane when live, else plain stdout (pipes). */
   const streamOut = (text: string): void => {
+    const linked = linkifyTranscriptLine(text, args.dir);
+
     if (panesLive()) {
-      paneScreen.appendMain(text);
+      paneScreen.appendMain(linked);
     } else {
-      process.stdout.write(text);
+      process.stdout.write(linked);
     }
   };
 
@@ -2547,12 +2629,16 @@ export async function repl(args: ICliArgs): Promise<number> {
     syncPaneChrome();
   };
 
-  // Ctrl+G changes main width — keep the prompt editor + Tasks rail in sync.
+  // Ctrl+G changes main width — keep the prompt editor + rail in sync.
   paneScreen.onLayoutChange = (): void => {
     if (panesLive()) {
       resizeEditor?.(paneScreen.mainInnerCols(), process.stdout.rows);
-      syncWorklistPanel(railPlan);
+      syncRailPanel();
     }
+  };
+
+  paneScreen.onRailRefresh = (): void => {
+    syncRailPanel();
   };
 
   // Pane footer + agent tree on every spinner tick — not during a resize storm.
@@ -2566,7 +2652,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // Spin the focused Tasks-rail mark in step with the status spinner.
     if (panesLive() && railPlan !== null) {
       worklistSpin = (worklistSpin + 1) % 10;
-      syncWorklistPanel(railPlan, { soft: true });
+      syncRailPanel({ soft: true });
     }
 
     // Advance the tree's spinner so running agent rows animate in step.
@@ -2719,6 +2805,12 @@ export async function repl(args: ICliArgs): Promise<number> {
     // Handle one idle line (slash command or a message), then any queued follow-up.
     const runLine = async (line: string): Promise<void> => {
       busy = true;
+
+      if (keymapOpen) {
+        keymapOpen = false;
+        chrome.clearOverlay();
+      }
+
       paneScreen.setBusy(true);
       beginAgentTurn(); // the agent's response opens a fresh closed AGENT card
 
@@ -3217,7 +3309,6 @@ export async function repl(args: ICliArgs): Promise<number> {
           return;
         }
 
-        // Peel one key sequence at a time so Ctrl+G in `"\x07x"` is not missed.
         let rest = cleaned;
 
         while (rest.length > 0) {
@@ -3225,6 +3316,33 @@ export async function repl(args: ICliArgs): Promise<number> {
 
           if (peeled.seq.length === 0) {
             break;
+          }
+
+          if (keymapOpen) {
+            if (peeled.seq === "\x1b") {
+              keymapOpen = false;
+              chrome.clearOverlay();
+              rest = peeled.rest;
+              continue;
+            }
+
+            rest = peeled.rest;
+            continue;
+          }
+
+          if (
+            !busy &&
+            !paletteOpen &&
+            matchPaneAction(peeled.seq, tuiKeybindings) === "keymap.show" &&
+            editorHandle !== null &&
+            editorHandle.getBuffer().getText().trim().length === 0
+          ) {
+            keymapOpen = true;
+            chrome.setOverlay(
+              formatKeymapOverlay(tuiKeybindings, transcriptCols(), true)
+            );
+            rest = peeled.rest;
+            continue;
           }
 
           const result = paneScreen.handleKey(peeled.seq);
@@ -3339,6 +3457,45 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       editorControl = editorHandle;
       editorForExit = editorHandle;
+
+      handleGateEnter = (): boolean => {
+        if (paneScreen.focusState.railSurface !== "gate") {
+          return false;
+        }
+
+        const sel = paneScreen.focusState.selection;
+        const sorted = [...gateView.errors].sort((a, b) => {
+          const ar = a.rule ?? a.key;
+          const br = b.rule ?? b.key;
+
+          if (ar !== br) {
+            return ar.localeCompare(br);
+          }
+
+          const al = a.file ?? "";
+          const bl = b.file ?? "";
+
+          return al.localeCompare(bl);
+        });
+        const item = sorted[sel];
+
+        if (item === undefined) {
+          return false;
+        }
+
+        const steer = gateSteerText(item);
+
+        if (editorHandle !== null) {
+          editorHandle.getBuffer().setText(steer);
+          editorHandle.resume();
+          paneScreen.focusState.focusPrompt();
+          repaintEditor(editorHandle);
+        } else if (rl !== null) {
+          rl.write(steer);
+        }
+
+        return true;
+      };
 
       editorHandle.onSubmit(submitLine);
       editorHandle.onInterrupt(() => {

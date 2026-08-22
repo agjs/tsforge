@@ -82,44 +82,7 @@ function peelEscapeSequence(input: string): {
 }
 
 /**
- * Map Kitty CSI-u / xterm modifyOtherKeys encodings of Ctrl+G and Ctrl+O to
- * their legacy single-byte forms so pane chrome can match them.
+ * Map Kitty CSI-u / xterm modifyOtherKeys encodings to legacy forms.
+ * Full chord matching lives in {@link ../config/tui-keybindings.ts}.
  */
-const CSI_U_CTRL = new RegExp(`^${ESC}\\[(\\d+);(\\d+)u$`, "u");
-const XTERM_CTRL = new RegExp(`^${ESC}\\[27;(\\d+);(\\d+)~$`, "u");
-
-export function normalizePaneControlSeq(seq: string): string {
-  // Kitty CSI-u: ESC [ codepoint ; mods u  (mods 5 = Ctrl)
-  const csiU = CSI_U_CTRL.exec(seq);
-
-  if (csiU !== null) {
-    const codepoint = Number.parseInt(csiU[1] ?? "", 10);
-    const mods = Number.parseInt(csiU[2] ?? "", 10);
-
-    if (mods === 5 && codepoint === 103) {
-      return "\x07"; // Ctrl+G
-    }
-
-    if (mods === 5 && codepoint === 111) {
-      return "\x0f"; // Ctrl+O
-    }
-  }
-
-  // xterm modifyOtherKeys: ESC [ 27 ; mods ; codepoint ~
-  const xterm = XTERM_CTRL.exec(seq);
-
-  if (xterm !== null) {
-    const mods = Number.parseInt(xterm[1] ?? "", 10);
-    const codepoint = Number.parseInt(xterm[2] ?? "", 10);
-
-    if (mods === 5 && codepoint === 103) {
-      return "\x07";
-    }
-
-    if (mods === 5 && codepoint === 111) {
-      return "\x0f";
-    }
-  }
-
-  return seq;
-}
+export { normalizeInputSeq } from "../../config/tui-keybindings";

@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import {
   takeOneInputSequence,
-  normalizePaneControlSeq,
+  normalizeInputSeq,
 } from "../src/render/frame/input-seq";
 
 test("takeOneInputSequence: peels Ctrl+G before a following character", () => {
@@ -52,10 +52,10 @@ test("takeOneInputSequence: peels combining accent as one grapheme", () => {
   expect(accented.rest).toBe("x");
 });
 
-test("normalizePaneControlSeq: Kitty CSI-u Ctrl+G / Ctrl+O", () => {
-  expect(normalizePaneControlSeq("\x1b[103;5u")).toBe("\x07");
-  expect(normalizePaneControlSeq("\x1b[111;5u")).toBe("\x0f");
-  expect(normalizePaneControlSeq("\x07")).toBe("\x07");
+test("normalizeInputSeq: Kitty CSI-u Ctrl+G / Ctrl+O", () => {
+  expect(normalizeInputSeq("\x1b[103;5u")).toBe("\x07");
+  expect(normalizeInputSeq("\x1b[111;5u")).toBe("\x0f");
+  expect(normalizeInputSeq("\x07")).toBe("\x07");
 });
 
 test("ZWJ family emoji stays one sequence under the bounded peel", () => {

@@ -7,6 +7,7 @@
 
 export type PanelVis = "hidden" | "visibleUnfocused" | "visibleFocused";
 export type ActiveSurface = "prompt" | "scrollback" | "panel";
+export type RailSurface = "tasks" | "gate";
 
 export type FocusAction = "changed" | "ignored";
 
@@ -17,6 +18,8 @@ export class PaneFocus {
   selection = 0;
   /** User hid the rail via Ctrl+G — syncHasItems must not force it back open. */
   userCollapsed = false;
+  /** Right-rail content surface (Tasks checklist vs Gate errors). */
+  railSurface: RailSurface = "tasks";
 
   get promptFocused(): boolean {
     return this.active === "prompt";
@@ -92,6 +95,18 @@ export class PaneFocus {
       this.panel = "visibleUnfocused";
       this.active = "prompt";
     }
+
+    return "changed";
+  }
+
+  /** Cycle Tasks ↔ Gate when the rail is visible. Resets row selection. */
+  cycleSurface(): FocusAction {
+    if (this.userCollapsed || this.panel === "hidden") {
+      return "ignored";
+    }
+
+    this.railSurface = this.railSurface === "tasks" ? "gate" : "tasks";
+    this.selection = 0;
 
     return "changed";
   }

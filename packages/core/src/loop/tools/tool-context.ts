@@ -8,6 +8,7 @@ import type { PolicyMode, IPolicyRules } from "../../policy";
 import type { IValidateResult } from "../../validate/validate.types";
 import type { IConventionProvider } from "../conventions-provider";
 import type { IPlanDocument } from "../worklist/checklist.types";
+import type { IGateRailView } from "../session-gate-view";
 
 /** What one on-demand gate run produced for the `check` tool: the standard
  *  validate result PLUS the files the gate's autofix reformatted/rewrote on disk
@@ -211,6 +212,8 @@ export interface IToolContext {
   onPlanChanged?: (plan: IPlanDocument) => void;
   /** Fired when present_plan validates a proposal (pending until human approve). */
   onPlanPresented?: (plan: IPlanDocument) => void;
+  /** Fired after gate settle / rollback — REPL refreshes the Gate rail. */
+  onGateChanged?: (view: IGateRailView) => void;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */
