@@ -41,6 +41,7 @@ These run on every project alongside `tsc`; stack detection layers framework pac
 | `tanstack-query` | TanStack Query | `@tanstack/react-query` in deps |
 | `drizzle` | Drizzle ORM | `drizzle-orm` in deps |
 | `bullmq` | BullMQ | `bullmq` in deps |
+| `three` | Three.js | `three` or `@react-three/fiber` in deps |
 | `structured-logging` | Structured Logging | `pino` or `winston` in deps |
 | `jwt-cookies` | JWT & Cookies | `jsonwebtoken` or `jose` in deps |
 | `oauth-security` | OAuth Security | OAuth/OIDC libs in deps |
@@ -128,6 +129,35 @@ export function useButton() {
 // ❌ <button onClick={() => doThing(id)} />
 // ✅ const onClickRow = useCallback(() => doThing(id), [id]); … onClick={onClickRow}
 ```
+
+## Three.js
+
+The `three` pack turns on when `three` or `@react-three/fiber` is in `package.json`. Three.js owns the scene graph; application code owns lifecycle. Import from `three` and `three/addons/...` only, dispose GPU resources you construct, and mutate hierarchy through `add()` / `remove()` rather than `children`.
+
+```ts
+// ❌ mixed entrypoints, array mutation, no dispose
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+scene.children.push(mesh);
+
+// ✅ canonical addons import, scene APIs, explicit cleanup
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+scene.add(mesh);
+view.dispose();
+```
+
+| Rule | What it catches |
+| --- | --- |
+| `no-mixed-three-entrypoints` | `three/examples/jsm/...`, `three/src/...`, and CDN imports. Autofixes the examples path to `three/addons/...` |
+| `prefer-named-three-imports` | `import * as THREE from "three"` when every use is a static member |
+| `no-global-three` | Bare `THREE` / `require("three")` without a package import |
+| `no-direct-children-mutation` | `object.children.push(...)` and other array mutations. Autofixes `.push` to `.add` |
+| `require-projection-update` | `camera.aspect = ...` without `updateProjectionMatrix()` |
+| `require-three-dispose-contract` | A class that constructs geometries/materials/textures/renderers with no `dispose`/`destroy` |
+| `prefer-three-load-async` | Callback `loader.load(...)` instead of `loadAsync()` |
+| `require-three-loader-error-path` | `loader.load(url, onLoad)` with no `onError` |
+| `require-instance-buffer-update` | `setMatrixAt` / `setColorAt` without `needsUpdate` |
+| `no-unbounded-device-pixel-ratio` | `setPixelRatio(window.devicePixelRatio)` without a cap |
+| `no-disabled-frustum-culling` | `frustumCulled = false` |
 
 ## Changing severity
 

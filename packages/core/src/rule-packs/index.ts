@@ -22,6 +22,7 @@ import { securityPack } from "./security";
 import { structuredLoggingPack } from "./structured-logging";
 import { tanstackQueryPack } from "./tanstack-query";
 import { testConventionsPack } from "./test-conventions";
+import { threePack } from "./three";
 import { typescriptCorePack } from "./typescript-core";
 import { PACK_REGISTRY } from "../stack-detection";
 
@@ -47,6 +48,7 @@ export const RULE_PACKS = {
   "structured-logging": structuredLoggingPack,
   "tanstack-query": tanstackQueryPack,
   "test-conventions": testConventionsPack,
+  three: threePack,
   "typescript-core": typescriptCorePack,
 } as const;
 

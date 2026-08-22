@@ -226,6 +226,17 @@ export const PACK_REGISTRY = {
     guidance: "Keep i18n keys organized and validated.",
   } as const satisfies IRulePackDescriptor,
 
+  three: {
+    id: "three",
+    label: "Three.js",
+    description:
+      "Three.js as a render substrate: canonical imports, GPU dispose, scene-graph APIs, loader errors, and instanced-buffer updates",
+    category: "library",
+    appliesWhen: { anyDeps: ["three", "@react-three/fiber"] },
+    guidance:
+      "Three.js is a render substrate: one renderer owner, canonical `three` / `three/addons/...` imports, dispose GPU resources you construct, no scene-graph mutation via `.children`, no loader callbacks without an error path.",
+  } as const satisfies IRulePackDescriptor,
+
   "ai-sdk": {
     id: "ai-sdk",
     label: "AI SDK Security",

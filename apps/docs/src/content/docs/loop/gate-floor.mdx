@@ -66,7 +66,7 @@ tsforge does **not** trust a loose upstream tsconfig. Even if your repo allows s
 
 After typecheck, tsforge runs **its own** ESLint setup. It does **not** run your project's `npm run lint` script.
 
-Why separate? tsforge ships rules tuned for AI-written code and your stack (React, Drizzle, Elysia, etc.). Those rules come from [Rule packs](/guardrails/rule-packs/) enabled by [Stack detection](/guardrails/stack-detection/). Tune them with a [profile](/guardrails/config/#profiles) or per-rule overrides in [tsforge.config.json](/guardrails/config/).
+Why separate? tsforge ships rules tuned for AI-written code and your stack (React, Drizzle, Elysia, Three.js, etc.). Those rules come from [Rule packs](/guardrails/rule-packs/) enabled by [Stack detection](/guardrails/stack-detection/). Tune them with a [profile](/guardrails/config/#profiles) or per-rule overrides in [tsforge.config.json](/guardrails/config/).
 
 The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on any `.ts` file without the target's full type graph. It also caps **cognitive complexity at 20** and **nesting depth at 4**. A sprawling, deeply-nested function fails the gate until it is split into named helpers.
 

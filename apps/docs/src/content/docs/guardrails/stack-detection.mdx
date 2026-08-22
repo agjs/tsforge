@@ -3,11 +3,11 @@ title: Stack detection
 description: How tsforge picks ESLint rule packs from your package.json.
 ---
 
-**Rule packs** are bundles of lint rules for specific stacks (React, Drizzle, Elysia, BullMQ, etc.). Before the gate runs, tsforge has to know which packs apply to **your** repo.
+**Rule packs** are bundles of lint rules for specific stacks (React, Drizzle, Elysia, BullMQ, Three.js, etc.). Before the gate runs, tsforge has to know which packs apply to **your** repo.
 
 **Stack detection** is that step. tsforge reads `package.json` (and sometimes config files like `drizzle.config.ts`), matches what it finds against a built-in list, and turns on the matching packs. You do not maintain a pack list by hand for every session.
 
-Example: if `elysia` and `drizzle-orm` are in your dependencies, tsforge enables the Elysia and Drizzle packs automatically.
+Example: if `elysia` and `drizzle-orm` are in your dependencies, tsforge enables the Elysia and Drizzle packs automatically. A `three` (or `@react-three/fiber`) dependency turns on the Three.js pack the same way.
 
 ## Step by step
 

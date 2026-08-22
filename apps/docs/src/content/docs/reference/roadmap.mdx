@@ -8,7 +8,7 @@ TypeScript coding harness for web projects: `packages/core` for the loop and gat
 ## Shipped through 0.37
 
 **Strictness & the gate**
-- Stack detection → **21 ESLint rule packs** + a **31-rule meta-rule engine** (config, CI, supply chain, container, testing, structure). See [Rule packs](/guardrails/rule-packs/) · [Meta-rules](/guardrails/meta-rules/).
+- Stack detection → **22 ESLint rule packs** (including Three.js) + a **31-rule meta-rule engine** (config, CI, supply chain, container, testing, structure). See [Rule packs](/guardrails/rule-packs/) · [Meta-rules](/guardrails/meta-rules/).
 - **4 profiles** (recommended → strict / security / opinionated); a type-aware ESLint overlay; progress-based loop termination (no blunt turn cap). See [When the gate fails](/loop/validation/).
 - **Tests by default**: `test-sibling-required` is an error on changed logic files. **Opt-in gate oracles** (coverage, boot smoke, property tests). See [Tests by default](/quality/tests/) · [the gate](/loop/gate-floor/).
 
@@ -38,6 +38,7 @@ TypeScript coding harness for web projects: `packages/core` for the loop and gat
 - **0.36–0.37:** the core audit fixes (fail-loud packs/flags/profile floors and normalized writable paths), declarative reasoning profiles, graded self-harness evaluation, reviewer independence/diagnostics, prompt-cache metrics, and the generated architecture map.
 - **0.51:** LSP navigation tools for the model (`go_to_definition`, `impact`, `symbol_context`) and an `@` mention picker that surfaces workspace symbols alongside files. See [TypeScript language server](/lsp/typescript-server/) · [Input editor](/reference/input-editor/).
 - **0.52:** Gate rail TUI — cycle Tasks/Gate in the right rail, structured gate errors with rule docs, Enter-to-steer, configurable pane keybindings, `?` keymap overlay, OSC 8 file:line links. See [Interactive CLI](/cli/interactive/).
+- **Three.js pack:** canonical `three` / `three/addons/...` imports, GPU `dispose()` contracts, scene-graph APIs (`add`/`remove` not `.children`), loader error paths, instanced-buffer `needsUpdate`. Detected from `three` or `@react-three/fiber`. See [Rule packs](/guardrails/rule-packs/#threejs).
 
 **Sequencing rule:** Measured wins first. No feature defaults change and no 1.0 tag until A/B numbers against the reference model exist.
 

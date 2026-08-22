@@ -120,6 +120,17 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **test-conventions/no-real-network-in-unit-tests** [WARN]: Unit tests should not perform real network I/O — mock HTTP clients or move the test to an integration suite.
 - **test-conventions/no-vacuous-expect** [ERROR]: Disallow vacuous expects (typeof checks, tautologies, sole toBeDefined/toBeTruthy) — tests must assert behavior.
 - **test-conventions/test-file-mirrors-source** [ERROR]: Every test file under `tests/` must mirror a source file under `src/`. Catches orphaned tests left behind after refactors and renames.
+- **three/no-direct-children-mutation** [ERROR]: Do not mutate `Object3D.children` as an array. Use `add()` / `remove()` so Three.js hierarchy bookkeeping stays consistent.
+- **three/no-disabled-frustum-culling** [WARN]: Leave `Object3D.frustumCulled` at its default (`true`) unless a custom shader invalidates geometric bounds. Disabling it is a measurable extra draw.
+- **three/no-global-three** [WARN]: Do not rely on a global `THREE` identifier or `require('three')`. Import from the `three` package so the runtime is one module graph.
+- **three/no-mixed-three-entrypoints** [ERROR]: Import Three.js only from `three` and `three/addons/...`. The legacy `three/examples/jsm/` path, `three/src/`, and CDN URLs create duplicate library instances.
+- **three/no-unbounded-device-pixel-ratio** [WARN]: Do not pass unbounded `window.devicePixelRatio` to `setPixelRatio`. Cap it so high-DPI displays cannot explode GPU memory.
+- **three/prefer-named-three-imports** [WARN]: Prefer named imports from `three` over `import * as THREE`. Named imports make dependencies visible and tree-shakeable.
+- **three/prefer-three-load-async** [WARN]: Prefer `loader.loadAsync()` over the callback `load()` API so failures compose with typed Promises and `no-floating-promises`.
+- **three/require-instance-buffer-update** [ERROR]: After `InstancedMesh.setMatrixAt()` / `setColorAt()`, set `instanceMatrix.needsUpdate` / `instanceColor.needsUpdate` so GPU buffers refresh.
+- **three/require-projection-update** [ERROR]: After writing `camera.aspect`, call `camera.updateProjectionMatrix()` so the view frustum matches the new aspect ratio.
+- **three/require-three-dispose-contract** [ERROR]: A class that constructs Three.js GPU resources (geometry, material, texture, renderer, render target) must declare a dispose/destroy method. Dropping the JS reference does not free VRAM.
+- **three/require-three-loader-error-path** [ERROR]: A Three.js loader `.load(url, onLoad)` call must pass an `onError` callback (4th argument), or prefer `loadAsync()` and handle the rejection.
 - **typescript-core/exported-functions-require-return-type** [WARN]: Exported functions should declare an explicit return type at module boundaries.
 
 ### Tier: architecture

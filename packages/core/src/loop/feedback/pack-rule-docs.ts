@@ -643,4 +643,59 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     procedure:
       "Put the test at the mirrored path for this project (either beside the source or under tests/ following the same folders) so the pair moves together.",
   },
+  "tsforge/no-mixed-three-entrypoints": {
+    what: "Import Three.js only from `three` and `three/addons/...`. `three/examples/jsm/`, `three/src/`, and CDN URLs can load a second copy of the library.",
+    bad: 'import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";',
+    good: 'import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";',
+  },
+  "tsforge/prefer-named-three-imports": {
+    what: "Prefer named imports from `three` over `import * as THREE` so each symbol is visible and tree-shakeable.",
+    bad: 'import * as THREE from "three";\nconst v = new THREE.Vector3();\nconst c = new THREE.Color();',
+    good: 'import { Color, Vector3 } from "three";\nconst v = new Vector3();\nconst c = new Color();',
+  },
+  "tsforge/no-global-three": {
+    what: 'Do not use a script-tag global `THREE` or `require("three")`. Import from the `three` package so every module shares one copy.',
+    bad: "const v = new THREE.Vector3();",
+    good: 'import { Vector3 } from "three";\nconst v = new Vector3();',
+  },
+  "tsforge/no-direct-children-mutation": {
+    what: "Do not mutate `Object3D.children` as an array. Use `add()` / `remove()` so parent/child links stay in sync.",
+    bad: 'import { Scene, Mesh } from "three";\nconst scene = new Scene();\nconst mesh = new Mesh();\nscene.children.push(mesh);',
+    good: 'import { Scene, Mesh } from "three";\nconst scene = new Scene();\nconst mesh = new Mesh();\nscene.add(mesh);',
+  },
+  "tsforge/require-projection-update": {
+    what: "After writing `camera.aspect`, call `camera.updateProjectionMatrix()` or the frustum will not match the new aspect ratio.",
+    bad: 'import { PerspectiveCamera } from "three";\nconst camera = new PerspectiveCamera();\ncamera.aspect = 1.5;',
+    good: 'import { PerspectiveCamera } from "three";\nconst camera = new PerspectiveCamera();\ncamera.aspect = 1.5;\ncamera.updateProjectionMatrix();',
+  },
+  "tsforge/require-three-dispose-contract": {
+    what: "A class that constructs Three.js GPU resources must declare `dispose()` (or destroy/onModuleDestroy). Dropping the JS reference does not free VRAM.",
+    bad: 'import { BoxGeometry, MeshBasicMaterial } from "three";\nclass GridView {\n  private geometry = new BoxGeometry();\n  private material = new MeshBasicMaterial();\n}',
+    good: 'import { BoxGeometry, MeshBasicMaterial } from "three";\nclass GridView {\n  private geometry = new BoxGeometry();\n  private material = new MeshBasicMaterial();\n  dispose() {\n    this.geometry.dispose();\n    this.material.dispose();\n  }\n}',
+  },
+  "tsforge/prefer-three-load-async": {
+    what: "Prefer `loader.loadAsync()` over callback `load()` so failures compose with Promises instead of a detached error callback.",
+    bad: 'import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";\nconst loader = new GLTFLoader();\nloader.load("/model.glb", (gltf) => {\n  use(gltf);\n}, undefined, (err) => {\n  throw err;\n});',
+    good: 'import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";\nconst loader = new GLTFLoader();\nconst gltf = await loader.loadAsync("/model.glb");\nuse(gltf);',
+  },
+  "tsforge/require-three-loader-error-path": {
+    what: "A Three.js loader `.load(url, onLoad)` call must pass an `onError` callback (4th argument), or use `loadAsync()` and handle the rejection.",
+    bad: 'import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";\nconst loader = new GLTFLoader();\nloader.load("/model.glb", (gltf) => {\n  use(gltf);\n});',
+    good: 'import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";\nconst loader = new GLTFLoader();\nloader.load("/model.glb", (gltf) => {\n  use(gltf);\n}, undefined, (err) => {\n  throw err;\n});',
+  },
+  "tsforge/require-instance-buffer-update": {
+    what: "After `InstancedMesh.setMatrixAt()` / `setColorAt()`, set `instanceMatrix.needsUpdate` / `instanceColor.needsUpdate` so GPU buffers refresh.",
+    bad: 'import { InstancedMesh, Matrix4 } from "three";\nconst mesh = new InstancedMesh();\nconst matrix = new Matrix4();\nfor (let i = 0; i < 10; i++) {\n  mesh.setMatrixAt(i, matrix);\n}',
+    good: 'import { InstancedMesh, Matrix4 } from "three";\nconst mesh = new InstancedMesh();\nconst matrix = new Matrix4();\nfor (let i = 0; i < 10; i++) {\n  mesh.setMatrixAt(i, matrix);\n}\nmesh.instanceMatrix.needsUpdate = true;',
+  },
+  "tsforge/no-unbounded-device-pixel-ratio": {
+    what: "Do not pass unbounded `window.devicePixelRatio` to `setPixelRatio`. Cap it so high-DPI displays cannot explode GPU memory.",
+    bad: 'import { WebGLRenderer } from "three";\nconst renderer = new WebGLRenderer();\nrenderer.setPixelRatio(window.devicePixelRatio);',
+    good: 'import { WebGLRenderer } from "three";\nconst renderer = new WebGLRenderer();\nrenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));',
+  },
+  "tsforge/no-disabled-frustum-culling": {
+    what: "Leave `Object3D.frustumCulled` at its default (`true`) unless a custom shader invalidates geometric bounds.",
+    bad: 'import { Mesh } from "three";\nconst mesh = new Mesh();\nmesh.frustumCulled = false;',
+    good: 'import { Mesh } from "three";\nconst mesh = new Mesh();\nmesh.frustumCulled = true;',
+  },
 };
