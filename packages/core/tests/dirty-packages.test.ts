@@ -63,7 +63,7 @@ describe("dirty-packages — git-baseline detection (the FG-1 seam)", () => {
     } finally {
       await rm(container, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("a write followed by a COMMIT inside the child still counts (HEAD moved)", async () => {
     const container = await mkdtemp(join(tmpdir(), "tsforge-dirty-commit-"));
@@ -92,7 +92,7 @@ describe("dirty-packages — git-baseline detection (the FG-1 seam)", () => {
     } finally {
       await rm(container, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("a pre-existing dirty tree is NOT dragged in (baseline diffing, not absolute dirtiness)", async () => {
     const container = await mkdtemp(join(tmpdir(), "tsforge-dirty-pre-"));

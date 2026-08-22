@@ -5,6 +5,7 @@ import {
   McpRegistry,
   parseMcpServers,
   interpolateEnv,
+  diagnoseMcpServers,
   mcpToolName,
   mapMcpTool,
   type IMcpToolInfo,
@@ -168,6 +169,20 @@ describe("mcp: config parsing", () => {
 
     expect(ok.s?.type).toBe("http");
     expect(bad.s).toBeUndefined();
+  });
+
+  test("diagnoseMcpServers flags empty env interpolation and misnamed integration keys", () => {
+    const raw = {
+      "linear-mcp": { command: "linear", env: { TOKEN: "${MISSING}" } },
+      ctx7: { command: "npx", args: ["-y", "mcp"] },
+    };
+    const parsed = parseMcpServers(raw, {});
+
+    const warnings = diagnoseMcpServers(raw, parsed, {});
+
+    expect(warnings.some((w) => w.includes("linear-mcp"))).toBe(true);
+    expect(warnings.some((w) => w.includes("MISSING"))).toBe(true);
+    expect(warnings.some((w) => w.includes("no integration keys"))).toBe(true);
   });
 });
 

@@ -1,6 +1,9 @@
 import { isRecord } from "../lib/guards";
 import type { IMcpServerConfig } from "./mcp.types";
 
+/** MCP server keys the curated Linear/Notion/Sentry integrations require. */
+const INTEGRATION_MCP_KEYS = ["linear", "notion", "sentry"] as const;
+
 type EnvLookup = Readonly<Record<string, string | undefined>>;
 
 /** Interpolate `${VAR}` references from `env` into a string (missing → ""). */
@@ -103,4 +106,182 @@ export function parseMcpServers(
   }
 
   return servers;
+}
+
+/** Scan a string for `${VAR}` refs that are unset or empty in `env`. */
+function emptyEnvRefs(original: string, env: EnvLookup): string[] {
+  const missing: string[] = [];
+  const re = /\$\{([A-Za-z0-9_]+)\}/g;
+  let match: RegExpExecArray | null = re.exec(original);
+
+  while (match !== null) {
+    const name = match[1] ?? "";
+    const value = env[name];
+
+    if (value === undefined || value.length === 0) {
+      missing.push(name);
+    }
+
+    match = re.exec(original);
+  }
+
+  return missing;
+}
+
+function scanRecordEnv(
+  record: Record<string, unknown> | undefined,
+  env: EnvLookup,
+  prefix: string,
+  warnings: string[]
+): void {
+  if (record === undefined) {
+    return;
+  }
+
+  for (const [key, rawVal] of Object.entries(record)) {
+    if (typeof rawVal !== "string") {
+      continue;
+    }
+
+    for (const varName of emptyEnvRefs(rawVal, env)) {
+      warnings.push(
+        `${prefix} env.${key}: \${${varName}} is unset or empty — the MCP server may start without credentials.`
+      );
+    }
+  }
+}
+
+function scanStringField(
+  original: string | undefined,
+  env: EnvLookup,
+  label: string,
+  warnings: string[]
+): void {
+  if (original === undefined) {
+    return;
+  }
+
+  for (const varName of emptyEnvRefs(original, env)) {
+    warnings.push(
+      `${label}: \${${varName}} is unset or empty — the MCP server may start misconfigured.`
+    );
+  }
+}
+
+function integrationNamingWarnings(
+  parsed: Record<string, IMcpServerConfig>
+): string[] {
+  const warnings: string[] = [];
+  const keys = new Set(Object.keys(parsed));
+
+  for (const expected of INTEGRATION_MCP_KEYS) {
+    if (!keys.has(expected)) {
+      const near = Object.keys(parsed).filter((k) =>
+        k.toLowerCase().includes(expected)
+      );
+
+      if (near.length > 0) {
+        warnings.push(
+          `mcpServers: integration "${expected}" must be keyed exactly "${expected}" (found: ${near.join(", ")}) — curated ${expected}_* tools stay disabled.`
+        );
+      }
+    }
+  }
+
+  if (INTEGRATION_MCP_KEYS.every((s) => !keys.has(s))) {
+    warnings.push(
+      `mcpServers: no integration keys (${INTEGRATION_MCP_KEYS.join(", ")}) — Linear/Notion/Sentry curated tools need servers keyed exactly those names.`
+    );
+  }
+
+  return warnings;
+}
+
+function scanArgsEnv(
+  args: unknown,
+  env: EnvLookup,
+  prefix: string,
+  warnings: string[]
+): void {
+  if (!Array.isArray(args)) {
+    return;
+  }
+
+  for (const [i, entry] of args.entries()) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+
+    for (const varName of emptyEnvRefs(entry, env)) {
+      warnings.push(
+        `${prefix}.args[${String(i)}]: \${${varName}} is unset or empty.`
+      );
+    }
+  }
+}
+
+function scanOneMcpServerEntry(
+  name: string,
+  value: Record<string, unknown>,
+  env: EnvLookup,
+  warnings: string[]
+): void {
+  const prefix = `mcpServers.${name}`;
+
+  scanStringField(
+    typeof value.command === "string" ? value.command : undefined,
+    env,
+    `${prefix}.command`,
+    warnings
+  );
+  scanStringField(
+    typeof value.url === "string" ? value.url : undefined,
+    env,
+    `${prefix}.url`,
+    warnings
+  );
+  scanRecordEnv(
+    isRecord(value.env) ? value.env : undefined,
+    env,
+    prefix,
+    warnings
+  );
+  scanArgsEnv(value.args, env, prefix, warnings);
+}
+
+/**
+ * Config-time diagnostics for MCP servers: empty env interpolation and
+ * integration server naming (Linear/Notion/Sentry require exact keys).
+ */
+export function diagnoseMcpServers(
+  raw: unknown,
+  parsed: Record<string, IMcpServerConfig>,
+  env: EnvLookup
+): string[] {
+  if (!isRecord(raw) || Object.keys(parsed).length === 0) {
+    return [];
+  }
+
+  const warnings = integrationNamingWarnings(parsed);
+
+  for (const [name, value] of Object.entries(raw)) {
+    if (!isRecord(value) || parsed[name] === undefined) {
+      continue;
+    }
+
+    scanOneMcpServerEntry(name, value, env, warnings);
+  }
+
+  return warnings;
+}
+
+/** Emit MCP config diagnostics to stderr (load-time footgun prevention). */
+export function warnMcpConfigIssues(
+  raw: unknown,
+  parsed: Record<string, IMcpServerConfig>,
+  env: EnvLookup
+): void {
+  for (const line of diagnoseMcpServers(raw, parsed, env)) {
+    process.stderr.write(`  ⚠ ${line}\n`);
+  }
 }

@@ -90,19 +90,32 @@ function renderFinding(
  *  findings. (The agentic reviewer reads the whole change with no file cap or diff
  *  truncation, so there are no coverage/truncation notes to show.) */
 function noteLines(report: IReviewReport, color: boolean): string[] {
-  const gateRules = report.gateFailingRules ?? [];
+  const lines: string[] = [];
+  const failed = report.failedReviewers ?? [];
 
-  if (gateRules.length === 0) {
-    return [];
+  if (failed.length > 0) {
+    lines.push(
+      paint(
+        `(${String(failed.length)} reviewer(s) failed: ${failed.join(", ")})`,
+        STYLE.yellow,
+        color
+      )
+    );
   }
 
-  return [
-    paint(
-      `(gate-aware: skipped ${String(gateRules.length)} failing gate rule(s) the gate already covers)`,
-      STYLE.dim,
-      color
-    ),
-  ];
+  const gateRules = report.gateFailingRules ?? [];
+
+  if (gateRules.length > 0) {
+    lines.push(
+      paint(
+        `(gate-aware: skipped ${String(gateRules.length)} failing gate rule(s) the gate already covers)`,
+        STYLE.dim,
+        color
+      )
+    );
+  }
+
+  return lines;
 }
 
 /**

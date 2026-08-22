@@ -11,7 +11,11 @@ import {
   type IModelEntry,
   type BinaryInputMode,
 } from "../models-config";
-import { resolvePanel, type IPanel } from "../reviewers/registry";
+import {
+  resolvePanel,
+  warnPanelQuorum,
+  type IPanel,
+} from "../reviewers/registry";
 import {
   gatherChange,
   reviewRequest,
@@ -622,6 +626,20 @@ export function formatVerdict(v: IVerdict): string {
 }
 
 /**
+ * The roster panel actually used for a harness review run. Quick mode slices to
+ * one reviewer AND drops the quorum floor so a diagnostic run can succeed.
+ */
+export function effectiveReviewPanel(panel: IPanel, quick: boolean): IPanel {
+  return quick
+    ? {
+        ...panel,
+        reviewers: panel.reviewers.slice(0, 1),
+        minReviewers: 1,
+      }
+    : panel;
+}
+
+/**
  * Wire the resolved CLI pieces (full panel + quick flag, args, git/validate, providers, cache
  * seams) into the runReviewFlow deps — exported so the CLI's central wiring is unit-tested.
  * The EFFECTIVE roster is derived HERE (quick mode → a 1-reviewer slice), so the cache key's
@@ -649,9 +667,7 @@ export function buildReviewFlowDeps(input: {
 }): IReviewFlowDeps {
   // `quick` reviews with a REDUCED roster (the first reviewer only). The effective roster
   // feeds BOTH the cache key and the review, so its verdict never satisfies a full review.
-  const effective: IPanel = input.quick
-    ? { ...input.panel, reviewers: input.panel.reviewers.slice(0, 1) }
-    : input.panel;
+  const effective = effectiveReviewPanel(input.panel, input.quick);
   const rosterHash = panelIdentityHash(effective, input.identity);
 
   return {
@@ -695,6 +711,8 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const cfg = await loadModelsConfig();
   const active = await resolveActiveModel();
   const panel = resolvePanel(cfg, active);
+
+  warnPanelQuorum(panel);
 
   for (const s of panel.skipped) {
     // Config-derived, so no more ours than a reviewer's own output.

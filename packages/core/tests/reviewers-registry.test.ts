@@ -1,5 +1,9 @@
-import { test, expect, describe } from "bun:test";
-import { resolvePanel, MIN_REVIEWERS_FLOOR } from "../src/reviewers/registry";
+import { test, expect, describe, spyOn, afterEach } from "bun:test";
+import {
+  resolvePanel,
+  warnPanelQuorum,
+  MIN_REVIEWERS_FLOOR,
+} from "../src/reviewers/registry";
 import type { IModelsConfig } from "../src/models-config";
 
 function cfg(over: Partial<IModelsConfig>): IModelsConfig {
@@ -107,5 +111,30 @@ describe("resolvePanel independence", () => {
 
     expect(p.reviewers).toEqual([]);
     expect(p.minReviewers).toBe(MIN_REVIEWERS_FLOOR);
+  });
+});
+
+describe("warnPanelQuorum", () => {
+  afterEach(() => {
+    spyOn(process.stderr, "write").mockRestore();
+  });
+
+  test("warns when resolved reviewers cannot satisfy minReviewers", () => {
+    const spy = spyOn(process.stderr, "write").mockImplementation(() => true);
+    const panel = resolvePanel(
+      cfg({
+        reviewPanel: {
+          minReviewers: 3,
+          reviewers: [{ kind: "model", id: "opus", entry: "opus" }],
+        },
+      }),
+      active
+    );
+
+    warnPanelQuorum(panel);
+
+    expect(spy.mock.calls.some((c) => String(c[0]).includes("noQuorum"))).toBe(
+      true
+    );
   });
 });

@@ -1,5 +1,8 @@
 import { test, expect, describe } from "bun:test";
-import { buildReviewFlowDeps } from "../src/cli/harness-review-mode";
+import {
+  buildReviewFlowDeps,
+  effectiveReviewPanel,
+} from "../src/cli/harness-review-mode";
 import { panelIdentityHash } from "../src/reviewers/harness-review";
 import type { IReviewRequest } from "../src/reviewers/schema";
 import type { IPanel } from "../src/reviewers/registry";
@@ -165,11 +168,9 @@ describe("buildReviewFlowDeps (CLI wiring)", () => {
 
     expect(quick.rosterHash).not.toBe(full.rosterHash);
     expect(quick.rosterHash).toBe(
-      panelIdentityHash(
-        { ...twoReviewers, reviewers: twoReviewers.reviewers.slice(0, 1) },
-        "local/flash"
-      )
+      panelIdentityHash(effectiveReviewPanel(twoReviewers, true), "local/flash")
     );
+    expect(effectiveReviewPanel(twoReviewers, true).minReviewers).toBe(1);
   });
 
   test("mode maps from --quick and ci maps from --ci", () => {

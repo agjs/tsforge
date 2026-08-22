@@ -163,3 +163,19 @@ test("no changed files → empty report, no agents", async () => {
   expect(report.changedFiles).toHaveLength(0);
   expect(report.findings).toHaveLength(0);
 });
+
+test("a failed reviewer is surfaced on the report when another succeeds", async () => {
+  const failing: IProvider = {
+    async complete() {
+      throw new Error("reviewer down");
+    },
+  };
+
+  const report = await reviewAgents(reviewerStub("discount.ts:2"), repo, {
+    reviewProviders: [failing, reviewerStub("discount.ts:2")],
+    concurrency: 2,
+  });
+
+  expect(report.findings).toHaveLength(1);
+  expect(report.failedReviewers).toEqual(["reviewer 1"]);
+});

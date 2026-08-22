@@ -129,6 +129,8 @@ import {
   makeProvider,
   resolveReviewProviders,
   warnDefaultModelOnRemote,
+  warnReviewConfigSplit,
+  warnSelfReview,
   runModelCommand,
   modelForRun,
 } from "./model-setup";
@@ -833,7 +835,11 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Reviewer model(s) for the review phase — from models.json `reviewModels` or the
   // TSFORGE_REVIEW_* envs. Empty ⇒ the main model reviews (the default). Resolved
   // once at boot so the review call sites stay synchronous.
-  const reviewProviders = resolveReviewProviders(await loadModelsConfig());
+  const modelsCfg = await loadModelsConfig();
+  const reviewProviders = resolveReviewProviders(modelsCfg);
+
+  warnReviewConfigSplit(modelsCfg);
+  warnSelfReview(reviewProviders);
   const reviewStatusLabel = (): string =>
     reviewProviders.length > 1
       ? `reviewing ×${String(reviewProviders.length)}`
@@ -1311,8 +1317,10 @@ export async function repl(args: ICliArgs): Promise<number> {
       echo(
         `${paint("↳ /reviewfix", STYLE.dim, true)} to have the agent address these findings.\n`
       );
-    } catch {
-      // A review failure (git/model/fs) is non-fatal — the turn already succeeded.
+    } catch (err) {
+      echo(
+        `${paint("review skipped:", STYLE.dim, true)} ${err instanceof Error ? err.message : String(err)}\n`
+      );
     } finally {
       // Clear the review's live nodes so they don't linger until the next turn.
       resetTree();

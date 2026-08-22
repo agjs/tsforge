@@ -1,7 +1,11 @@
 import { join, dirname, resolve, isAbsolute } from "node:path";
 import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
-import { parseMcpServers, type IMcpServerConfig } from "../mcp";
+import {
+  parseMcpServers,
+  warnMcpConfigIssues,
+  type IMcpServerConfig,
+} from "../mcp";
 import {
   isPolicyMode,
   isActionKind,
@@ -653,6 +657,8 @@ function buildConfigFields(
 
   if (parsed.mcpServers !== undefined) {
     const servers = parseMcpServers(parsed.mcpServers, process.env);
+
+    warnMcpConfigIssues(parsed.mcpServers, servers, process.env);
 
     if (Object.keys(servers).length > 0) {
       configFields.mcpServers = servers;

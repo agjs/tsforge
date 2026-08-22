@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeTool, type IToolContext } from "../src/loop/tools";
 import { McpRegistry } from "../src/mcp";
+import { TOOL_NAME } from "../src/agent";
 import type { PolicyMode } from "../src/policy";
 
 async function withDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -139,6 +140,43 @@ describe("policy integration — every tool routes through the policy", () => {
 
       expect(out.toLowerCase()).not.toContain("policy deny");
       expect(await Bun.file(join(dir, "ok.ts")).exists()).toBe(true);
+    });
+  });
+
+  test("plan/ci deny integration and GitHub writes before handlers run", async () => {
+    await withDir(async (dir) => {
+      const capCtx = (mode: PolicyMode): IToolContext =>
+        ctx(dir, mode, {
+          github: true,
+          linear: true,
+          notion: true,
+          sentry: true,
+        });
+
+      for (const mode of ["plan", "ci"] as const) {
+        for (const call of [
+          {
+            name: TOOL_NAME.githubWrite,
+            arguments: { op: "pr_comment", body: "Looks good.", pr: "1" },
+          },
+          {
+            name: TOOL_NAME.linearWrite,
+            arguments: { op: "comment", id: "ENG-1", body: "Ship it." },
+          },
+          {
+            name: TOOL_NAME.notionWrite,
+            arguments: { op: "append", id: "page-1", content: "Note." },
+          },
+          {
+            name: TOOL_NAME.sentryWrite,
+            arguments: { op: "resolve", id: "issue-1" },
+          },
+        ]) {
+          const out = await executeTool(call, capCtx(mode));
+
+          expect(out.toLowerCase()).toContain("policy deny");
+        }
+      }
     });
   });
 });

@@ -264,18 +264,26 @@ export async function reviewAgents(
               : { contextWindow: opts.contextWindow }),
           });
 
+          if (result.status !== "done") {
+            emit({ kind: "agent_result", ...node, passed: false });
+            log(`  ${label}: failed (${result.status})`);
+
+            return null;
+          }
+
           const mapped = findingsFrom(result.structured);
 
           emit({
             kind: "agent_result",
             ...node,
-            passed: result.status === "done",
+            passed: true,
           });
           log(`  ${label}: ${String(mapped.findings.length)} finding(s)`);
 
           return mapped;
         } catch {
           emit({ kind: "agent_result", ...node, passed: false });
+          log(`  ${label}: failed`);
 
           return null;
         }
@@ -285,9 +293,15 @@ export async function reviewAgents(
 
   const raw: IRepoFinding[] = [];
   let rejected = 0;
+  const failedReviewers: string[] = [];
 
-  for (const outcome of outcomes) {
-    if (outcome === null) {
+  for (let i = 0; i < outcomes.length; i += 1) {
+    const outcome = outcomes.at(i);
+
+    if (outcome === null || outcome === undefined) {
+      failedReviewers.push(
+        reviewers.length > 1 ? `reviewer ${String(i + 1)}` : "review"
+      );
       continue;
     }
 
@@ -312,6 +326,7 @@ export async function reviewAgents(
     rejected,
     gateFailingRules,
     totalChangedFiles: collected.totalCandidates,
+    ...(failedReviewers.length > 0 ? { failedReviewers } : {}),
   };
 }
 

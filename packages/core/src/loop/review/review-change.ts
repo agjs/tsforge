@@ -136,6 +136,13 @@ export function formatReport(report: IReviewReport): string {
 
   const reviewed = report.changedFiles.length;
   const gateFailingRules = report.gateFailingRules ?? [];
+  const failedReviewers = report.failedReviewers ?? [];
+  const failedNote =
+    failedReviewers.length > 0
+      ? [
+          `(${String(failedReviewers.length)} reviewer(s) failed: ${failedReviewers.join(", ")})`,
+        ]
+      : [];
   const gateNote =
     gateFailingRules.length > 0
       ? [
@@ -146,6 +153,7 @@ export function formatReport(report: IReviewReport): string {
   if (report.findings.length === 0) {
     return [
       `No issues found across ${reviewed} reviewed file(s).`,
+      ...failedNote,
       ...gateNote,
     ].join("\n");
   }
@@ -164,6 +172,7 @@ export function formatReport(report: IReviewReport): string {
   return [
     `Review of ${reviewed} changed file(s) vs ${report.base}:`,
     `${report.findings.length} finding(s).`,
+    ...failedNote,
     ...gateNote,
     "",
     ...lines,

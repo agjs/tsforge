@@ -147,15 +147,6 @@ export function makeProvider(entry: IModelEntry): OpenAICompatibleProvider {
   return new OpenAICompatibleProvider(providerConfig(entry));
 }
 
-/**
- * The provider(s) that run the post-work code review, in precedence order:
- *   1. `TSFORGE_REVIEW_BASE_URL` + `_MODEL` (+ `_API_KEY`) — an ad-hoc single reviewer;
- *   2. `TSFORGE_REVIEW_MODEL` alone — names a `models` entry;
- *   3. `models.json` `reviewModels: [...]` — one or several `models` entries (a panel).
- * Returns `[]` when nothing is configured; callers then fall back to the MAIN model
- * (the default: the model reviews its own work). Names in `reviewModels` are validated
- * at config load, so the map here can't miss.
- */
 export function resolveReviewProviders(cfg: IModelsConfig): IProvider[] {
   const envBase = process.env.TSFORGE_REVIEW_BASE_URL;
   const envModel = process.env.TSFORGE_REVIEW_MODEL;
@@ -180,6 +171,30 @@ export function resolveReviewProviders(cfg: IModelsConfig): IProvider[] {
     .map((name) => modelByName(cfg.models, name))
     .filter((e): e is IModelEntry => e !== undefined)
     .map(makeProvider);
+}
+
+/** Clarify the two review config surfaces so users don't configure one and expect the other. */
+export function warnReviewConfigSplit(cfg: IModelsConfig): void {
+  const hasPanel =
+    cfg.reviewPanel !== undefined && cfg.reviewPanel.reviewers.length > 0;
+  const hasModels = (cfg.reviewModels?.length ?? 0) > 0;
+
+  if (hasPanel && !hasModels) {
+    process.stdout.write(
+      "  ↳ reviewPanel drives `tsforge harness-review` (pre-push); /review uses `reviewModels` — add reviewModels for interactive review.\n"
+    );
+  }
+}
+
+/** The active builder reviewing its own diff is allowed but worth calling out. */
+export function warnSelfReview(reviewProviders: readonly IProvider[]): void {
+  if (reviewProviders.length > 0) {
+    return;
+  }
+
+  process.stdout.write(
+    "  ⚠ no reviewModels configured — post-work /review uses the active builder model (self-review).\n"
+  );
 }
 
 /** Catch the common footgun: a cloud baseUrl paired with the leftover qwen
