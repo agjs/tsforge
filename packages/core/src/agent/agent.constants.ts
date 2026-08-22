@@ -17,6 +17,9 @@ export const TOOL_NAME = {
   symbolSearch: "symbol_search",
   findReferences: "find_references",
   typeAt: "type_at",
+  goToDefinition: "go_to_definition",
+  impact: "impact",
+  symbolContext: "symbol_context",
   diagnostics: "diagnostics",
   renameSymbol: "rename_symbol",
   moveFile: "move_file",
@@ -81,6 +84,9 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.symbolSearch]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.findReferences]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.typeAt]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.goToDefinition]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.impact]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.symbolContext]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.diagnostics]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.renameSymbol]: { readOnly: false, scriptExposable: true },
   [TOOL_NAME.moveFile]: { readOnly: false, scriptExposable: true },
@@ -628,6 +634,45 @@ export const LSP_TOOLS = [
       name: TOOL_NAME.typeAt,
       description:
         "Get the inferred TypeScript type of a symbol (so you don't guess types). Give the file and symbol name.",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" }, symbol: { type: "string" } },
+        required: ["file", "symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: TOOL_NAME.goToDefinition,
+      description:
+        "Jump to where a symbol is declared (semantic go-to-definition). Give the file it's used in and the symbol name.",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" }, symbol: { type: "string" } },
+        required: ["file", "symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: TOOL_NAME.impact,
+      description:
+        "Blast radius of a symbol: which files/lines reference it (type-exact, excluding the declaration). Use before a cross-file edit.",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" }, symbol: { type: "string" } },
+        required: ["file", "symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: TOOL_NAME.symbolContext,
+      description:
+        "360° view of a symbol: its type, definition site(s), and every reference in one call.",
       parameters: {
         type: "object",
         properties: { file: { type: "string" }, symbol: { type: "string" } },

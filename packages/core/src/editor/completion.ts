@@ -5,6 +5,7 @@
  * key names and re-queries it after edits; the host-supplied source does the
  * filtering and painting (see IEditorCompletionSource).
  */
+import type { IMentionItem } from "../render/file-menu";
 import type { EditorBuffer } from "./buffer";
 import { graphemes } from "./segments";
 
@@ -14,10 +15,12 @@ import { graphemes } from "./segments";
  *  rendering here (not a separate readline overlay) is what stops the picker from
  *  fighting the editor for the input row. */
 export interface IEditorCompletionSource {
-  /** Filtered, ranked candidate paths for the current query. */
-  items(query: string): readonly string[];
+  /** Filtered, ranked candidates for the current query. */
+  items(query: string): readonly IMentionItem[];
+  /** Text inserted after `@` when a row is accepted (before the trailing space). */
+  pick(item: IMentionItem): string;
   /** Paint the dropdown for `items` with `selected` highlighted. */
-  render(items: readonly string[], selected: number): void;
+  render(items: readonly IMentionItem[], selected: number): void;
   /** Tear the dropdown down. */
   clear(): void;
 }
@@ -137,9 +140,9 @@ export function createCompletion(deps: ICompletionDeps): ICompletionController {
     }
 
     const items = source.items(query());
-    const pick = items[state.selected];
+    const picked = items[state.selected];
 
-    if (pick === undefined) {
+    if (picked === undefined) {
       close();
 
       return;
@@ -152,7 +155,7 @@ export function createCompletion(deps: ICompletionDeps): ICompletionController {
       buffer.deleteBackward();
     }
 
-    buffer.insert(`${pick} `);
+    buffer.insert(`${source.pick(picked)} `);
     close();
     repaint();
     notifyChange();

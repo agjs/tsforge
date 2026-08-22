@@ -73,6 +73,62 @@ test("type_at tool returns the type of a symbol", async () => {
   }
 });
 
+test("go_to_definition from a use site points at the declaration file", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    const r = await executeTool(
+      {
+        name: "go_to_definition",
+        arguments: { file: "use.ts", symbol: "IThing" },
+      },
+      ctx
+    );
+
+    expect(r).toContain("types.ts:");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+test("impact lists dependent files and excludes declaration-only self-ref", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    const r = await executeTool(
+      { name: "impact", arguments: { file: "types.ts", symbol: "IThing" } },
+      ctx
+    );
+
+    expect(r).toContain("use.ts");
+    expect(r).toMatch(/\d+ reference\(s\) in \d+ file\(s\)/);
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+test("symbol_context bundles type, definition, and references", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    const r = await executeTool(
+      {
+        name: "symbol_context",
+        arguments: { file: "use.ts", symbol: "IThing" },
+      },
+      ctx
+    );
+
+    expect(r).toContain("type:");
+    expect(r).toContain("definition:");
+    expect(r).toContain("types.ts:");
+    expect(r).toContain("references (");
+    expect(r).toContain("use.ts:");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
 test("rename_symbol applies across files when all refs are in scope", async () => {
   const ctx = await setup(["types.ts", "use.ts"]);
 

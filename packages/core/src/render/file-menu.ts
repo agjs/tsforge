@@ -1,12 +1,66 @@
 import { emitKeypressEvents } from "node:readline";
+import type { ITsSymbol } from "../lsp/lsp.types";
 import { STYLE, paint } from "./style";
 import { clampIndex } from "./command-menu";
 import { formatMenuRow } from "./menu-chrome";
+import { CONSOLE } from "./frame/chrome";
 import { displayWidth, graphemes } from "./width";
 
 /** Rows shown in the popup at once — a tight dropdown above the prompt, never a
  *  whole-tree dump. On an empty query these are the most-recently-modified files. */
 const MAX_VISIBLE = 8;
+
+/** A candidate row in the `@` mention picker — a workspace file or an LSP symbol. */
+export type IMentionItem =
+  | { kind: "file"; path: string }
+  | {
+      kind: "symbol";
+      name: string;
+      symbolKind: string;
+      file: string;
+      line: number;
+    };
+
+/** True when `query` looks like the start of a TypeScript identifier — the gate
+ *  for mixing workspace symbols into the `@` picker (paths like `src/` stay
+ *  file-only). */
+function looksLikeIdentifier(query: string): boolean {
+  return query.length >= 1 && /^[A-Za-z_$]\w*$/u.test(query);
+}
+
+/** Rank for merged file/symbol rows — lower is better. Symbol prefix beats file
+ *  basename prefix beats symbol substring beats file path/substring matches. */
+function mentionRank(item: IMentionItem, q: string): number {
+  const ql = q.toLowerCase();
+
+  if (item.kind === "symbol") {
+    const nl = item.name.toLowerCase();
+
+    return nl.startsWith(ql) ? 0 : 2;
+  }
+
+  const base = baseName(item.path).toLowerCase();
+  const full = item.path.toLowerCase();
+
+  if (base.startsWith(ql)) {
+    return 1;
+  }
+
+  if (full.startsWith(ql)) {
+    return 3;
+  }
+
+  if (base.includes(ql)) {
+    return 4;
+  }
+
+  return 5;
+}
+
+/** Text inserted after `@` when a mention row is accepted. */
+export function mentionInsertText(item: IMentionItem): string {
+  return item.kind === "file" ? item.path : `${item.file}:${item.line}`;
+}
 
 /** Basename of a workspace-relative path (the part after the last `/`). */
 function baseName(path: string): string {
@@ -89,6 +143,61 @@ export function filterFiles(files: readonly string[], query: string): string[] {
     .map((m) => m.path);
 }
 
+/** Filter workspace files and (optionally) LSP symbols for the `@` picker.
+ *  Symbol hits are included only when `query` looks like an identifier and
+ *  `symbols` is supplied — otherwise this is file-only (same cap/ranking feel
+ *  as `filterFiles`). Pass `rel` to show symbol paths workspace-relative. */
+export function filterMentionItems(
+  files: readonly string[],
+  query: string,
+  symbols?: readonly ITsSymbol[],
+  rel?: (abs: string) => string
+): IMentionItem[] {
+  if (
+    query.length === 0 ||
+    !looksLikeIdentifier(query) ||
+    symbols === undefined
+  ) {
+    return filterFiles(files, query).map((path) => ({
+      kind: "file" as const,
+      path,
+    }));
+  }
+
+  const q = query.toLowerCase();
+  const { full } = lowerIndex(files);
+  const fileMatched: { item: IMentionItem; rank: number }[] = [];
+
+  for (let i = 0; i < files.length; i += 1) {
+    const lowered = full[i] ?? "";
+
+    if (lowered.includes(q)) {
+      const item: IMentionItem = { kind: "file", path: files[i] ?? "" };
+
+      fileMatched.push({ item, rank: mentionRank(item, q) });
+    }
+  }
+
+  const symbolMatched = symbols
+    .filter((s) => s.name.toLowerCase().includes(q))
+    .map((s) => {
+      const item: IMentionItem = {
+        kind: "symbol",
+        name: s.name,
+        symbolKind: s.kind,
+        file: rel !== undefined ? rel(s.file) : s.file,
+        line: s.line,
+      };
+
+      return { item, rank: mentionRank(item, q) };
+    });
+
+  return [...symbolMatched, ...fileMatched]
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, MAX_VISIBLE)
+    .map((m) => m.item);
+}
+
 /** Truncate a path to `max` columns keeping its TAIL (the filename matters most),
  *  prefixing `…` when clipped. `max <= 0` ⇒ empty. */
 export function truncatePath(path: string, max: number): string {
@@ -121,14 +230,14 @@ export function truncatePath(path: string, max: number): string {
 }
 
 /**
- * The popup rows for the inline file dropdown — one painted line per visible file,
+ * The popup rows for the inline `@` dropdown — one painted line per visible item,
  * each truncated to `columns` (no wrapping), the selected row gutter-highlighted
  * with the shared menu dialect (`▸` + CONSOLE.bright). Pure/width-aware so it can
  * be asserted without a terminal. Empty list ⇒ a single "no matching file" row so
  * the dropdown never silently vanishes mid-type.
  */
 export function formatCompletionRows(
-  items: readonly string[],
+  items: readonly IMentionItem[],
   selected: number,
   columns: number,
   color: boolean
@@ -137,9 +246,12 @@ export function formatCompletionRows(
     return [`  ${paint("no matching file", STYLE.dim, color)}`];
   }
 
-  return items.map((path, i) => {
+  return items.map((item, i) => {
     const active = i === selected;
-    const text = truncatePath(path, Math.max(0, columns - 2));
+    const text =
+      item.kind === "file"
+        ? truncatePath(item.path, Math.max(0, columns - 2))
+        : formatSymbolRow(item, columns - 2);
 
     if (active) {
       return formatMenuRow({
@@ -150,9 +262,33 @@ export function formatCompletionRows(
       });
     }
 
-    // Inactive: shared gutter width, dim path (quiet under the input).
+    if (item.kind === "symbol") {
+      const loc = `${item.file}:${item.line}`;
+      const locBudget = Math.max(
+        8,
+        columns - 2 - displayWidth(`${item.symbolKind} ${item.name} — `)
+      );
+      const locText = truncatePath(loc, locBudget);
+      const body = `${paint(item.symbolKind, STYLE.dim, color)} ${paint(item.name, CONSOLE.bright, color)} ${paint(`— ${locText}`, STYLE.dim, color)}`;
+
+      return `  ${body}`;
+    }
+
+    // Inactive file: shared gutter width, dim path (quiet under the input).
     return `  ${paint(text, STYLE.dim, color)}`;
   });
+}
+
+function formatSymbolRow(
+  item: Extract<IMentionItem, { kind: "symbol" }>,
+  max: number
+): string {
+  const loc = truncatePath(
+    `${item.file}:${item.line}`,
+    Math.max(8, max - displayWidth(`${item.symbolKind} ${item.name} — `))
+  );
+
+  return `${item.symbolKind} ${item.name} — ${loc}`;
 }
 
 /** True when an `@` just typed at `cursor` starts a fresh mention — i.e. the `@`
@@ -183,7 +319,7 @@ interface IKeyInfo {
  * keypress state machine, with no knowledge of the status bar.
  */
 export interface IPickerView {
-  render(query: string, items: readonly string[], selected: number): void;
+  render(query: string, items: readonly IMentionItem[], selected: number): void;
   close(): void;
 }
 
@@ -217,7 +353,10 @@ export function pickFileInline(
     stdin.removeAllListeners("keypress");
 
     const draw = (): void => {
-      const items = filterFiles(files, query);
+      const items = filterFiles(files, query).map((path) => ({
+        kind: "file" as const,
+        path,
+      }));
 
       selected = clampIndex(selected, items.length);
       view.render(query, items, selected);
@@ -237,9 +376,13 @@ export function pickFileInline(
     };
 
     const accept = (): void => {
-      const items = filterFiles(files, query);
+      const items = filterFiles(files, query).map((path) => ({
+        kind: "file" as const,
+        path,
+      }));
+      const picked = items[clampIndex(selected, items.length)];
 
-      finish(items[clampIndex(selected, items.length)] ?? null);
+      finish(picked === undefined ? null : mentionInsertText(picked));
     };
 
     const onKey = (str: string | undefined, key: IKeyInfo): void => {

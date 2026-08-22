@@ -12,6 +12,9 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.symbolSearch]: "read_file",
   [TOOL_NAME.findReferences]: "read_file",
   [TOOL_NAME.typeAt]: "read_file",
+  [TOOL_NAME.goToDefinition]: "read_file",
+  [TOOL_NAME.impact]: "read_file",
+  [TOOL_NAME.symbolContext]: "read_file",
   [TOOL_NAME.diagnostics]: "read_file",
   [TOOL_NAME.gitContext]: "read_file",
   // git/GitHub first-class tools. Reads (git_context above, github_read) → vcs_read

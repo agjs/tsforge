@@ -4,22 +4,27 @@ import {
   createCompletion,
   type IEditorCompletionSource,
 } from "../src/editor/completion";
+import { mentionInsertText, type IMentionItem } from "../src/render/file-menu";
 
 /** The @-mention completion state machine extracted from the controller (B3):
  *  these pin the anchor/query tracking, selection clamping, whitespace close,
  *  and the accept-replaces-query-keeps-@ contract WITHOUT stdin. */
 
 interface IFakeSource extends IEditorCompletionSource {
-  readonly rendered: { items: readonly string[]; selected: number }[];
+  readonly rendered: { items: readonly IMentionItem[]; selected: number }[];
   cleared: number;
 }
 
 function makeSource(files: readonly string[]): IFakeSource {
-  const rendered: { items: readonly string[]; selected: number }[] = [];
+  const rendered: { items: readonly IMentionItem[]; selected: number }[] = [];
   const src: IFakeSource = {
     rendered,
     cleared: 0,
-    items: (query) => files.filter((f) => f.includes(query)),
+    items: (query) =>
+      files
+        .filter((f) => f.includes(query))
+        .map((path) => ({ kind: "file" as const, path })),
+    pick: mentionInsertText,
     render: (items, selected) => {
       rendered.push({ items, selected });
     },
@@ -61,7 +66,10 @@ describe("open + query tracking", () => {
     completion.open();
 
     expect(completion.isOpen()).toBe(true);
-    expect(source.rendered.at(-1)?.items).toEqual(["alpha.ts", "beta.ts"]);
+    expect(source.rendered.at(-1)?.items).toEqual([
+      { kind: "file", path: "alpha.ts" },
+      { kind: "file", path: "beta.ts" },
+    ]);
   });
 
   test("typing narrows the query; refresh re-renders the filtered list", () => {
@@ -72,7 +80,9 @@ describe("open + query tracking", () => {
     buffer.insert("alp");
     completion.refresh();
 
-    expect(source.rendered.at(-1)?.items).toEqual(["alpha.ts"]);
+    expect(source.rendered.at(-1)?.items).toEqual([
+      { kind: "file", path: "alpha.ts" },
+    ]);
   });
 
   test("whitespace in the query closes the dropdown (paths contain none)", () => {
@@ -155,5 +165,47 @@ describe("accept", () => {
 
     expect(buffer.getText()).toBe("@"); // nothing to accept — buffer untouched
     expect(completion.isOpen()).toBe(false);
+  });
+
+  test("symbol pick inserts file:line anchor after @", () => {
+    const symbolSource: IFakeSource = {
+      rendered: [],
+      cleared: 0,
+      items: () => [
+        {
+          kind: "symbol",
+          name: "IThing",
+          symbolKind: "interface",
+          file: "src/types.ts",
+          line: 3,
+        },
+      ],
+      pick: mentionInsertText,
+      render: (items, selected) => {
+        symbolSource.rendered.push({ items, selected });
+      },
+      clear: () => {
+        symbolSource.cleared += 1;
+      },
+    };
+    const buffer = new EditorBuffer();
+    let repaintCount = 0;
+    const completion = createCompletion({
+      buffer,
+      source: symbolSource,
+      repaint: () => {
+        repaintCount += 1;
+      },
+      notifyChange: () => undefined,
+    });
+
+    buffer.insert("@");
+    completion.open();
+    buffer.insert("ITh");
+    completion.refresh();
+    completion.handleKey("return");
+
+    expect(buffer.getText()).toBe("@src/types.ts:3 ");
+    expect(repaintCount).toBe(1);
   });
 });

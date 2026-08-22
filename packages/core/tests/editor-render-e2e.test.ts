@@ -3,7 +3,11 @@ import { startEditor } from "../src/editor/controller";
 import type { IEditorCompletionSource } from "../src/editor/controller";
 import { StatusBar, PROMPT_COLS } from "../src/render";
 import type { IStatusInfo } from "../src/render";
-import { filterFiles, formatCompletionRows } from "../src/render/file-menu";
+import {
+  filterFiles,
+  formatCompletionRows,
+  mentionInsertText,
+} from "../src/render/file-menu";
 import { VirtualScreen } from "./helpers/virtual-screen";
 
 /**
@@ -85,7 +89,12 @@ function harness(withCompletion = false) {
   // Mirrors cli.ts's editor-native completion source (filter a list, paint the
   // dropdown above the block via setEditorOverlay).
   const completion: IEditorCompletionSource = {
-    items: (query: string) => filterFiles(FILES, query),
+    items: (query: string) =>
+      filterFiles(FILES, query).map((path) => ({
+        kind: "file" as const,
+        path,
+      })),
+    pick: mentionInsertText,
     render: (items, selected) => {
       bar.setEditorOverlay(formatCompletionRows(items, selected, COLS, true));
     },

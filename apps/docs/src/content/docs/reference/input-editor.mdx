@@ -66,7 +66,7 @@ Requires a [`vision` capability](/inference/models-json/#extra-capabilities-visi
 | --- | --- |
 | **Ctrl+V** | Paste an image from the clipboard. A `📋 reading clipboard…` hint shows during the read, then an `[image #N]` chip lands in the buffer. (Falls back to pasting clipboard text if there's no image.) |
 | **Drag & drop** | Drag an image file onto the terminal. It drops the path, which is attached on send. |
-| **`@` mention** | `@path/to/image.png`: the picker lists image files too. |
+| **`@` mention** | `@path/to/image.png`: the picker lists image files too. When the project has a `tsconfig.json`, typing an identifier (e.g. `@ITh`) also surfaces workspace symbols — accept inserts `@file:line` as a steer-friendly anchor. Path queries (e.g. `@src/`) stay file-only. |
 
 **Why Ctrl+V, not ⌘V:** the terminal emulator intercepts ⌘V and, for an image, hands the app nothing. A terminal program can only receive Ctrl+V (a real control byte). Identical images attached more than once are described **once** (no duplicate cost). See also [generating images](/reference/flags/#image-capabilities-vision-generation).
 
@@ -75,9 +75,17 @@ Requires a [`vision` capability](/inference/models-json/#extra-capabilities-visi
 | Key | Action |
 | --- | --- |
 | **`/`** | Open command palette (when buffer contains only `/`) |
-| **`@`** | Open file picker (when buffer contains only `@`) |
+| **`@`** | Open mention picker (when buffer contains only `@`) |
 
-Typing `/` or `@` followed by other text inserts those characters normally.
+Typing `/` or `@` followed by other text opens inline completion above the editor block. For `@`:
+
+- **Files** — filter by path substring; accept inserts `@path ` (unchanged).
+- **Symbols** — when a `tsconfig.json` is present and your query looks like an identifier (`IThing`, `fetchUser`), LSP workspace symbols appear alongside files; accept inserts `@file:line ` so you can steer the agent to a definition or use site.
+- **Ranking** — symbol prefix match, then file basename prefix, then substring matches (capped at 8 rows, same as files).
+
+Withhold symbol search in the picker with `TSFORGE_NO_LSP_TOOLS=1` (file-only behavior, same as eval/headless runs).
+
+An `@` mid-token (e.g. in an email address) does **not** open the picker — only `@` at the start of the line or after whitespace does.
 
 ## Keyboard interrupt
 

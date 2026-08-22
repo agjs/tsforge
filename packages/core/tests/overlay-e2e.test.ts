@@ -219,20 +219,31 @@ describe("@-file picker e2e — rendered dropdown", () => {
   ];
 
   test("a query narrows the visible rows; the selection shows a gutter", () => {
-    const items = filterFiles(FILES, "app");
+    const items = filterFiles(FILES, "app").map((path) => ({
+      kind: "file" as const,
+      path,
+    }));
     const rows = formatCompletionRows(items, 0, 80, false);
     const screen = new VirtualScreen(24, 80);
 
     screen.feed("\x1b[2J\x1b[H" + rows.join("\n"));
 
-    expect(items.every((p) => p.includes("app"))).toBe(true);
+    expect(items.every((p) => p.path.includes("app"))).toBe(true);
     expect(screen.rowsContaining("router.ts")).toBe(0); // filtered out
     // The first (selected) row carries the active gutter "▸".
     expect(screen.row(1)).toContain("▸");
   });
 
   test("an empty match renders the 'no matching file' hint", () => {
-    const rows = formatCompletionRows(filterFiles(FILES, "zzz"), 0, 80, false);
+    const rows = formatCompletionRows(
+      filterFiles(FILES, "zzz").map((path) => ({
+        kind: "file" as const,
+        path,
+      })),
+      0,
+      80,
+      false
+    );
     const screen = new VirtualScreen(24, 80);
 
     screen.feed(rows.join("\n"));

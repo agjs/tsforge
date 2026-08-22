@@ -17,12 +17,15 @@ import { openRecipePicker } from "./repl-recipe";
 import { pickCommand, type IPaletteView } from "../render/command-menu";
 import {
   pickFileInline,
-  filterFiles,
+  filterMentionItems,
   formatCompletionRows,
+  mentionInsertText,
   shouldOpenAtPicker,
+  type IMentionItem,
   type IPickerView,
 } from "../render/file-menu";
 import { listWorkspaceFiles } from "../lib/fs";
+import { relative } from "node:path";
 import { composeMessage } from "../loop/prompt";
 import { compactSummaryLine } from "../loop/context-hygiene";
 import { resolveImageInput } from "./image-input";
@@ -3171,9 +3174,16 @@ export async function repl(args: ICliArgs): Promise<number> {
       });
 
       const editorCompletion = {
-        items: (query: string): readonly string[] =>
-          filterFiles(completionFiles, query),
-        render: (items: readonly string[], selected: number): void => {
+        items: (query: string) => {
+          const ts = flags.noLspTools() ? null : session.tsService;
+          const symbols = ts?.symbols(query);
+
+          return filterMentionItems(completionFiles, query, symbols, (abs) =>
+            relative(args.dir, abs)
+          );
+        },
+        pick: mentionInsertText,
+        render: (items: readonly IMentionItem[], selected: number): void => {
           chrome.setEditorOverlay(
             formatCompletionRows(
               items,
