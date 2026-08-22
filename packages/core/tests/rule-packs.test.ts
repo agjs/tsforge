@@ -49,7 +49,7 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all twenty-one packs registered", () => {
+  test("should have all twenty-two packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
       "ai-sdk",
       "authorization",
@@ -71,6 +71,7 @@ describe("rule-packs: registry", () => {
       "structured-logging",
       "tanstack-query",
       "test-conventions",
+      "three",
       "typescript-core",
     ]);
   });

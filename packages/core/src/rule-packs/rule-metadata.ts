@@ -115,6 +115,21 @@ const RULE_ENTRIES: Readonly<Record<string, IRuleCatalogEntry>> = {
     tier: "framework",
     falsePositiveRisk: "medium",
   },
+  "prefer-named-three-imports": {
+    tier: "framework",
+    tags: ["three"],
+    falsePositiveRisk: "medium",
+  },
+  "no-disabled-frustum-culling": {
+    tier: "framework",
+    tags: ["three"],
+    falsePositiveRisk: "medium",
+  },
+  "no-unbounded-device-pixel-ratio": {
+    tier: "framework",
+    tags: ["three"],
+    falsePositiveRisk: "medium",
+  },
 };
 
 const PACK_DEFAULT_TIER: Readonly<Record<string, RuleTier>> = {
@@ -128,6 +143,7 @@ const PACK_DEFAULT_TIER: Readonly<Record<string, RuleTier>> = {
   elysia: "framework",
   drizzle: "framework",
   bullmq: "framework",
+  three: "framework",
   "comment-hygiene": "architecture",
   "code-flow": "framework",
 };

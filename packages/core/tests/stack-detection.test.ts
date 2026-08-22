@@ -86,6 +86,51 @@ test("project with vitest in devDeps: detects test-conventions pack", async () =
   }
 });
 
+test("project with three: detects three pack from anyDeps", async () => {
+  const dir = await tempDir();
+
+  try {
+    const pkg = {
+      name: "webgl-app",
+      dependencies: {
+        three: "^0.170.0",
+      },
+    };
+
+    await writeFile(join(dir, "package.json"), JSON.stringify(pkg));
+
+    const profile = await detectStack(dir);
+
+    expect(profile.packs).toContain("three");
+    expect(profile.confidence).toBe("certain");
+    expect(profile.reason.toLowerCase()).toContain("three");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("project with @react-three/fiber and no three listing still detects three pack", async () => {
+  const dir = await tempDir();
+
+  try {
+    const pkg = {
+      name: "r3f-app",
+      dependencies: {
+        "@react-three/fiber": "^8.0.0",
+      },
+    };
+
+    await writeFile(join(dir, "package.json"), JSON.stringify(pkg));
+
+    const profile = await detectStack(dir);
+
+    expect(profile.packs).toContain("three");
+    expect(profile.confidence).toBe("certain");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("project with bullmq: detects bullmq pack from anyDeps", async () => {
   const dir = await tempDir();
 
@@ -119,6 +164,7 @@ test("no package.json: always-on packs, no framework packs, confidence guess", a
     expect(profile.packs).toContain("code-flow");
     expect(profile.packs).not.toContain("react");
     expect(profile.packs).not.toContain("drizzle");
+    expect(profile.packs).not.toContain("three");
     expect(profile.confidence).toBe("guess");
     expect(profile.name).toBe("generic");
     expect(profile.reason).toContain("no package.json");

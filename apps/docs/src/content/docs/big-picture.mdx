@@ -80,7 +80,7 @@ tsforge closes that gap with three ideas:
 
 2. **Feedback while the model still types.** Stream rules (TTSR) can cut off bad tool arguments mid-generation. Hashline edits tie replacements to a file hash so line numbers do not drift. The TypeScript language service can flag a bad write before the next turn.
 
-3. **Stack-aware rules without hand-wiring.** tsforge reads `package.json`, turns on ESLint packs for React, Drizzle, Elysia, and the rest, and runs them on every validation. You get project-specific guardrails without maintaining a separate lint setup, and you can layer your own packs on top ([external plugins](/guardrails/config/)).
+3. **Stack-aware rules without hand-wiring.** tsforge reads `package.json`, turns on ESLint packs for React, Drizzle, Elysia, Three.js, and the rest, and runs them on every validation. You get project-specific guardrails without maintaining a separate lint setup, and you can layer your own packs on top ([external plugins](/guardrails/config/)).
 
 ## Why TypeScript specifically
 
@@ -128,7 +128,7 @@ The default endpoint (`http://localhost:8000/v1`) is a convenience for a local i
 | **LSP / language server** | TypeScript's semantic engine (`LanguageService`): go-to-definition, types, rename, diagnostics. tsforge embeds it; you do not run a separate tsserver process. |
 | **TTSR** | **T**ool-**t**ext **s**tream **r**ules. Regex watchers on streaming model output. On match, tsforge aborts the stream and retries with short guidance (for example "no `as any`"). |
 | **Hashline** | Edit format `¶path#HASH` plus line ops. The hash proves the file has not changed since the model read it. |
-| **Rule pack** | A bundle of ESLint rules keyed to a stack (React, Elysia, Drizzle, …). |
+| **Rule pack** | A bundle of ESLint rules keyed to a stack (React, Elysia, Drizzle, Three.js, …). |
 | **Meta-rule** | Cross-cutting ESLint rules tsforge adds on top of packs (import boundaries, test file pairing). |
 | **Repair ladder** | L0–L3 fixes for invalid tool calls: unwrap links, coerce types, then re-ask the model. |
 | **Spec** | YAML file describing a task, files in scope, and expected gate outcome for evals. |
