@@ -2079,7 +2079,10 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   const railHasItems = (): boolean => {
     if (paneScreen.focusState.railSurface === "gate") {
-      return gateView.gateConfigured;
+      // Gate surface always keeps the rail open — formatGateLines renders the
+      // empty / not-configured states; gating on gateConfigured hid the rail the
+      // moment the user cycled to Gate.
+      return true;
     }
 
     return railPlan !== null && railPlan.items.length > 0;

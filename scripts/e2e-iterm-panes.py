@@ -43,8 +43,9 @@ def main() -> int:
 
     set_winsize(master, 24, 100)
     buf = b""
-    deadline = time.time() + 8.0
+    deadline = time.time() + 20.0
     saw_enter = False
+    keys_sent = False
 
     try:
         while time.time() < deadline:
@@ -56,15 +57,30 @@ def main() -> int:
                 buf += chunk
                 if ENTER_ALT in buf:
                     saw_enter = True
-                    # Show rail, cycle to Gate, then exit.
-                    os.write(master, b"\x07")
-                    time.sleep(0.2)
-                    os.write(master, b"\x1b[103;6u")
+                text = buf.decode("utf-8", "replace")
+                # Wait until the editor is accepting input — keys sent too early
+                # (right after alt-screen enter) are lost or go to the wrong layer.
+                if (
+                    saw_enter
+                    and not keys_sent
+                    and "describe a task" in text.lower()
+                ):
+                    keys_sent = True
+                    # Rail is visible at idle — cycle directly (do not Ctrl+G: that hides it).
                     time.sleep(0.3)
-                    os.write(master, b"/copy\n")
-                    time.sleep(0.3)
+                    os.write(master, b"\x1b[17~")
+                    time.sleep(0.8)
                     os.write(master, b"/exit\n")
-                    time.sleep(0.5)
+                    # Keep reading until the child exits so Gate repaint lands in buf.
+                    exit_deadline = time.time() + 5.0
+                    while time.time() < exit_deadline:
+                        r2, _, _ = select.select([master], [], [], 0.2)
+                        if master not in r2:
+                            continue
+                        chunk2 = os.read(master, 4096)
+                        if not chunk2:
+                            break
+                        buf += chunk2
                     break
     finally:
         try:
@@ -79,6 +95,10 @@ def main() -> int:
     if not saw_enter:
         sys.stderr.write("e2e-iterm-panes: never saw alternate-screen enter\n")
         sys.stderr.write(buf[-2000:].decode("utf-8", "replace"))
+        return 1
+
+    if not keys_sent:
+        sys.stderr.write("e2e-iterm-panes: prompt never became ready for key injection\n")
         return 1
 
     text = buf.decode("utf-8", "replace")

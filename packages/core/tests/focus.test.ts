@@ -2,6 +2,17 @@ import { test, expect, describe } from "bun:test";
 import { PaneFocus } from "../src/render/frame/focus";
 
 describe("PaneFocus", () => {
+  test("togglePanel opens auto-hidden rail on first Ctrl+G", () => {
+    const f = new PaneFocus();
+
+    expect(f.panel).toBe("hidden");
+    expect(f.userCollapsed).toBe(false);
+
+    expect(f.togglePanel(false)).toBe("changed");
+    expect(f.panel).toBe("visibleUnfocused");
+    expect(f.userCollapsed).toBe(false);
+  });
+
   test("togglePanel hides and shows (Ctrl+G visibility)", () => {
     const f = new PaneFocus();
 
@@ -85,13 +96,22 @@ describe("PaneFocus", () => {
     expect(f.railSurface).toBe("tasks");
   });
 
-  test("cycleSurface ignored when panel hidden", () => {
+  test("cycleSurface ignored when user collapsed the rail", () => {
     const f = new PaneFocus();
 
     f.syncHasItems(true);
     f.togglePanel(true);
     expect(f.cycleSurface()).toBe("ignored");
     expect(f.railSurface).toBe("tasks");
+  });
+
+  test("cycleSurface works when rail column is up but panel state is hidden (empty checklist)", () => {
+    const f = new PaneFocus();
+
+    expect(f.panel).toBe("hidden");
+    expect(f.cycleSurface()).toBe("changed");
+    expect(f.railSurface).toBe("gate");
+    expect(f.panel).toBe("visibleUnfocused");
   });
 
   test("emptied worklist hides the panel but keeps a user collapse", () => {

@@ -638,6 +638,27 @@ describe("PaneScreen", () => {
     expect(term.writes.length).toBeGreaterThan(afterEnter);
   });
 
+  test("F6 cycles Tasks rail title to Gate (full repaint, not scroll-only patch)", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    panes.setPanel(["worklist  0/1", "[>] First"]);
+    expect(panes.focusState.panel).toBe("visibleUnfocused");
+
+    panes.handleKey("\x07");
+    panes.handleKey("\x07");
+    expect(term.text()).toContain("Tasks");
+
+    term.writes = [];
+    panes.handleKey("\x1b[17~");
+    panes.flushPendingPaint();
+
+    expect(panes.focusState.railSurface).toBe("gate");
+    expect(term.text()).toContain("Gate");
+    expect(term.text()).not.toContain("Tasks");
+  });
+
   test("Ctrl+O requests dump; scrollMain moves transcript", () => {
     const term = new FakeTerm();
     const panes = new PaneScreen(term, 24, 100);

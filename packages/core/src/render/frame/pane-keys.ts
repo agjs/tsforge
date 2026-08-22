@@ -38,6 +38,7 @@ function handleToggle(deps: IPaneKeyDeps): PaneKeyResult {
 
 function handleCycleSurface(deps: IPaneKeyDeps): PaneKeyResult {
   if (deps.focus.cycleSurface() === "changed") {
+    deps.invalidate();
     deps.onRailRefresh?.();
     deps.paint();
   }
