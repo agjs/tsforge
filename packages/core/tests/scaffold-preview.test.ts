@@ -69,4 +69,11 @@ describe("scaffoldPreview", () => {
     expect(preview).toMatch(/static site|astro/iu);
     expect(preview).not.toMatch(/\d+ services/u);
   });
+
+  test("phaser preview is a game clone, no services", () => {
+    const preview = scaffoldPreview(MANIFEST, answers({}, "phaser"));
+
+    expect(preview).toMatch(/phaser/iu);
+    expect(preview).not.toMatch(/\d+ services/u);
+  });
 });

@@ -58,6 +58,7 @@ import {
   type IStackAdapter,
 } from "../loop/planning/stack-adapter";
 import { boringstackStackAdapter } from "../loop/boringstack/planning";
+import { phaserStackAdapter } from "../loop/phaser/planning";
 import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -236,9 +237,26 @@ export function parseReviewResponse(
 }
 
 /** The stack adapters the CLI (composition root) registers. The generic planner/CLI
- *  flow resolves the matching one per project; adding a stack (Phaser next) is a one-line
- *  registration here, not a change to the planning logic. */
-const STACK_ADAPTERS: readonly IStackAdapter[] = [boringstackStackAdapter];
+ *  flow resolves the matching one per project; adding a stack is registration here,
+ *  not a change to the planning logic. */
+const STACK_ADAPTERS: readonly IStackAdapter[] = [
+  boringstackStackAdapter,
+  phaserStackAdapter,
+];
+
+/** Convention extras from the adapter that claims `dir`, if it ships a library. */
+async function stackSessionExtras(dir: string): Promise<{
+  readonly conventions?: IStackAdapter["conventions"];
+  readonly pullConventions?: true;
+}> {
+  const stack = await resolveStackAdapter(dir, STACK_ADAPTERS);
+
+  if (stack?.conventions === undefined) {
+    return {};
+  }
+
+  return { conventions: stack.conventions, pullConventions: true };
+}
 
 /**
  * The greenfield-planning DECISION: which registered stack adapter (if any) should
@@ -681,6 +699,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     // stalling on a long hidden chain-of-thought (the local default has thinking on).
     // The session still flips thinking ON automatically while repairing gate errors.
     enableThinking: false,
+    ...(await stackSessionExtras(args.dir)),
   };
 
   const session = await Session.create(config);
@@ -1664,6 +1683,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       // TSFORGE_COMPACT_AT / TSFORGE_THINKING_BUDGET env knobs (re-read here —
       // the init-time consts live in the boot scope).
       ...clearCarrySettings(args.policyMode),
+      ...(await stackSessionExtras(args.dir)),
     });
     wireDelegation(); // re-offer spawn_agent on the rebuilt session
     wireImages(); // re-offer read_image/generate_image + preview on the rebuild

@@ -38,9 +38,9 @@ export async function bootStack(
   deps: IBootDeps
 ): Promise<IBootResult> {
   const profile = manifest.archetypes.boringstack;
-  const command = profile.boot;
+  const command = profile?.boot;
 
-  if (command === undefined || command.length === 0) {
+  if (profile === undefined || command === undefined || command.length === 0) {
     return {
       booted: false,
       statuses: [],

@@ -1,4 +1,9 @@
-import type { IArchetype, IScaffoldAnswers } from "./scaffold.types";
+import {
+  ARCHETYPES,
+  isArchetype,
+  type IArchetype,
+  type IScaffoldAnswers,
+} from "./scaffold.types";
 
 /** Parsed non-interactive scaffold invocation (for the headless entry + eval
  *  driver). The answers feed `answersToPlan`/`runScaffold` exactly as the
@@ -13,7 +18,7 @@ export interface IScaffoldCliOptions {
 
 /**
  * Parse scaffold flags into answers. Pure (no I/O) so it's unit-testable:
- *   --archetype <astro|boringstack>   (default boringstack)
+ *   --archetype <astro|boringstack|phaser>   (default boringstack)
  *   --stack <dev|prod|smoke>          (default dev)
  *   --dest <dir>                      (required)
  *   --set KEY=VALUE                   (repeatable; single-valued answer)
@@ -95,11 +100,13 @@ function next(argv: readonly string[], i: number): string {
 }
 
 function parseArchetype(v: string): IArchetype {
-  if (v === "astro" || v === "boringstack") {
+  if (isArchetype(v)) {
     return v;
   }
 
-  throw new Error(`scaffold: unknown archetype ${v} (astro | boringstack)`);
+  throw new Error(
+    `scaffold: unknown archetype ${v} (${ARCHETYPES.join(" | ")})`
+  );
 }
 
 function parseStack(v: string): IScaffoldAnswers["stack"] {

@@ -52,14 +52,14 @@ test("scaffoldFromAnswers forwards clone progress to out and prints the handoff"
   expect(joined).toContain("run planning when you submit");
 });
 
-test("archetype step offers boringstack, astro", () => {
+test("archetype step offers boringstack, astro, phaser", () => {
   const step = archetypeStep();
 
   expect(step.kind).toBe("single");
 
   const values = step.options.map((o) => o.value);
 
-  expect(values).toEqual(["boringstack", "astro"]);
+  expect(values).toEqual(["boringstack", "astro", "phaser"]);
 });
 
 test("resolveScaffoldDest: a plain name resolves under cwd (NOT a throwaway temp)", () => {

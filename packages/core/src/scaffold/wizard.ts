@@ -151,7 +151,7 @@ export function buildScaffoldSteps(
   archetype: IArchetype,
   stack: IStack
 ): readonly IWizardStep[] {
-  if (archetype === "astro") {
+  if (archetype !== "boringstack") {
     return [];
   }
 

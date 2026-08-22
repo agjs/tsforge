@@ -1,8 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { isRecord } from "../../lib/guards";
 import type { IPlanConstraints } from "../planning/plan-types";
 import type { IStackAdapter } from "../planning/stack-adapter";
+import { readScaffoldArchetype } from "../../scaffold/receipt";
 import { boringstackPlanSchemaErased } from "./plan-extension";
 
 /** STACK-SPECIFIC planner guidance for BoringStack (kept OUT of the generic
@@ -33,25 +32,6 @@ export const BORINGSTACK_RESERVED_ENTITY_IDS: ReadonlySet<string> = new Set([
   "logouts",
 ]);
 
-/** Read the recorded archetype from a project's `.tsforge/scaffold.json`, or null
- *  if absent/unreadable/malformed. `read` is injectable for tests. */
-async function readArchetype(
-  dir: string,
-  read: (path: string) => Promise<string>
-): Promise<string | null> {
-  try {
-    const raw: unknown = JSON.parse(
-      await read(join(dir, ".tsforge", "scaffold.json"))
-    );
-
-    return isRecord(raw) && typeof raw.archetype === "string"
-      ? raw.archetype
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Detect a BoringStack project by its AUTHORITATIVE scaffold receipt
  * (`.tsforge/scaffold.json` archetype === "boringstack"), NOT by a directory
@@ -65,7 +45,7 @@ export async function isBoringstackProject(
   dir: string,
   read: (path: string) => Promise<string> = (p) => readFile(p, "utf-8")
 ): Promise<boolean> {
-  return (await readArchetype(dir, read)) === "boringstack";
+  return (await readScaffoldArchetype(dir, read)) === "boringstack";
 }
 
 /**

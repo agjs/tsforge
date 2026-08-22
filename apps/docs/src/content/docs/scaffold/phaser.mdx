@@ -1,0 +1,51 @@
+---
+title: Phaser scaffolding
+description: Stand up a Phaser 4 TypeScript game from the family template with the tsforge scaffold wizard.
+---
+
+Use this when you want a **new Phaser game**. The wizard clones
+[Phaser-TypeScript-AI-First-Starter](https://github.com/boringstack-xyz/Phaser-TypeScript-AI-First-Starter)
+(Phaser 4 + TypeScript + Vite, hybrid composition: pure domain, feature ticks, scenes as views).
+
+This is a **second cloneable template**, not a profile of the BoringStack fullstack
+manifest. The game repo does **not** ship `.tsforge/scaffold-manifest.json`. tsforge
+owns the clone descriptor (repo, git tag, gate).
+
+## What you get
+
+| | |
+|---|---|
+| Archetype | `phaser` |
+| Clone | `boringstack-xyz/Phaser-TypeScript-AI-First-Starter` at a pinned tag (`v0.1.6`, overridable with `--ref`) |
+| Demo | The playable WASD grid + pickups + S/R save stays. First features **extend** it. |
+| Gate | `bun run check` |
+| Boot | None — no Docker, no `.env` |
+| Pack | The `phaser` ESLint pack auto-detects from the `phaser` dependency |
+
+## When it runs
+
+```bash
+tsforge scaffold --archetype phaser --dest ./my-game
+```
+
+Or interactively: `/scaffold` → **Phaser** → folder name.
+
+Off a TTY there are no extra questions (same as Astro). `--ref` overrides the pin;
+`PHASER_TEMPLATE_REPO` clones a local checkout instead of GitHub.
+
+After it finishes, the first agent turn in that directory **plans** the product
+(Phaser view intent: scene / feature / content — not list/detail/form screens).
+The starter's Player / Grid / Wall / Movement / Hud / Save are reserved and will
+be stripped if the planner tries to rebuild them.
+
+```bash
+tsforge --dir ./my-game --accept 'bun run check' "add a coin pickup"
+```
+
+## What it does, in order
+
+1. **Clone** the Phaser template at the pin, resolving HEAD into `.tsforge/scaffold.json` with `"archetype": "phaser"`.
+2. **Stamp identity** — `package.json` `name` and the HTML title from the folder name.
+3. **Hand off** — no compose, no boot. `bun run check` is the gate.
+
+See also [BoringStack scaffolding](/scaffold/boringstack/).

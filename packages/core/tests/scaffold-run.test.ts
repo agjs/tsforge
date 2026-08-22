@@ -127,7 +127,11 @@ describe("makeScaffoldRunDeps — the deps both entry points hand to runScaffold
 
 describe("gateCommand", () => {
   test("composes boringstack's per-app gates into one && chain", () => {
-    const cmd = gateCommand(MANIFEST.archetypes.boringstack);
+    const boring = MANIFEST.archetypes.boringstack;
+
+    expect(boring).toBeDefined();
+
+    const cmd = gateCommand(boring ?? { gates: [] });
 
     expect(cmd).toBe(
       "(cd apps/api && bun run validate) && (cd apps/ui && bun run validate) && bun run check"
@@ -135,7 +139,9 @@ describe("gateCommand", () => {
   });
 
   test("a single root gate (astro) is just the command", () => {
-    expect(gateCommand(MANIFEST.archetypes.astro)).toBe("bun run build");
+    expect(gateCommand(MANIFEST.archetypes.astro ?? { gates: [] })).toBe(
+      "bun run build"
+    );
   });
 });
 
