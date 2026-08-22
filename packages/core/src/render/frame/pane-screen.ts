@@ -51,10 +51,12 @@ import { Scrollback } from "./scrollback";
 import { stripSgr } from "./ansi-plain";
 import { handleFocusKey, handleMouseKey, handleScrollKey } from "./pane-keys";
 import type { PaneKeyResult } from "./pane-keys";
-import { normalizePaneControlSeq } from "./input-seq";
+import { normalizeInputSeq } from "./input-seq";
 import { paint } from "../style";
 import { displayWidth } from "../width";
 import { formatScrollbarColumn, overlayScrollbarCol } from "./scrollbar";
+import type { IResolvedTuiKeybindings } from "../../config/tui-keybindings";
+import { resolveTuiKeybindings } from "../../config/tui-keybindings";
 import { frameContentRow, outerInsets, wrapOuterFrame } from "./outer-frame";
 import {
   PERF_ENABLED,
@@ -106,6 +108,9 @@ export class PaneScreen {
   private agentTreeLines: readonly string[] = [];
   private status: IStatusInfo | null = null;
   private worklistBadge = "";
+  private gateBadge = "";
+  private gateSelectableRows = 0;
+  private keybindings: IResolvedTuiKeybindings = resolveTuiKeybindings();
   private lastTopLine = "";
   /** Mode/badge/cwd/status-class — full invalidate when this changes, not on ticks. */
   private lastTopShape = "";
@@ -149,6 +154,10 @@ export class PaneScreen {
   onBusyTick: (() => void) | null = null;
   /** Fired when Ctrl+G changes main/panel width — resize the prompt editor. */
   onLayoutChange: (() => void) | null = null;
+  /** Fired when the rail surface toggles or cycles — refresh panel body. */
+  onRailRefresh: (() => void) | null = null;
+  /** Enter on a focused gate row — host inserts steer text into the prompt. */
+  onGateEnter: (() => boolean) | null = null;
 
   constructor(
     private readonly out: IPaneScreenTerminal,
@@ -444,6 +453,16 @@ export class PaneScreen {
     }
 
     // Live header is `worklist  N/M` (Tasks title reads counts via badge).
+    if (this.focus.railSurface === "gate") {
+      const head = stripSgr(this.panelLines[0] ?? "");
+
+      if (head === "(no gate configured)") {
+        return false;
+      }
+
+      return this.panelLines.length > 0;
+    }
+
     return /^worklist\s+\d+\/\d+/.test(head) || /^\d+\/\d+$/.test(head);
   }
 
@@ -494,6 +513,29 @@ export class PaneScreen {
     if (this.entered) {
       this.paint();
     }
+  }
+
+  setGateBadge(badge: string): void {
+    const shapeChanged = badge !== this.gateBadge;
+
+    this.gateBadge = badge;
+
+    if (shapeChanged) {
+      this.lastTopShape = "";
+      this.prevLines = null;
+    }
+
+    if (this.entered && this.focus.railSurface === "gate") {
+      this.paint();
+    }
+  }
+
+  setGateSelectableRows(count: number): void {
+    this.gateSelectableRows = Math.max(0, count);
+  }
+
+  setKeybindings(bindings: IResolvedTuiKeybindings): void {
+    this.keybindings = bindings;
   }
 
   setBusy(busy: boolean): void {
@@ -1053,19 +1095,17 @@ export class PaneScreen {
   }
 
   handleKey(seq: string): PaneKeyResult {
-    const key = normalizePaneControlSeq(seq);
+    const key = normalizeInputSeq(seq);
 
     if (key === "\x0f") {
       return "dump";
     }
 
-    // Lazy: computing the panel body (stripSgr + copies) per keystroke paid
-    // for a value most keys never read. Arrow captures lexical `this` (an
-    // object-literal getter would rebind it to the deps object).
     const lazyPanelLen = (): number => this.panelSourceLen();
     const deps = {
       focus: this.focus,
       scrollback: this.scrollback,
+      keybindings: this.keybindings,
       get panelLen(): number {
         return lazyPanelLen();
       },
@@ -1074,6 +1114,17 @@ export class PaneScreen {
       },
       onLayoutChange: (): void => {
         this.onLayoutChange?.();
+      },
+      onRailRefresh: (): void => {
+        this.onRailRefresh?.();
+      },
+      onGateEnter: (): boolean => this.onGateEnter?.() ?? false,
+      selectableRowCount: (): number => {
+        if (this.focus.railSurface === "gate") {
+          return this.gateSelectableRows;
+        }
+
+        return lazyPanelLen();
       },
       paint: () => {
         // Ctrl+G changes main width — always full compose after invalidate.
@@ -1091,8 +1142,8 @@ export class PaneScreen {
     };
 
     return (
-      handleFocusKey(key, deps) ??
-      handleScrollKey(key, deps) ??
+      handleFocusKey(seq, deps) ??
+      handleScrollKey(seq, deps) ??
       handleMouseKey(seq, deps) ??
       "passthrough"
     );
@@ -1301,7 +1352,13 @@ export class PaneScreen {
     });
   }
 
-  private railCounts(): { done: number; total: number } {
+  private railCounts(): { done: number; total: number; badge?: string } {
+    if (this.focus.railSurface === "gate") {
+      const badge = this.gateBadge.length > 0 ? this.gateBadge : "0";
+
+      return { done: 0, total: 0, badge };
+    }
+
     const fromBadge = parseWorklistBadge(this.worklistBadge);
 
     if (fromBadge.total > 0) {
@@ -1586,12 +1643,21 @@ export class PaneScreen {
    * then the scrolled item list. Title stays put while the body scrolls.
    */
   private panelPaintLines(panelCols: number): string[] {
+    const surface = this.focus.railSurface;
     const counts = this.railCounts();
+    const gateSuffix =
+      surface === "gate" && counts.badge !== undefined && counts.badge !== "0"
+        ? " errors"
+        : "";
     const title = formatRailTitleBlock({
       done: counts.done,
       total: counts.total,
       cols: panelCols,
       color: true,
+      title: surface === "gate" ? "Gate" : "Tasks",
+      ...(counts.badge !== undefined
+        ? { badge: `${counts.badge}${gateSuffix}` }
+        : {}),
     });
     const raw = this.panelBodyLines();
     const view = this.panelBodyViewRows();

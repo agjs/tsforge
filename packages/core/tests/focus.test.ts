@@ -74,6 +74,26 @@ describe("PaneFocus", () => {
     expect(f.selection).toBe(3);
   });
 
+  test("cycleSurface toggles tasks and gate when rail visible", () => {
+    const f = new PaneFocus();
+
+    f.syncHasItems(true);
+    expect(f.cycleSurface()).toBe("changed");
+    expect(f.railSurface).toBe("gate");
+    expect(f.selection).toBe(0);
+    expect(f.cycleSurface()).toBe("changed");
+    expect(f.railSurface).toBe("tasks");
+  });
+
+  test("cycleSurface ignored when panel hidden", () => {
+    const f = new PaneFocus();
+
+    f.syncHasItems(true);
+    f.togglePanel(true);
+    expect(f.cycleSurface()).toBe("ignored");
+    expect(f.railSurface).toBe("tasks");
+  });
+
   test("emptied worklist hides the panel but keeps a user collapse", () => {
     const f = new PaneFocus();
 

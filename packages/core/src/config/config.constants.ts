@@ -26,4 +26,6 @@ export const ENV_FLAG = {
   noNearGreenCheckpoint: "TSFORGE_NO_NEAR_GREEN_CHECKPOINT",
   noE2eAcceptance: "TSFORGE_NO_E2E_ACCEPTANCE",
   noNearGreenRotation: "TSFORGE_NO_NEAR_GREEN_ROTATION",
+  /** Kill-switch for OSC 8 terminal hyperlinks in gate rows and transcript lines. */
+  noOsc8: "TSFORGE_NO_OSC8",
 } as const;
