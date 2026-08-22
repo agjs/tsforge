@@ -76,23 +76,33 @@ describe("handleFocusKey", () => {
     expect(handleFocusKey("\r", d)).toBeNull();
   });
 
-  test("cycle surface binding toggles railSurface", () => {
+  test("cycle surface binding toggles railSurface and invalidates frame", () => {
     const bindings = resolveTuiKeybindings();
+    let invalidated = 0;
     const d = {
       ...deps(),
       keybindings: bindings,
       refreshed: 0,
+      invalidate: () => {
+        invalidated += 1;
+      },
       onRailRefresh: () => {
         d.refreshed += 1;
       },
     };
 
     expect(d.focus.railSurface).toBe("tasks");
-    expect(handleFocusKey(`${String.fromCharCode(27)}[103;6u`, d)).toBe(
-      "handled"
-    );
+    expect(handleFocusKey(`${String.fromCharCode(27)}[17~`, d)).toBe("handled");
     expect(d.focus.railSurface).toBe("gate");
+    expect(invalidated).toBe(1);
     expect(d.refreshed).toBe(1);
+  });
+
+  test("plain G passthrough does not cycle surface", () => {
+    const d = deps();
+
+    expect(handleFocusKey("G", d)).toBeNull();
+    expect(d.focus.railSurface).toBe("tasks");
   });
 });
 

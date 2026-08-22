@@ -28,7 +28,9 @@ export const DEFAULT_TUI_KEYBINDINGS: Readonly<
   Record<TuiPaneAction, readonly string[]>
 > = {
   "pane.toggle": ["ctrl+g"],
-  "pane.cycleSurface": ["ctrl+shift+g"],
+  // f6 first: ctrl+shift+letter needs Kitty/modifyOtherKeys; many Mac terminals
+  // (incl. Cursor) send plain "G" instead, which would type into the prompt.
+  "pane.cycleSurface": ["f6", "ctrl+shift+g"],
   "pane.focus": ["tab"],
   "pane.unfocus": ["escape"],
   "pane.moveUp": ["up", "k"],
@@ -333,6 +335,10 @@ export function matchPaneAction(
 function parseKeybindingsBlock(
   value: unknown
 ): Partial<Record<TuiPaneAction, string | readonly string[]>> {
+  if (value === undefined) {
+    return {};
+  }
+
   if (!isRecord(value)) {
     warnKeybinding('tsforge: "tui.keybindings" must be an object — ignored');
 

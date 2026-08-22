@@ -79,9 +79,22 @@ export class PaneFocus {
    */
   togglePanel(hasItems: boolean): FocusAction {
     if (!this.userCollapsed) {
-      this.userCollapsed = true;
-      this.panel = "hidden";
-      this.active = "prompt";
+      if (this.panel !== "hidden") {
+        this.userCollapsed = true;
+        this.panel = "hidden";
+        this.active = "prompt";
+
+        return "changed";
+      }
+
+      // Auto-hidden (no checklist yet) — first Ctrl+G opens, don't arm collapse.
+      if (hasItems) {
+        this.panel = "visibleFocused";
+        this.active = "panel";
+      } else {
+        this.panel = "visibleUnfocused";
+        this.active = "prompt";
+      }
 
       return "changed";
     }
@@ -99,10 +112,14 @@ export class PaneFocus {
     return "changed";
   }
 
-  /** Cycle Tasks ↔ Gate when the rail is visible. Resets row selection. */
+  /** Cycle Tasks ↔ Gate when the rail column is shown (!userCollapsed). Resets row selection. */
   cycleSurface(): FocusAction {
-    if (this.userCollapsed || this.panel === "hidden") {
+    if (this.userCollapsed) {
       return "ignored";
+    }
+
+    if (this.panel === "hidden") {
+      this.panel = "visibleUnfocused";
     }
 
     this.railSurface = this.railSurface === "tasks" ? "gate" : "tasks";
