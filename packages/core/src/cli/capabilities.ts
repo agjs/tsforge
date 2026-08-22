@@ -101,7 +101,7 @@ function wizardCapabilities(deps: ICapabilityDeps): ICapability[] {
       group: "Build something new",
       label: "Scaffold a project",
       describe:
-        "Stand up a new project — boringstack (full stack) or astro (static site).",
+        "Stand up a new project — boringstack (full stack), astro (static site), or phaser (game).",
       kind: "wizard",
       invoke: { type: "wizard", opener: "scaffold" },
     },

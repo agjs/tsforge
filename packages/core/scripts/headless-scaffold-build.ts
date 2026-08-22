@@ -13,30 +13,14 @@
 //
 // Secret VALUES are never printed (org rule); the summary shows keys only.
 
-import { loadBundledManifest } from "../src/scaffold/boringstack-manifest";
 import { parseScaffoldArgs } from "../src/scaffold/scaffold-cli";
 import { runScaffold } from "../src/scaffold/run-scaffold";
+import { loadScaffoldSource } from "../src/scaffold/scaffold-source";
 import { realRunner, realFs, realPoller } from "../src/scaffold/io";
-import type { IScaffoldManifest } from "../src/scaffold/scaffold.types";
-
-/** Apply a `--ref` override and the `BORINGSTACK_REPO` env override (the latter
- *  lets dev/E2E clone a local checkout instead of GitHub). */
-function withOverrides(
-  manifest: IScaffoldManifest,
-  ref: string
-): IScaffoldManifest {
-  const repo = process.env.BORINGSTACK_REPO;
-
-  return {
-    ...manifest,
-    ...(ref.length > 0 ? { defaultRef: ref } : {}),
-    ...(repo !== undefined && repo.length > 0 ? { repo } : {}),
-  };
-}
 
 async function main(): Promise<number> {
   const opts = parseScaffoldArgs(process.argv.slice(2));
-  const manifest = withOverrides(loadBundledManifest(), opts.ref);
+  const manifest = loadScaffoldSource(opts.answers.archetype, opts.ref);
 
   process.stdout.write(
     `scaffold: ${opts.answers.archetype} (${opts.answers.stack}) → ${opts.dest}\n` +

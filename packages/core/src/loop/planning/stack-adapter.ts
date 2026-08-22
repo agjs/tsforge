@@ -1,3 +1,4 @@
+import type { IConventionProvider } from "../conventions-provider";
 import type { IPlanConstraints, IPlanSchema } from "./plan-types";
 
 /**
@@ -7,9 +8,8 @@ import type { IPlanConstraints, IPlanSchema } from "./plan-types";
  *   - `detect(dir)`: is this project mine? (e.g. a scaffold receipt)
  *   - `planConstraints(onStripped)`: the stack-specific planner constraints (guidance +
  *     reserved-entity stripping), fail-closed via `IPlanConstraints`.
- * Concrete adapters (BoringStack today, Phaser next) live under their own adapter
- * directory and are registered by the composition root (the CLI), never imported by
- * core planning logic.
+ * Concrete adapters (BoringStack, Phaser) live under their own adapter directory and
+ * are registered by the composition root (the CLI), never imported by core planning logic.
  */
 export interface IStackAdapter {
   /** Stable id, e.g. "boringstack" — used in surfaced messages, not for control flow. */
@@ -34,6 +34,8 @@ export interface IStackAdapter {
    * concretely-typed schema for its own build path; this is the same runtime schema, erased.
    */
   readonly planSchema: IPlanSchema<unknown>;
+  /** Optional write-time convention library. Absent → the session carries none. */
+  readonly conventions?: IConventionProvider;
 }
 
 /**

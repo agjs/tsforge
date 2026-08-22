@@ -1,14 +1,14 @@
 import { runWizard } from "../render/wizard";
-import { loadBundledManifest } from "./boringstack-manifest";
 import { buildScaffoldSteps, stateToAnswers } from "./wizard";
 import { scaffoldPreview } from "./preview";
 import { parseScaffoldArgs } from "./scaffold-cli";
+import { loadScaffoldSource } from "./scaffold-source";
 import {
   runScaffold,
   makeScaffoldRunDeps,
   type IScaffoldOutcome,
 } from "./run-scaffold";
-import type { IScaffoldAnswers, IScaffoldManifest } from "./scaffold.types";
+import type { IScaffoldAnswers } from "./scaffold.types";
 
 type IValues = Readonly<Record<string, string | readonly string[]>>;
 
@@ -21,23 +21,13 @@ export function mergeAnswerValues(
   return { ...wizard, ...flags };
 }
 
-function withRef(manifest: IScaffoldManifest, ref: string): IScaffoldManifest {
-  const repo = process.env.BORINGSTACK_REPO;
-
-  return {
-    ...manifest,
-    ...(ref.length > 0 ? { defaultRef: ref } : {}),
-    ...(repo !== undefined && repo.length > 0 ? { repo } : {}),
-  };
-}
-
 /**
  * Interactive `--scaffold` command: pick the config in a wizard (with a live
  * topology/secrets/violations preview on the overview), then clone + configure +
- * boot boringstack. Archetype/stack/dest come from flags (`--archetype`/`--stack`/
+ * optionally boot. Archetype/stack/dest come from flags (`--archetype`/`--stack`/
  * `--dest`); the wizard collects the toggles, which `--set`/`--multi` flags can
- * override. Off a TTY (or when there are no steps, e.g. Astro) it skips the wizard
- * and uses the flag values directly. Returns null if the user cancels the wizard.
+ * override. Off a TTY (or when there are no steps, e.g. Astro / Phaser) it skips
+ * the wizard and uses the flag values directly. Returns null if the user cancels.
  */
 export async function runScaffoldCommand(
   argv: readonly string[],
@@ -48,7 +38,7 @@ export async function runScaffoldCommand(
   run: typeof runScaffold = runScaffold
 ): Promise<IScaffoldOutcome | null> {
   const opts = parseScaffoldArgs(argv);
-  const manifest = withRef(loadBundledManifest(), opts.ref);
+  const manifest = loadScaffoldSource(opts.answers.archetype, opts.ref);
   const { archetype, stack } = opts.answers;
   const flagValues = opts.answers.values;
 

@@ -737,8 +737,8 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
 }
 
 /**
- * `tsforge scaffold …` — greenfield wizard that stands up boringstack (or its
- * Astro static site). Delegates the remaining argv to the scaffold command's own
+ * `tsforge scaffold …` — greenfield wizard that stands up BoringStack, its
+ * Astro static site, or the Phaser 4 game template. Delegates remaining argv to the scaffold command's own
  * parser (--archetype/--stack/--dest/--set/--multi/--ref/--no-boot), so its
  * vocabulary doesn't collide with the harness flags. Prints the handoff (where +
  * how to run the gate); the model-driven build loop is then a normal `tsforge`

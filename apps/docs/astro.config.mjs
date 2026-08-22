@@ -230,6 +230,7 @@ export default defineConfig({
             { label: "Stopping bad output early", link: "/uplift/ttsr/" },
             { label: "Learning from past runs", link: "/uplift/memory/" },
             { label: "Greenfield scaffolding", link: "/scaffold/boringstack/" },
+            { label: "Phaser scaffolding", link: "/scaffold/phaser/" },
             { label: "Model adapter", link: "/inference/adapter/" },
             { label: "Token metrics", link: "/observability/metrics/" },
             { label: "Trace a run", link: "/observability/trace/" },

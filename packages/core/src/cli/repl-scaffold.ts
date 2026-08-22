@@ -5,7 +5,8 @@ import {
   stateToAnswers,
   runScaffold,
   makeScaffoldRunDeps,
-  loadBundledManifest,
+  loadScaffoldSource,
+  isArchetype,
 } from "../scaffold";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -38,7 +39,7 @@ function projectDirStep(): IWizardStep {
   };
 }
 
-/** Single-select step offering archetype choices: boringstack, astro. */
+/** Single-select step offering archetype choices: boringstack, astro, phaser. */
 export function archetypeStep(): IWizardStep {
   return {
     key: "archetype",
@@ -56,6 +57,11 @@ export function archetypeStep(): IWizardStep {
         label: "Astro",
         value: "astro",
         note: "Static site generator",
+      },
+      {
+        label: "Phaser",
+        value: "phaser",
+        note: "Phaser 4 + TS game (Vite, scenes as views)",
       },
     ],
     defaultIndex: 0,
@@ -135,10 +141,10 @@ function printHandoff(
   resolvedSha: string,
   booted: boolean,
   bootError: string | undefined,
-  summary: readonly string[]
+  summary: readonly string[],
+  gateCmd: string
 ): void {
-  const gateDir = dir; // In REPL, gateCwd is the root dir (no subPath logic needed here)
-  const gateCmd = "bun run validate"; // Default gate for boringstack/astro
+  const gateDir = dir;
 
   out(
     [
@@ -158,8 +164,8 @@ function printHandoff(
 }
 
 /**
- * Launch the in-REPL scaffold wizard: pick an archetype (boringstack/astro/vite),
- * then run the full flow for boringstack/astro or handoff to --web for vite.
+ * Launch the in-REPL scaffold wizard: pick an archetype (boringstack/astro/phaser),
+ * then clone + configure that template.
  * Suspends the editor during the wizard and resumes in a finally block.
  */
 export async function openScaffoldInRepl(
@@ -173,7 +179,6 @@ export async function openScaffoldInRepl(
 
   try {
     const color = process.stdout.isTTY;
-    const manifest = loadBundledManifest();
 
     const wizardOpts = {
       title: "tsforge scaffold",
@@ -199,12 +204,17 @@ export async function openScaffoldInRepl(
       return;
     }
 
-    const selectedArchetype = archetypeState.single.archetype;
+    const selectedArchetype = archetypeState.single.archetype ?? "";
 
-    // Boringstack/Astro: run the full flow
-    const archetype =
-      selectedArchetype === "boringstack" ? "boringstack" : "astro";
+    if (!isArchetype(selectedArchetype)) {
+      deps.out("scaffold: cancelled — unknown project type.\n");
+
+      return;
+    }
+
+    const archetype = selectedArchetype;
     const stack = "dev";
+    const manifest = loadScaffoldSource(archetype);
 
     // Step 2: project directory name, an optional initial admin login (boringstack
     // only — it has an auth/users layer), then the archetype's configuration steps.
@@ -282,12 +292,12 @@ export async function scaffoldFromAnswers(
       outcome.resolvedSha,
       outcome.booted,
       outcome.bootError,
-      outcome.summary
+      outcome.summary,
+      outcome.gateCommand
     );
 
-    // For boringstack, planning will be triggered by the REPL interception when the
-    // user tries to build for the first time. No need to run it here during scaffold.
-    if (answers.archetype === "boringstack") {
+    // Planning is triggered by REPL interception on the first build request.
+    if (answers.archetype === "boringstack" || answers.archetype === "phaser") {
       out(
         "\n✓ scaffold complete — run planning when you submit your first build request\n"
       );

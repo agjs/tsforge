@@ -125,6 +125,8 @@ test("the mechanical core↔adapter boundary rejects core-loop adapter imports (
       "enum.ts": "export enum Color {\n  Red,\n  Blue,\n}\n",
       "core-ok.ts":
         'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
+      "leak-phaser.ts":
+        'import { phaserStackAdapter } from "../phaser/planning";\n\nexport const a = phaserStackAdapter;\n',
     },
     {
       // ADAPTER side (loop/boringstack/**): a boringstack-naming import that WOULD trip the boundary
@@ -137,6 +139,7 @@ test("the mechanical core↔adapter boundary rejects core-loop adapter imports (
 
   // A value import of the adapter fires the boundary rule.
   expect(results.get("leak-value.ts")).toContain(RULE);
+  expect(results.get("leak-phaser.ts")).toContain(RULE);
   // A TYPE-ONLY import of the adapter fires it too — the @typescript-eslint superset of
   // no-restricted-imports catches `import type`, which core no-restricted-imports would miss.
   expect(results.get("leak-type.ts")).toContain(RULE);

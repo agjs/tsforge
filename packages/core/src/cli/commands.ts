@@ -18,7 +18,7 @@ export const COMMANDS: readonly ICommandSpec[] = [
   {
     name: "/scaffold",
     summary:
-      "create a new full-stack project here (BoringStack / Astro) via the wizard",
+      "create a new project here (BoringStack / Astro / Phaser) via the wizard",
   },
   {
     name: "/compact",

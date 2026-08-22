@@ -11,7 +11,12 @@ export type {
   IScaffoldManifest,
   IScaffoldPlan,
 } from "./scaffold.types";
+export { ARCHETYPES, isArchetype } from "./scaffold.types";
 export { parseManifest, loadBundledManifest } from "./boringstack-manifest";
+export { loadPhaserTemplate } from "./phaser-manifest";
+export { loadScaffoldSource } from "./scaffold-source";
+export { readScaffoldArchetype } from "./receipt";
+export { applyPhaserIdentity, phaserPackageName } from "./apply-phaser";
 export { parseScaffoldArgs } from "./scaffold-cli";
 export type { IScaffoldCliOptions } from "./scaffold-cli";
 export { answersToPlan } from "./plan";

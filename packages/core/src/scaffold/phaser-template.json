@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "defaultRef": "v0.1.6",
+  "repo": "https://github.com/boringstack-xyz/Phaser-TypeScript-AI-First-Starter",
+  "renameParams": ["project"],
+  "alwaysOnServices": [],
+  "fields": [],
+  "crossRules": [],
+  "archetypes": {
+    "phaser": {
+      "gates": [{ "cwd": ".", "command": "bun run check" }]
+    }
+  }
+}

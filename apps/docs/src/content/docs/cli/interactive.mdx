@@ -15,7 +15,7 @@ Most users run `tsforge` and stay in the interactive session.
 | --------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | **Interactive** | `tsforge`                                   | default: open-ended tasks, steering, exploration                                                                                 |
 | **One-shot**    | `tsforge "task" --accept "gate cmd"`        | drive a single task to green and exit                                                                                            |
-| **New app**     | `tsforge scaffold`                          | stand up a full-stack [BoringStack](/scaffold/boringstack/) project, then build it with the [greenfield loop](/loop/greenfield/) |
+| **New app**     | `tsforge scaffold`                          | stand up [BoringStack](/scaffold/boringstack/), its Astro site, or a [Phaser](/scaffold/phaser/) game, then build with the [greenfield loop](/loop/greenfield/) |
 | **Plan mode**   | default: **Shift+Tab** or `/plan` to switch | read-only explore → approve saves a project checklist → implement in-session. See [Plan mode](/cli/plan-mode/).                  |
 
 ## Flags
@@ -39,7 +39,7 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL`. See [Environment 
 | Command                 | Action                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `/help`                 | list commands                                                                                                            |
-| `/scaffold`             | create a new full-stack project here (BoringStack / Astro) via the wizard                                                |
+| `/scaffold`             | create a new project here (BoringStack / Astro / Phaser) via the wizard                                                |
 | `/plan`                 | toggle plan mode (on by default; approve saves the checklist and implements)                                             |
 | `/config`               | settings hub: model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
 | `/gate <cmd>`           | set gate command (`/gate` alone clears)                                                                                  |

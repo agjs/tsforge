@@ -25,12 +25,12 @@ flowchart TB
   end
   subgraph adapters["Adapters · stack-specific"]
     direction LR
-    BS["BoringStack (built)"] --- PH["Phaser (planned)"] --- DD["your own rules (via external-plugins)"]
+    BS["BoringStack (built)"] --- PH["Phaser (built)"] --- DD["your own rules (via external-plugins)"]
   end
   core --> seam --> adapters
 ```
 
-An **adapter** is exactly: fill those interfaces. `IStackAdapter` detects a repo and scaffolds it; `IConventionProvider` supplies the "here's how to write it right" guidance; `IPlanSchema` describes the plan/UI shape; `IGate` says how to run and verify. [BoringStack](/scaffold/boringstack/) is the first adapter (a full-stack Bun + Elysia + Drizzle + React stack). You can also bring **your own ESLint rule-packs** without writing an adapter. See [external plugins](/guardrails/config/).
+An **adapter** is exactly: fill those interfaces. `IStackAdapter` detects a repo and scaffolds it; `IConventionProvider` supplies the "here's how to write it right" guidance; `IPlanSchema` describes the plan/UI shape; `IGate` says how to run and verify. [BoringStack](/scaffold/boringstack/) is the first adapter (a full-stack Bun + Elysia + Drizzle + React stack); [Phaser](/scaffold/phaser/) is the second (a Phaser 4 TypeScript game). You can also bring **your own ESLint rule-packs** without writing an adapter. See [external plugins](/guardrails/config/).
 
 ## What runs on a task
 

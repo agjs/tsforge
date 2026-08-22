@@ -40,8 +40,7 @@ export interface IProductPlan<TUi = unknown> {
  * worked example INTO that string — there is no separate `example` field), validates each slice's
  * `ui` with `validateUi` at the parse boundary, and applies the optional cross-slice `extraCheck`.
  * This is what keeps the WEB plan shape (screens,
- * nav, layout, home) OUT of core — a Phaser adapter would supply its own schema, or a UI-less one
- * a trivial pass-through.
+ * nav, layout, home) OUT of core — the Phaser adapter supplies its own view-intent schema.
  */
 export interface IPlanSchema<TUi> {
   /** System-prompt text teaching the model this stack's exact plan/UI shape. The adapter is

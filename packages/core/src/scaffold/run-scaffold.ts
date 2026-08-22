@@ -1,8 +1,10 @@
+import { basename } from "node:path";
 import { applyScaffold, type IConfigureDeps } from "./configure";
 import { cloneRepo, scaffoldRecord } from "./clone";
 import { bootStack, type IBootDeps } from "./boot";
 import { answersToPlan } from "./plan";
 import { parseManifest } from "./boringstack-manifest";
+import { applyPhaserIdentity } from "./apply-phaser";
 import {
   realRunner,
   realFs,
@@ -152,6 +154,12 @@ export async function runScaffold(
 
   const profile = manifest.archetypes[answers.archetype];
 
+  if (profile === undefined) {
+    throw new Error(
+      `scaffold: template does not declare archetype ${answers.archetype}`
+    );
+  }
+
   // Strip template-only paths (e.g. BoringStack's own `apps/docs`) BEFORE configure,
   // so a scaffolded product neither ships nor gates against the template's docs —
   // and the removed files are never installed/built. Archetype-scoped, so the astro
@@ -165,6 +173,10 @@ export async function runScaffold(
     archetype: answers.archetype,
     manifestVersion: manifest.manifestVersion,
   });
+
+  if (answers.archetype === "phaser") {
+    await applyPhaserIdentity(dest, basename(dest), deps.fs);
+  }
 
   phase("Applying your configuration…");
   const configured = await applyScaffold(dest, manifest, plan, deps);

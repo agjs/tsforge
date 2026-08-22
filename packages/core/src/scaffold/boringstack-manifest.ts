@@ -8,6 +8,7 @@ import type {
   IConfigFieldKind,
   IScaffoldManifest,
 } from "./scaffold.types";
+import { ARCHETYPES, isArchetype } from "./scaffold.types";
 
 let bundled: IScaffoldManifest | undefined;
 
@@ -227,16 +228,28 @@ export function parseManifest(raw: unknown): IScaffoldManifest {
 
 function parseArchetypes(
   raw: Record<string, unknown>
-): Readonly<Record<IArchetype, IArchetypeProfile>> {
+): Readonly<Partial<Record<IArchetype, IArchetypeProfile>>> {
   const node = raw.archetypes;
 
   if (!isRecord(node)) {
     throw new Error("scaffold manifest: archetypes missing");
   }
 
-  const out: Record<string, IArchetypeProfile> = {};
+  const names = Object.keys(node);
 
-  for (const name of ["astro", "boringstack"]) {
+  if (names.length === 0) {
+    throw new Error("scaffold manifest: archetypes is empty");
+  }
+
+  const out: Partial<Record<IArchetype, IArchetypeProfile>> = {};
+
+  for (const name of names) {
+    if (!isArchetype(name)) {
+      throw new Error(
+        `scaffold manifest: unknown archetype ${name} (${ARCHETYPES.join(" | ")})`
+      );
+    }
+
     const a = node[name];
 
     if (!isRecord(a)) {
@@ -263,23 +276,7 @@ function parseArchetypes(
     };
   }
 
-  return {
-    astro: reqProfile(out, "astro"),
-    boringstack: reqProfile(out, "boringstack"),
-  };
-}
-
-function reqProfile(
-  m: Record<string, IArchetypeProfile>,
-  k: string
-): IArchetypeProfile {
-  const v = m[k];
-
-  if (v === undefined) {
-    throw new Error(`scaffold manifest: archetypes.${k} missing`);
-  }
-
-  return v;
+  return out;
 }
 
 function narrowKind(kind: string): IConfigFieldKind {

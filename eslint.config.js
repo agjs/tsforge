@@ -234,16 +234,16 @@ export default tseslint.config(
   {
     /*
      * MECHANICAL core↔adapter boundary (the law made enforceable, WS4). The generic core loop
-     * — everything under `loop/**` EXCEPT the BoringStack adapter itself — must never import the
-     * adapter (`loop/boringstack/**`). WS1–WS3 reclaimed the leaks (conventions, stack-adapter,
+     * — everything under `loop/**` EXCEPT a stack adapter itself — must never import the
+     * adapter (`loop/boringstack/**`, `loop/phaser/**`). WS1–WS3 reclaimed the leaks (conventions, stack-adapter,
      * plan spine) by hand; this rule keeps them reclaimed: any future core-loop file that reaches
-     * back into `loop/boringstack/**` fails `bun run validate`, not code review.
+     * back into an adapter folder fails `bun run validate`, not code review.
      *
      * The rule's SCOPE is the definition of "core loop": this config block applies to every
-     * `.ts` under `loop/` except the `loop/boringstack/` subtree, so the exemptions fall out of the tree with no
+     * `.ts` under `loop/` except the adapter subtrees, so the exemptions fall out of the tree with no
      * hand-maintained allow-list — the composition roots that legitimately wire the adapter in
      * (`cli.ts`, `cli/**`), the scripts, and the tests all live OUTSIDE `loop/**` and are never
-     * subject to it; the adapter's own intra-`boringstack` imports are excluded via `ignores`.
+     * subject to it; an adapter's own intra-folder imports are excluded via `ignores`.
      * Enforced with `@typescript-eslint/no-restricted-imports` matching the SPECIFIER (see the
      * inline note on the rule below) — every way to reach the adapter from inside `loop/` is a
      * relative specifier that names the `boringstack/` segment (`../boringstack/x`,
@@ -252,7 +252,10 @@ export default tseslint.config(
      * resolver that isn't installed).
      */
     files: ["packages/core/src/loop/**/*.ts"],
-    ignores: ["packages/core/src/loop/boringstack/**"],
+    ignores: [
+      "packages/core/src/loop/boringstack/**",
+      "packages/core/src/loop/phaser/**",
+    ],
     rules: {
       // `@typescript-eslint/no-restricted-imports` (a superset of core no-restricted-imports that
       // ALSO catches `import type`) matches the import SPECIFIER — no path resolver needed. From
@@ -267,6 +270,15 @@ export default tseslint.config(
               group: ["**/boringstack", "**/boringstack/**"],
               message:
                 "Core loop must not import the BoringStack adapter (loop/boringstack/**). Core stays stack-agnostic — inject the adapter behind its seam (IConventionProvider / IStackAdapter / IPlanSchema) and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+            },
+            {
+              group: [
+                "**/phaser/planning",
+                "**/phaser/plan-extension",
+                "**/phaser/conventions",
+              ],
+              message:
+                "Core loop must not import the Phaser adapter (loop/phaser/**). Core stays stack-agnostic — inject the adapter behind its seam (IConventionProvider / IStackAdapter / IPlanSchema) and wire it at a composition root (cli.ts, cli/**, scripts/**).",
             },
           ],
         },
@@ -318,6 +330,18 @@ export default tseslint.config(
             ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]',
           message:
             "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+        {
+          selector:
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) Literal[value=/(^|\\u002F)phaser\\u002F(planning|plan-extension|conventions)/]',
+          message:
+            "Core loop must not import the Phaser adapter (loop/phaser/**), including via a dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+        {
+          selector:
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) TemplateElement[value.cooked=/(^|\\u002F)phaser\\u002F(planning|plan-extension|conventions)/]',
+          message:
+            "Core loop must not import the Phaser adapter (loop/phaser/**), including via a templated dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },
       ],
     },

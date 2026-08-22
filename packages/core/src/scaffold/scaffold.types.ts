@@ -1,16 +1,26 @@
 /**
- * Types for the greenfield scaffolding wizard. The wizard stands up a project
- * from boringstack (boringstack.xyz) — either the Astro static site or the full
- * stack — by driving boringstack's OWN scripts (rename-project.sh / setup.sh /
- * dev.sh up). tsforge holds NO stack knowledge of its own: the entire config
- * surface is declared in a manifest committed in the boringstack repo
- * (`.tsforge/scaffold-manifest.json`), which this module reads after cloning. See
- * the plan and [[autonomous-overnight-run]]/[[tsforge-eval-findings-2026-06]].
+ * Types for the greenfield scaffolding wizard. A source document (BoringStack's
+ * committed `.tsforge/scaffold-manifest.json`, or tsforge's Phaser template
+ * descriptor) declares the clone repo, gates, and — for BoringStack — the env
+ * surface. Phaser is a second cloneable template, not a profile of the
+ * fullstack manifest.
  */
 
-/** The two greenfield options. `astro` = a static site (boringstack's apps/docs);
- *  `boringstack` = the full Bun+Elysia+Drizzle API + Vite/React UI stack. */
-export type IArchetype = "astro" | "boringstack";
+/** Cloneable project types. `astro` / `boringstack` come from the BoringStack
+ *  repo; `phaser` clones Phaser-TypeScript-AI-First-Starter. */
+export const ARCHETYPES = ["astro", "boringstack", "phaser"] as const;
+
+export type IArchetype = (typeof ARCHETYPES)[number];
+
+export function isArchetype(value: string): value is IArchetype {
+  for (const a of ARCHETYPES) {
+    if (a === value) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /** How a config field is collected + applied. Drives the wizard step kind and the
  *  `.env`/rename mapping. */
@@ -132,7 +142,9 @@ export interface IScaffoldManifest {
   readonly watchIgnore?: readonly string[];
   readonly fields: readonly IConfigField[];
   readonly crossRules: readonly IConfigCrossRule[];
-  readonly archetypes: Readonly<Record<IArchetype, IArchetypeProfile>>;
+  /** Profiles this source actually ships — a Phaser descriptor has only `phaser`;
+   *  the BoringStack bundle has `astro` + `boringstack`. */
+  readonly archetypes: Readonly<Partial<Record<IArchetype, IArchetypeProfile>>>;
 }
 
 /** The user's answers, keyed by field key. `toggle`/`one-of`/`text`/`secret` →

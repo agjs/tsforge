@@ -20,6 +20,13 @@ export function scaffoldPreview(
     ].join("\n");
   }
 
+  if (answers.archetype === "phaser") {
+    return [
+      "Phaser 4 TypeScript game (Vite, scenes as views).",
+      "Gate: bun run check — no services, no .env, no Docker.",
+    ].join("\n");
+  }
+
   const plan = answersToPlan(manifest, answers);
   const lines: string[] = [];
 
