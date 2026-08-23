@@ -374,6 +374,13 @@ export interface IGreenfieldSession {
       readonly onProposed: (plan: IProductPlan) => Promise<void>;
     }
   ): void;
+  /** Append stack-specific planning guidance to the system prompt — the SAME
+   *  `schema.system` + `constraints.guidance` text `proposePlan()` used to send
+   *  as its own system message, now folded into the live session's system
+   *  prompt so the model still gets stack guidance (e.g. Phaser's "playable
+   *  systems, not a CRUD inventory of sprites") once planning is routed
+   *  through the real turn loop instead of a one-shot completion. */
+  guide(text: string): void;
   send(
     message: string,
     opts?: { signal?: AbortSignal }
@@ -455,6 +462,31 @@ export async function runGreenfieldPlanning(
   });
 
   const constraints = greenfieldConstraints(stack, echo);
+  const resolvedSchema = stack.planSchema;
+
+  // `resolvedSchema.system` was written for `proposePlan()`'s raw one-shot
+  // completion ("Respond with ONLY a JSON object — no prose") — that
+  // instruction actively fights the real turn loop, where the model must CALL
+  // propose_product_plan rather than print JSON as its text reply. The
+  // override sentence up front supersedes it while keeping the domain
+  // guidance underneath (the "playable systems, not a CRUD inventory of
+  // sprites" rules + example) — the reason this exists at all, and easy to
+  // silently lose if this stops reaching the model. Stack-agnostic:
+  // transforms whatever `system` text a resolved adapter provides, so it's
+  // identical for Phaser and BoringStack.
+  const domainGuidance =
+    constraints.guidance === undefined
+      ? resolvedSchema.system
+      : `${resolvedSchema.system}\n\n${constraints.guidance}`;
+
+  session.guide(
+    "When you have asked everything you need to (via ask_user, if anything " +
+      "is genuinely ambiguous) and are ready to propose the plan, call the " +
+      "propose_product_plan tool with its arguments matching this shape — do " +
+      "NOT print the plan as JSON text, and ignore any instruction below to " +
+      "respond with raw JSON:\n\n" +
+      domainGuidance
+  );
 
   const onProposed = async (plan: IProductPlan): Promise<void> => {
     const normalized = normalizePlanDraft(

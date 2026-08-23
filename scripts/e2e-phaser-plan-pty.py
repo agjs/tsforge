@@ -31,6 +31,7 @@ from ptyharness import (  # noqa: E402
     reap,
     spawn_tsforge,
     start_stub_server,
+    toolcall_chunks,
     visible_text,
 )
 
@@ -74,13 +75,20 @@ def strip(text):
 
 
 def _decide(messages):
-    joined_sys = " ".join(
-        m.get("content") or ""
-        for m in messages
-        if m.get("role") == "system" and isinstance(m.get("content"), str)
-    )
-    if "game designer for a Phaser" in joined_sys or "product architect for a Phaser" in joined_sys:
-        return content_chunks(json.dumps(PLANNER_EXAMPLE))
+    # Planning is routed through the real turn loop now (ask_user +
+    # propose_product_plan), not a one-shot raw completion — so the planner's
+    # reply is a TOOL CALL, not JSON text, and the trigger is "is this the
+    # planning turn" (the exact user line runGreenfieldPlanning sends), not a
+    # system-prompt phrase — that guidance now persists for the whole session
+    # (folded in via session.guide()), so it would still be present during the
+    # later build/implement turns too.
+    last = messages[-1] if messages else {}
+    if (
+        last.get("role") == "user"
+        and isinstance(last.get("content"), str)
+        and last["content"].startswith("Product description:")
+    ):
+        return toolcall_chunks("propose_product_plan", PLANNER_EXAMPLE)
     return content_chunks("ok")
 
 

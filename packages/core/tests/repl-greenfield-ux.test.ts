@@ -88,6 +88,10 @@ function fixtureGreenfieldSession(): IGreenfieldSession {
     setGreenfieldMode(on, h) {
       hooks = on ? h : undefined;
     },
+    guide() {
+      // no-op — this fixture skips the real turn loop entirely, so there is
+      // no system prompt to append to.
+    },
     async send() {
       const result = hooks?.validate(PLANNER_EXAMPLE);
 
@@ -323,12 +327,16 @@ describe("greenfield planning asks the few clarifying questions that matter (rea
   test("ask_user pauses mid-planning; the human's answer resumes the SAME session, then propose_product_plan renders the PLAN card", async () => {
     const dir = await phaserDir();
     let turn = 0;
+    let firstCallSystem = "";
 
     const provider: IProvider = {
-      async complete() {
+      async complete(messages) {
         turn += 1;
 
         if (turn === 1) {
+          firstCallSystem =
+            messages.find((m) => m.role === "system")?.content ?? "";
+
           return {
             content: "",
             toolCalls: [
@@ -399,6 +407,12 @@ describe("greenfield planning asks the few clarifying questions that matter (rea
     expect(first.status).toBe("responded");
     expect(first.awaitingUser).toContain("bounce");
     expect(painted).toBe("");
+
+    // The stack's planner guidance (PLANNER_SYSTEM — "playable systems, not a
+    // CRUD inventory of sprites") must reach the model even though planning no
+    // longer sends its own one-shot system message — regression coverage for
+    // routing this through session.guide().
+    expect(firstCallSystem).toContain("game designer for a Phaser");
 
     // The human's answer resumes the SAME conversation via the ordinary
     // session.send path (exactly what the REPL's answer-routing calls) — not
