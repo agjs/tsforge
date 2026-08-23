@@ -531,6 +531,13 @@ export async function runGreenfieldPlanning(
       passed: result.status === "done" || result.status === "responded",
     });
 
+    // session.send() handles Ctrl+C internally (it never throws) — resolves
+    // with "interrupted" instead of an AbortError, unlike the old one-shot
+    // proposePlan()'s raw completion. Same user-facing message either way.
+    if (result.status === "interrupted") {
+      echo("▸ planner cancelled\n");
+    }
+
     return result;
   } catch (err) {
     session.setGreenfieldMode(false);

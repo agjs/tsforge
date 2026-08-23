@@ -20,6 +20,7 @@ from ptyharness import (  # noqa: E402
     reap,
     spawn_tsforge,
     start_stub_server,
+    toolcall_chunks,
     visible_text,
     alive,
 )
@@ -55,14 +56,20 @@ PLANNER_JSON = json.dumps(
 
 
 def _decide(messages):
-    joined = " ".join(
-        m.get("content") or ""
-        for m in messages
-        if m.get("role") == "system" and isinstance(m.get("content"), str)
-    )
-    if "game designer for a Phaser" in joined or "product architect for a Phaser" in joined:
+    # Planning is routed through the real turn loop (ask_user +
+    # propose_product_plan), not a one-shot raw completion — the trigger is
+    # "is this the planning turn" (the exact line runGreenfieldPlanning
+    # sends), and the reply is a TOOL CALL, not JSON text. The sleep just
+    # gives the test's Ctrl+C time to land before this call would resolve —
+    # this scenario cancels before any response matters.
+    last = messages[-1] if messages else {}
+    if (
+        last.get("role") == "user"
+        and isinstance(last.get("content"), str)
+        and last["content"].startswith("Product description:")
+    ):
         time.sleep(2.5)
-        return content_chunks(PLANNER_JSON)
+        return toolcall_chunks("propose_product_plan", json.loads(PLANNER_JSON))
     return content_chunks("ok")
 
 
