@@ -252,7 +252,7 @@ run_id=$(gh run list --repo "$(gh repo view --json nameWithOwner -q .nameWithOwn
   --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 
 if [[ -z "$run_id" || "$run_id" == "null" ]]; then
-  warn "could not find release workflow run; check https://github.com/agjs/tsforge/actions"
+  warn "could not find release workflow run; check https://github.com/boringstack-xyz/tsforge/actions"
   exit 0
 fi
 

@@ -149,11 +149,11 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/agjs/tsforge",
+          href: "https://github.com/boringstack-xyz/tsforge",
         },
       ],
       editLink: {
-        baseUrl: "https://github.com/agjs/tsforge/edit/main/apps/docs/",
+        baseUrl: "https://github.com/boringstack-xyz/tsforge/edit/main/apps/docs/",
       },
       lastUpdated: true,
       sidebar: [

@@ -16,6 +16,6 @@ tsforge is a local AI coding harness. Treat it like running an untrusted develop
 
 ## Reporting
 
-Report vulnerabilities via [GitHub security advisories](https://github.com/agjs/tsforge/security/advisories/new) on agjs/tsforge.
+Report vulnerabilities via [GitHub security advisories](https://github.com/boringstack-xyz/tsforge/security/advisories/new) on boringstack-xyz/tsforge.
 
 Do not open public issues for exploitable findings.

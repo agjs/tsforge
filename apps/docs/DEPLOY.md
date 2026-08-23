@@ -8,7 +8,7 @@ The site in `apps/docs/` is an [Astro Starlight](https://starlight.astro.build) 
 
 2. **Create a Pages project.**
    - Cloudflare dashboard → Workers & Pages → Create application → Pages → Connect to Git.
-   - Authorize GitHub and select the `agjs/tsforge` repository.
+   - Authorize GitHub and select the `boringstack-xyz/tsforge` repository.
    - Project name: `tsforge-docs` (becomes the `*.pages.dev` subdomain).
 
 3. **Build settings.**

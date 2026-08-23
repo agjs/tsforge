@@ -6,11 +6,11 @@
   "description": "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agjs/tsforge.git",
+    "url": "git+https://github.com/boringstack-xyz/tsforge.git",
     "directory": "packages/core"
   },
   "homepage": "https://tsforge.dev",
-  "bugs": "https://github.com/agjs/tsforge/issues",
+  "bugs": "https://github.com/boringstack-xyz/tsforge/issues",
   "bin": {
     "tsforge": "./bin/tsforge.js"
   },

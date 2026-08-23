@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://tsforge.dev"><img src="https://img.shields.io/badge/tsforge.dev-2563eb?style=for-the-badge&logo=safari&logoColor=2563eb&labelColor=090909" alt="tsforge.dev"></a>
-  <a href="https://github.com/agjs/tsforge"><img src="https://img.shields.io/badge/GitHub-2563eb?style=for-the-badge&logo=github&logoColor=2563eb&labelColor=090909" alt="GitHub"></a>
+  <a href="https://github.com/boringstack-xyz/tsforge"><img src="https://img.shields.io/badge/GitHub-2563eb?style=for-the-badge&logo=github&logoColor=2563eb&labelColor=090909" alt="GitHub"></a>
   <a href="https://tsforge.dev/quickstart/"><img src="https://img.shields.io/badge/Quickstart-2563eb?style=for-the-badge&logo=readthedocs&logoColor=2563eb&labelColor=090909" alt="Quickstart"></a>
 </p>
 
@@ -22,8 +22,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/agjs/tsforge/tree/main/packages/core"><img src="https://img.shields.io/badge/packages--core-2563eb?style=for-the-badge&labelColor=090909" alt="packages/core"></a>
-  <a href="https://github.com/agjs/tsforge/tree/main/apps/docs"><img src="https://img.shields.io/badge/apps--docs-2563eb?style=for-the-badge&labelColor=090909" alt="apps/docs"></a>
+  <a href="https://github.com/boringstack-xyz/tsforge/tree/main/packages/core"><img src="https://img.shields.io/badge/packages--core-2563eb?style=for-the-badge&labelColor=090909" alt="packages/core"></a>
+  <a href="https://github.com/boringstack-xyz/tsforge/tree/main/apps/docs"><img src="https://img.shields.io/badge/apps--docs-2563eb?style=for-the-badge&labelColor=090909" alt="apps/docs"></a>
 </p>
 
 Documentation lives at [tsforge.dev](https://tsforge.dev). Start with the [Quickstart](https://tsforge.dev/quickstart/).

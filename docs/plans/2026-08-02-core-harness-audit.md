@@ -31,7 +31,7 @@ panel-gated PRs** (ag signs every merge + release — never merge to main yourse
 ## Starting state (2026-08-02)
 
 - On `main`, clean, version **0.35.0** (just released; #105 merged as squash `54d49250`).
-- `origin` = `https://github.com/agjs/tsforge.git` (SSH is broken here — push via origin, it's https).
+- `origin` = `https://github.com/boringstack-xyz/tsforge.git` (SSH is broken here — push via origin, it's https).
 - **CORRECTED 2026-08-02 (verified in code — do not relearn this):** the 4-model panel is
   **diff-based, not subsystem-based**. `bun run packages/core/src/cli.ts harness-review`
   accepts only `--base / --intent / --quick / --ci / --install-hook`

@@ -45,8 +45,8 @@ except F15, which is explicitly recorded as UNPROVEN on this platform.**
 
 | PR | Findings | State |
 |----|----------|-------|
-| [#223](https://github.com/agjs/tsforge/pull/223) — `fix/gate-never-silently-drops-rule-packs` | F1, F4 (+ F19 documented) | **MERGED** as `db6ba79e`. Panel PASS r5. |
-| [#224](https://github.com/agjs/tsforge/pull/224) — `fix/profiles-never-lower-below-pack-default` | F2, F20 (+ class guard; F21 raised) | panel **PASS** (r2, 4 reviewers / 0 errored, no findings); validate green, 3352 tests. **Awaiting ag's signed merge.** |
+| [#223](https://github.com/boringstack-xyz/tsforge/pull/223) — `fix/gate-never-silently-drops-rule-packs` | F1, F4 (+ F19 documented) | **MERGED** as `db6ba79e`. Panel PASS r5. |
+| [#224](https://github.com/boringstack-xyz/tsforge/pull/224) — `fix/profiles-never-lower-below-pack-default` | F2, F20 (+ class guard; F21 raised) | panel **PASS** (r2, 4 reviewers / 0 errored, no findings); validate green, 3352 tests. **Awaiting ag's signed merge.** |
 | next | F3, F5 (args parser) | not started |
 | next | F14 (normalization) | not started |
 | next | F7, F8, F9, F12 (small fixes) | not started |
@@ -462,7 +462,7 @@ in-process and 0 in the spawned gate.
 
 ### F20 — P1 — The `frontend` profile weakened two React correctness rules below the default profile
 
-- **status:** CONFIRMED and FIXED in [#224](https://github.com/agjs/tsforge/pull/224)
+- **status:** CONFIRMED and FIXED in [#224](https://github.com/boringstack-xyz/tsforge/pull/224)
 - **location:** `/Users/ag/Documents/Code/tsforge/packages/core/src/config/profiles.ts` (frontend
   `ruleOverrides`)
 - **evidence:** the block set three rules to `warn`; measured against the packs, one was a no-op and
