@@ -36,6 +36,12 @@ export interface IStackAdapter {
   readonly planSchema: IPlanSchema<unknown>;
   /** Optional write-time convention library. Absent → the session carries none. */
   readonly conventions?: IConventionProvider;
+  /**
+   * Optional session-start map so the model does not walk the tree to "understand"
+   * a project this adapter already knows. Injected as `ISessionConfig.guidance`.
+   * Absent → today's thin start (topic names + empty `/map`).
+   */
+  contextBrief?(dir: string): Promise<string>;
 }
 
 /**
@@ -55,4 +61,37 @@ export async function resolveStackAdapter(
   }
 
   return null;
+}
+
+/** Session extras the CLI spreads into `Session.create` from the resolved adapter. */
+export interface IStackSessionExtras {
+  readonly conventions?: IConventionProvider;
+  readonly pullConventions?: true;
+  readonly guidance?: string;
+}
+
+/**
+ * Conventions + optional context brief from the adapter that claims `dir`.
+ * Empty when no adapter matches. The brief is the specialized-harness map
+ * (architecture, generators, wire points, live index) — not a `/map` dump.
+ */
+export async function adapterSessionExtras(
+  dir: string,
+  adapters: readonly IStackAdapter[]
+): Promise<IStackSessionExtras> {
+  const stack = await resolveStackAdapter(dir, adapters);
+
+  if (stack === null) {
+    return {};
+  }
+
+  const brief =
+    stack.contextBrief === undefined ? "" : await stack.contextBrief(dir);
+
+  return {
+    ...(stack.conventions === undefined
+      ? {}
+      : { conventions: stack.conventions, pullConventions: true as const }),
+    ...(brief.length > 0 ? { guidance: brief } : {}),
+  };
 }

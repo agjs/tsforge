@@ -6,12 +6,15 @@ import { renderPathTopicMap } from "./path-topics";
  * `pull_conventions`, a reject with the guides embedded, or one matching PUSH
  * after a gate red.
  */
-export function buildPullContract(topics: readonly string[]): string {
+export function buildPullContract(
+  topics: readonly string[],
+  pathMap?: string
+): string {
   const list =
     topics.length > 0
       ? topics.join(", ")
       : "(none configured — pull_conventions is unavailable)";
-  const map = renderPathTopicMap(topics);
+  const map = pathMap ?? renderPathTopicMap(topics);
 
   return [
     "CONVENTIONS (pull-before-first-write).",

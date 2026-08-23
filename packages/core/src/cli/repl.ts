@@ -51,15 +51,26 @@ import {
   type ILoopEvent,
   type IReviewReport,
 } from "../loop";
-import { runPlanning } from "../loop/planning/run-planning";
-import type { IPlanConstraints } from "../loop/planning/plan-types";
+import type {
+  IPlanConstraints,
+  IProductPlan,
+} from "../loop/planning/plan-types";
+import { proposePlan } from "../loop/planning/propose-plan";
+import { productPlanToDraft } from "../loop/planning/product-plan-ui";
+import { readPlan, writePlan } from "../loop/planning/plan-store";
 import {
+  adapterSessionExtras,
   resolveStackAdapter,
   type IStackAdapter,
 } from "../loop/planning/stack-adapter";
 import { boringstackStackAdapter } from "../loop/boringstack/planning";
 import { phaserStackAdapter } from "../loop/phaser/planning";
-import { loadApprovedPlan } from "../loop/planning/plan-store";
+import { phaserPlanSchema } from "../loop/phaser/plan-extension";
+import { runPhaserBuild } from "../loop/phaser/build";
+import { createPhaserHostSession } from "../loop/phaser/build-session";
+import { bunExec } from "../loop/phaser/exec";
+import { LOOP_LIMITS } from "../loop/loop.constants";
+import { resolveScaffoldedWorkspace } from "../scaffold/receipt";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
 import {
@@ -244,18 +255,15 @@ const STACK_ADAPTERS: readonly IStackAdapter[] = [
   phaserStackAdapter,
 ];
 
-/** Convention extras from the adapter that claims `dir`, if it ships a library. */
+/** Convention extras + context brief from the adapter that claims `dir`. */
 async function stackSessionExtras(dir: string): Promise<{
   readonly conventions?: IStackAdapter["conventions"];
   readonly pullConventions?: true;
+  readonly guidance?: string;
 }> {
-  const stack = await resolveStackAdapter(dir, STACK_ADAPTERS);
+  const root = await resolveScaffoldedWorkspace(dir);
 
-  if (stack?.conventions === undefined) {
-    return {};
-  }
-
-  return { conventions: stack.conventions, pullConventions: true };
+  return adapterSessionExtras(root, STACK_ADAPTERS);
 }
 
 /**
@@ -324,65 +332,127 @@ export async function greenfieldOrSend(
   await onSend();
 }
 
-/** The greenfield planning flow (description → proposed plan → human
- *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
- *  to keep its cognitive complexity down; the resolved stack adapter supplies the
- *  planner constraints (guidance + reserved-entity stripping) and this only glues them
- *  to the interactive prompt — it names no concrete stack. */
-async function runGreenfieldPlanning(
+export const PLANNER_AGENT_ID = "session:planner";
+export const PLANNER_LABEL = "product planner";
+
+/** REPL surfaces for greenfield product planning (agent tree + yellow PLAN card). */
+export interface IGreenfieldPlanningUi {
+  readonly report: Reporter;
+  present(plan: IPlanDocument): void;
+}
+
+/** Injectable planner so tests drive the present/approve path without a live model. */
+export type GreenfieldPropose = (
+  description: string,
+  stack: IStackAdapter,
+  echo: (s: string) => void,
+  onToken: (text: string, channel: "reasoning" | "content" | "tool") => void
+) => Promise<IProductPlan | null>;
+
+/** Draft or approved product plan on disk, or a pending PLAN card — do not re-plan. */
+export async function stackHasProductPlan(
+  dir: string,
+  stack: IStackAdapter
+): Promise<boolean> {
+  return (await readPlan(dir, stack.planSchema)) !== null;
+}
+
+/** The greenfield planning flow: planner subagent → yellow PLAN card, pending
+ *  until the human types approve. Does not dump JSON and does not wait on
+ *  readline (pane editor has `rl === null`). */
+export async function runGreenfieldPlanning(
   dir: string,
   description: string,
   echo: (s: string) => void,
-  rl: ReturnType<typeof createInterface> | null,
-  activeModelEntry: IModelEntry,
-  stack: IStackAdapter
+  stack: IStackAdapter,
+  ui: IGreenfieldPlanningUi,
+  propose: GreenfieldPropose
 ): Promise<void> {
   echo("▸ planning your product first...\n");
-
-  const plannerResolved = await resolveCapabilityModel("planner");
-  const plannerProvider = makeProvider(
-    plannerResolved?.entry ?? activeModelEntry
-  );
-
-  const result = await runPlanning(dir, {
-    planner: plannerProvider,
-    // The plan schema comes from the RESOLVED adapter — a project is planned + validated by the
-    // stack that detected it, not a hardcoded one.
-    schema: stack.planSchema,
-    // We only reach here when this stack adapter detected the project, so its
-    // reserved-slice rule always applies (no gap) and every drop is surfaced.
-    constraints: greenfieldConstraints(stack, echo),
-    describe: async () => {
-      await Promise.resolve();
-
-      return { description };
-    },
-    review: async (plan) => {
-      await Promise.resolve();
-
-      echo(
-        `\nProposed plan:\n${JSON.stringify(plan, null, 2)}\n` +
-          `\nApprove this plan? (approve/revise/cancel)\n`
-      );
-
-      if (rl === null) {
-        echo(
-          "(editor mode: plan review not interactive — run planning again with --plan)\n"
-        );
-
-        return { action: "cancel" };
-      }
-
-      return parseReviewResponse(await rl.question("> "));
-    },
-    out: echo,
+  ui.report({
+    kind: "agent_spawned",
+    task: "session",
+    agentId: PLANNER_AGENT_ID,
+    message: PLANNER_LABEL,
+  });
+  ui.report({
+    kind: "agent_started",
+    task: "session",
+    agentId: PLANNER_AGENT_ID,
+    message: PLANNER_LABEL,
   });
 
-  echo(
-    result === "approved"
-      ? "✓ plan approved — ready to build\n"
-      : "planning cancelled\n"
-  );
+  const onToken = (
+    text: string,
+    channel: "reasoning" | "content" | "tool"
+  ): void => {
+    ui.report({
+      kind: "token",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: text,
+      channel,
+    });
+  };
+
+  let plan;
+
+  try {
+    plan = await propose(description, stack, echo, onToken);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: false,
+    });
+    echo(`▸ planner failed: ${message}\n`);
+
+    return;
+  }
+
+  if (plan === null) {
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: false,
+    });
+    echo(
+      "▸ planner did not return a usable plan — try a more specific description\n"
+    );
+
+    return;
+  }
+
+  const normalized = normalizePlanDraft(productPlanToDraft(plan), plan.product);
+
+  if (!normalized.ok) {
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: false,
+    });
+    echo(`▸ ${normalized.error}\n`);
+
+    return;
+  }
+
+  await writePlan(dir, plan, "draft");
+  ui.present(normalized.plan);
+  ui.report({
+    kind: "agent_result",
+    task: "session",
+    agentId: PLANNER_AGENT_ID,
+    message: PLANNER_LABEL,
+    passed: true,
+  });
 }
 
 /** Narrow approval — GENERAL plan mode, where the model asks clarifying
@@ -580,6 +650,14 @@ async function initReplSession(args: ICliArgs): Promise<{
   activeModelEntry: IModelEntry;
   autoGate?: AutoGateResolver;
 }> {
+  const bound = await resolveScaffoldedWorkspace(args.dir);
+
+  if (bound !== args.dir) {
+    process.stdout.write(`  ↳ project is ${bound}\n`);
+    args.dir = bound;
+    process.chdir(bound);
+  }
+
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
   const activeName = activeModel.name;
@@ -1497,15 +1575,43 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     session.setActivePlanId(plan.id);
     syncWorklistPanel(plan);
-    echo(
-      `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
-    );
     planMode = false;
     planDiscussed = false;
     session.setPlanMode(false);
     setMode("normal");
     await persist();
+
+    const stored = await readPlan(args.dir, phaserPlanSchema);
+
+    if (stored !== null) {
+      await writePlan(args.dir, stored.plan, "approved");
+    }
+
+    echo(
+      `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
+    );
     echo("  ✓ plan approved — implementing\n");
+
+    if (stored !== null) {
+      const host = await createPhaserHostSession({
+        provider: makeProvider(activeModelEntry),
+        cwd: args.dir,
+        contextWindow,
+        maxTurns: LOOP_LIMITS.webMaxTurns,
+        report,
+      });
+
+      await runPhaserBuild({
+        cwd: args.dir,
+        plan: stored.plan,
+        host,
+        exec: bunExec,
+        echo,
+      });
+
+      return;
+    }
+
     await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
   };
 
@@ -1567,6 +1673,42 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
+  const greenfieldUi: IGreenfieldPlanningUi = {
+    report,
+    present: (plan) => {
+      session.presentHarnessPlan(plan);
+    },
+  };
+
+  const proposeProductPlan: GreenfieldPropose = async (
+    description,
+    stack,
+    echoPlan,
+    onToken
+  ) => {
+    const plannerResolved = await resolveCapabilityModel("planner");
+    const plannerProvider = makeProvider(
+      plannerResolved?.entry ?? activeModelEntry
+    );
+
+    return proposePlan(
+      { planner: plannerProvider, onToken },
+      { description },
+      stack.planSchema,
+      greenfieldConstraints(stack, echoPlan)
+    );
+  };
+
+  const planProduct = (stack: IStackAdapter, line: string): Promise<void> =>
+    runGreenfieldPlanning(
+      args.dir,
+      line,
+      echo,
+      stack,
+      greenfieldUi,
+      proposeProductPlan
+    );
+
   const dispatch = async (line: string): Promise<void> => {
     const route = classifyReplRoute(line, approvalRouteState());
 
@@ -1592,8 +1734,20 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     // GENERAL plan mode, discussion: the agent explores read-only, asks its
     // clarifying questions, and proposes/revises a plan. Stays in plan mode.
+    // A FRESH stack-adapter project (Phaser / BoringStack, no approved product
+    // plan) must NOT take this path — that is the 94-turn tree-walk. Product
+    // planning is the plan; fall through to greenfieldOrSend via onSend=discuss
+    // only when no adapter claims the dir (or it is already planned).
     if (route === "plan-discuss") {
-      await discussInPlanMode(line);
+      await greenfieldOrSend(
+        args.dir,
+        STACK_ADAPTERS,
+        async (d, s) =>
+          session.getPendingPlan() !== null ||
+          (await stackHasProductPlan(d, s)),
+        (stack) => planProduct(stack, line),
+        () => discussInPlanMode(line)
+      );
 
       return;
     }
@@ -1607,16 +1761,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     await greenfieldOrSend(
       args.dir,
       STACK_ADAPTERS,
-      async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null,
-      (stack) =>
-        runGreenfieldPlanning(
-          args.dir,
-          line,
-          echo,
-          rl,
-          activeModelEntry,
-          stack
-        ),
+      async (d, s) =>
+        session.getPendingPlan() !== null || (await stackHasProductPlan(d, s)),
+      (stack) => planProduct(stack, line),
       () => runSend(line)
     );
   };
@@ -1628,7 +1775,15 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Assigned after the pane console exists (same pattern as handleHelp).
   let handleCopy: () => void = () => undefined;
 
-  const clearConversation = async (): Promise<void> => {
+  const clearConversation = async (opts?: {
+    readonly dest?: string;
+    readonly silent?: boolean;
+  }): Promise<void> => {
+    if (opts?.dest !== undefined) {
+      args.dir = opts.dest;
+      process.chdir(opts.dest);
+    }
+
     // Rebuild the session with the current state (config is not reused;
     // repl's /clear creates a fresh Session.create call)
     spinner.resetClock();
@@ -1699,6 +1854,15 @@ export async function repl(args: ICliArgs): Promise<number> {
     // fires on the first send.)
     awaitingUserAnswer = false;
     await persist();
+
+    if (opts?.silent === true) {
+      if (opts.dest !== undefined) {
+        echo(`▸ now working in ${opts.dest}\n`);
+      }
+
+      return;
+    }
+
     clearScreen(); // wipe the visible terminal + scrollback, not just the state
     echo("conversation cleared\n");
   };
@@ -2925,6 +3089,10 @@ export async function repl(args: ICliArgs): Promise<number> {
                 out: (s) => process.stdout.write(s),
                 columns: transcriptCols(),
                 viewportRows: overlayBudget(),
+              }).then(async (dest) => {
+                if (dest !== null) {
+                  await clearConversation({ dest, silent: true });
+                }
               })
             : openRecipePicker({
                 cwd: args.dir,
@@ -3020,7 +3188,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // `void runLine` command row, which would race the wizard for stdin.) Extracted
     // from the command switch to keep that dispatcher's cognitive complexity down.
     openScaffold = async (): Promise<void> => {
-      await openScaffoldInRepl({
+      const dest = await openScaffoldInRepl({
         cwd: args.dir,
         suspend: () => {
           editorControl?.suspend();
@@ -3045,6 +3213,10 @@ export async function repl(args: ICliArgs): Promise<number> {
         columns: transcriptCols(),
         viewportRows: overlayBudget(),
       });
+
+      if (dest !== null) {
+        await clearConversation({ dest, silent: true });
+      }
     };
 
     // Helper: repaint the editor buffer to the pane input after palette insertion.

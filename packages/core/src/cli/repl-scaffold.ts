@@ -174,7 +174,7 @@ export async function openScaffoldInRepl(
   // wizard and passes a fake to verify progress (onPhase) reaches deps.out — without
   // a real clone/boot.
   run: typeof runScaffold = runScaffold
-): Promise<void> {
+): Promise<string | null> {
   deps.suspend();
 
   try {
@@ -201,7 +201,7 @@ export async function openScaffoldInRepl(
     if (archetypeState.status !== "apply") {
       deps.out("scaffold: cancelled — nothing was created.\n");
 
-      return;
+      return null;
     }
 
     const selectedArchetype = archetypeState.single.archetype ?? "";
@@ -209,7 +209,7 @@ export async function openScaffoldInRepl(
     if (!isArchetype(selectedArchetype)) {
       deps.out("scaffold: cancelled — unknown project type.\n");
 
-      return;
+      return null;
     }
 
     const archetype = selectedArchetype;
@@ -232,7 +232,7 @@ export async function openScaffoldInRepl(
     if (configState.status !== "apply") {
       deps.out("scaffold: cancelled — nothing was created.\n");
 
-      return;
+      return null;
     }
 
     // Resolve the destination folder (under cwd, validated, non-existent).
@@ -244,7 +244,7 @@ export async function openScaffoldInRepl(
     if ("error" in resolved) {
       deps.out(`scaffold: ${resolved.error} — nothing was created.\n`);
 
-      return;
+      return null;
     }
 
     const { dest } = resolved;
@@ -259,7 +259,7 @@ export async function openScaffoldInRepl(
         ? { ...base, superuser: { email: suEmail, password: suPassword } }
         : base;
 
-    await scaffoldFromAnswers(manifest, answers, dest, deps.out, run);
+    return await scaffoldFromAnswers(manifest, answers, dest, deps.out, run);
   } finally {
     deps.resume();
   }
@@ -277,7 +277,7 @@ export async function scaffoldFromAnswers(
   dest: string,
   out: (s: string) => void,
   run: typeof runScaffold = runScaffold
-): Promise<void> {
+): Promise<string | null> {
   try {
     const outcome = await run(
       manifest,
@@ -299,12 +299,16 @@ export async function scaffoldFromAnswers(
     // Planning is triggered by REPL interception on the first build request.
     if (answers.archetype === "boringstack" || answers.archetype === "phaser") {
       out(
-        "\n✓ scaffold complete — run planning when you submit your first build request\n"
+        "\n✓ scaffold complete — next prompt plans the product in this folder\n"
       );
     }
+
+    return outcome.dir;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
 
     out(`scaffold failed: ${message}\n`);
+
+    return null;
   }
 }

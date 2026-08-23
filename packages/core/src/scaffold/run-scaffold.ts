@@ -4,7 +4,7 @@ import { cloneRepo, scaffoldRecord } from "./clone";
 import { bootStack, type IBootDeps } from "./boot";
 import { answersToPlan } from "./plan";
 import { parseManifest } from "./boringstack-manifest";
-import { applyPhaserIdentity } from "./apply-phaser";
+import { applyPhaserIdentity, ensurePhaserCatalog } from "./apply-phaser";
 import {
   realRunner,
   realFs,
@@ -176,6 +176,7 @@ export async function runScaffold(
 
   if (answers.archetype === "phaser") {
     await applyPhaserIdentity(dest, basename(dest), deps.fs);
+    await ensurePhaserCatalog(dest, deps.fs, deps.run);
   }
 
   phase("Applying your configuration…");

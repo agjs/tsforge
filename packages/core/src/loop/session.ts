@@ -2019,6 +2019,11 @@ export class Session {
     return this.pendingPlan;
   }
 
+  /** Harness-authored proposal (greenfield product plan) — same pending slot as present_plan. */
+  presentHarnessPlan(plan: IPlanDocument): void {
+    this.ctx.tool.onPlanPresented?.(plan);
+  }
+
   /** Take and clear the pending proposal (approve path). */
   takePendingPlan(): IPlanDocument | null {
     const plan = this.pendingPlan;

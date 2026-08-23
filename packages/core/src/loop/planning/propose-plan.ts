@@ -53,7 +53,10 @@ export function stripReservedSlices<TUi>(
  * a plan that re-emits the reserved-slice trap.
  */
 export async function proposePlan<TUi>(
-  deps: { planner: IProvider },
+  deps: {
+    planner: IProvider;
+    onToken?: (text: string, channel: "reasoning" | "content" | "tool") => void;
+  },
   input: { description: string; mockups?: readonly string[] },
   schema: IPlanSchema<TUi>,
   constraints: IPlanConstraints = {}
@@ -109,13 +112,15 @@ export async function proposePlan<TUi>(
     return stripped;
   };
 
+  const tokenOpts = deps.onToken === undefined ? {} : { onToken: deps.onToken };
+
   // First attempt: temperature 0 (deterministic)
   const res1 = await deps.planner.complete(
     [
       { role: "system", content: system },
       { role: "user", content: userMessage },
     ],
-    { temperature: 0 }
+    { temperature: 0, ...tokenOpts }
   );
 
   // A first attempt that fails to parse OR strips to zero usable slices both fall
@@ -133,7 +138,7 @@ export async function proposePlan<TUi>(
       { role: "system", content: system },
       { role: "user", content: userMessage },
     ],
-    { temperature: 0.7 }
+    { temperature: 0.7, ...tokenOpts }
   );
 
   return usable(parse(res2.content));

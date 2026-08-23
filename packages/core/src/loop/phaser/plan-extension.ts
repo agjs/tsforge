@@ -12,6 +12,7 @@ export const PHASER_VIEW_KINDS = [
   "scene",
   "module",
   "content",
+  "port",
 ] as const;
 
 export type PhaserViewKind = (typeof PHASER_VIEW_KINDS)[number];
@@ -77,6 +78,10 @@ export function isPhaserViewIntent(value: unknown): value is IPhaserViewIntent {
     value.kind === "feature" &&
     (typeof value.feature !== "string" || !FEATURE_ID.test(value.feature))
   ) {
+    return false;
+  }
+
+  if (value.kind === "port" && value.feature !== undefined) {
     return false;
   }
 
@@ -151,7 +156,7 @@ Schema:
         "rules": [ "<plain-English invariant>" ]
       },
       "ui": {
-        "kind": "<feature | scene | module | content>",
+        "kind": "<feature | scene | module | content | port>",
         "scene": "<existing or new scene key id, e.g. World — never a raw scene.start string literal>",
         "feature": "<OPTIONAL: src/features folder name when kind is feature, e.g. coin>",
         "catalog": "<OPTIONAL: items | levels | tileTypes | balance>",
@@ -168,7 +173,7 @@ Schema:
 
 Rules for the JSON:
 - This is NOT a web app. Do not emit screens, nav, layout, or home. The slice "ui" is a Phaser view intent.
-- "kind": "feature" requires "feature". "kind": "content" requires "catalog".
+- "kind": "feature" requires "feature". "kind": "content" requires "catalog". "kind": "port" omits "feature".
 - "scene" is an identifier (World, Boot, Shop), never a path.
 - Domain lives in src/domain and MUST NOT import phaser. Features tick + dispose. Scenes are thin Phaser.Scene + setup returning { update, dispose } with events.once(SHUTDOWN).
 - Prefer bun run new:feature / new:scene / new:module, then fill in. import * as Phaser from 'phaser'. Branded scene/texture keys.
@@ -177,12 +182,28 @@ Rules for the JSON:
 Complete example (follow this shape precisely):
 ${JSON.stringify(PLANNER_EXAMPLE, null, 2)}`;
 
+function phaserExtraCheck(plan: IProductPlan): boolean {
+  for (const slice of plan.slices) {
+    if (!isPhaserViewIntent(slice.ui)) {
+      return false;
+    }
+
+    if (slice.ui.kind === "port" && slice.ui.feature !== undefined) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export const phaserPlanSchema: IPlanSchema<IPhaserViewIntent> = {
   system: PLANNER_SYSTEM,
   validateUi: isPhaserViewIntent,
+  extraCheck: phaserExtraCheck,
 };
 
 export const phaserPlanSchemaErased: IPlanSchema<unknown> = {
   system: PLANNER_SYSTEM,
   validateUi: isPhaserViewIntent,
+  extraCheck: phaserExtraCheck,
 };

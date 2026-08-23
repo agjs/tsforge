@@ -36,6 +36,13 @@ test("kind feature requires a feature folder name", () => {
   ).toBe(true);
 });
 
+test("kind port omits feature", () => {
+  expect(isPhaserViewIntent({ kind: "port", scene: "World" })).toBe(true);
+  expect(
+    isPhaserViewIntent({ kind: "port", scene: "World", feature: "audio" })
+  ).toBe(false);
+});
+
 test("kind content requires a catalog", () => {
   expect(isPhaserViewIntent({ kind: "content", scene: "World" })).toBe(false);
   expect(

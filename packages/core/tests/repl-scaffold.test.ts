@@ -49,7 +49,7 @@ test("scaffoldFromAnswers forwards clone progress to out and prints the handoff"
   // ...the handoff printed...
   expect(joined).toContain("scaffold ready → /tmp/proj");
   // ...and the boringstack planning note followed.
-  expect(joined).toContain("run planning when you submit");
+  expect(joined).toContain("next prompt plans the product in this folder");
 });
 
 test("archetype step offers boringstack, astro, phaser", () => {

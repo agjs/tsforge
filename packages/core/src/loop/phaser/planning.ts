@@ -3,6 +3,7 @@ import type { IPlanConstraints } from "../planning/plan-types";
 import type { IStackAdapter } from "../planning/stack-adapter";
 import { readScaffoldArchetype } from "../../scaffold/receipt";
 import { phaserConventionProvider } from "./conventions";
+import { phaserContextBrief } from "./context-brief";
 import { phaserPlanSchemaErased } from "./plan-extension";
 
 export const PHASER_PLANNER_GUIDANCE = `This build targets the Phaser-TypeScript-AI-First-Starter, which ALREADY PROVIDES a WASD grid demo: Player, Grid, Wall, Movement, Interaction, Hud, SaveGame, Progression, and Boot/World scenes. Do NOT propose a slice that REBUILDS those — no Player, Grid, Wall, Movement, Hud, Save, Boot, or World entity. Treat them as existing actors/views your new entities extend. Propose the product's own domain (a Coin, a Shop, a new scene) normally. Phaser is a render substrate: domain stays Phaser-free, features tick+dispose, scenes are thin views with SHUTDOWN dispose.`;
@@ -44,4 +45,5 @@ export const phaserStackAdapter: IStackAdapter = {
   planConstraints: phaserPlanConstraints,
   planSchema: phaserPlanSchemaErased,
   conventions: phaserConventionProvider,
+  contextBrief: (dir) => phaserContextBrief(dir),
 };

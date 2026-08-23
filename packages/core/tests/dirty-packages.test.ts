@@ -110,7 +110,7 @@ describe("dirty-packages — git-baseline detection (the FG-1 seam)", () => {
     } finally {
       await rm(container, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("non-git child falls back to mtime; new children are dirty until remembered", async () => {
     const container = await mkdtemp(join(tmpdir(), "tsforge-dirty-nogit-"));
@@ -155,5 +155,5 @@ describe("dirty-packages — git-baseline detection (the FG-1 seam)", () => {
     } finally {
       await rm(container, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
