@@ -6,10 +6,20 @@ import { wireSlice } from "./wire";
 import type { Exec } from "./exec";
 import { PHASER_SLICE_GUIDANCE } from "./build-config";
 
+export interface IPhaserSendOpts {
+  readonly signal?: AbortSignal;
+  readonly steer?: () => string[];
+}
+
 export interface IPhaserHost {
   setScope(globs: string[]): void;
   setGate(gate: string | IGate): void;
-  send(message: string): Promise<{ status: string; turns: number }>;
+  send(
+    message: string,
+    opts?: IPhaserSendOpts
+  ): Promise<{ status: string; turns: number }>;
+  /** Bind the matching worklist item before fill so the Tasks rail is not idle. */
+  focusItem?(title: string): void;
 }
 
 export interface IPhaserBuildResult {
@@ -49,6 +59,8 @@ export async function runPhaserBuild(opts: {
   generate?: typeof generateSlice;
   wire?: typeof wireSlice;
   runSmoke?: boolean;
+  signal?: AbortSignal;
+  steer?: () => string[];
 }): Promise<IPhaserBuildResult> {
   const generate = opts.generate ?? generateSlice;
   const wire = opts.wire ?? wireSlice;
@@ -60,7 +72,16 @@ export async function runPhaserBuild(opts: {
   }
 
   for (const slice of opts.plan.slices) {
+    if (opts.signal?.aborted === true) {
+      return {
+        status: "parked",
+        completed,
+        parked: slice.entity.id,
+      };
+    }
+
     echo(`▸ generating ${slice.ui.kind} ${slice.entity.id}\n`);
+    opts.host.focusItem?.(slice.entity.id);
 
     const generated = await generate(opts.cwd, slice, opts.exec);
     const wired = await wire(opts.cwd, slice, opts.exec);
@@ -72,7 +93,10 @@ export async function runPhaserBuild(opts: {
     opts.host.setScope(scope.length > 0 ? scope : generated.paths.slice());
     opts.host.setGate("bun run check");
 
-    const sent = await opts.host.send(slicePrompt(slice));
+    const sent = await opts.host.send(slicePrompt(slice), {
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+      ...(opts.steer === undefined ? {} : { steer: opts.steer }),
+    });
 
     if (sent.status !== "done") {
       echo(`▸ parked ${slice.entity.id} (${sent.status})\n`);

@@ -48,6 +48,8 @@ export {
   savePlan,
   loadPlanIndex,
   findItem,
+  findItemByTitle,
+  focusPlanItemByTitle,
   countOpen,
   countDone,
   isChecklistComplete,

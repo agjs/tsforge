@@ -1142,8 +1142,8 @@ export class PaneScreen {
     };
 
     return (
-      handleFocusKey(seq, deps) ??
-      handleScrollKey(seq, deps) ??
+      handleFocusKey(key, deps) ??
+      handleScrollKey(key, deps) ??
       handleMouseKey(seq, deps) ??
       "passthrough"
     );

@@ -166,6 +166,19 @@ def scenario(port):
             "screen did not dump slices JSON after approve",
             '"slices"' not in vis and "mustremaintrue" not in vis,
         )
+
+        got, buf = read_until(
+            master,
+            lambda b: "generating" in strip(b).lower()
+            or "working" in strip(b).lower()
+            or "implementing" in strip(b).lower(),
+            15,
+            buf,
+        )
+        t.check(
+            "approve starts implement on this session (generating/working)",
+            got,
+        )
     finally:
         reap(pid, master)
     return t.finish()

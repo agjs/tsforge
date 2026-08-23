@@ -256,6 +256,56 @@ export function findItem(
  * Depth-first first open (pending/active) item — the next thing plan order
  * requires. Used so task_focus cannot skip ahead of unfinished work.
  */
+export function findItemByTitle(
+  items: readonly IChecklistItem[],
+  title: string
+): IChecklistItem | null {
+  for (const item of items) {
+    if (item.title === title) {
+      return item;
+    }
+
+    if (item.children) {
+      const found = findItemByTitle(item.children, title);
+
+      if (found !== null) {
+        return found;
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Focus the checklist item whose title matches, else the first open item. */
+export function focusPlanItemByTitle(
+  cwd: string,
+  planId: string,
+  title: string
+): IPlanDocument | null {
+  const plan = loadPlan(cwd, planId);
+
+  if (plan === null) {
+    return null;
+  }
+
+  const item = findItemByTitle(plan.items, title) ?? firstOpenItem(plan.items);
+
+  if (item === null) {
+    return null;
+  }
+
+  const focused = focusItemInPlan(plan, item.id);
+
+  if (!focused.ok) {
+    return null;
+  }
+
+  savePlan(cwd, focused.plan);
+
+  return focused.plan;
+}
+
 export function firstOpenItem(
   items: readonly IChecklistItem[]
 ): IChecklistItem | null {

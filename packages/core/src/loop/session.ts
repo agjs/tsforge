@@ -307,13 +307,19 @@ export interface ISessionConfig {
    *  fixes every error in one pass. Left off for plain eval/scratch tasks (their
    *  acceptance set can be empty ⇒ vacuous). */
   offerCheck?: boolean;
-  /** A real human is present to answer (the interactive REPL sets this). Threads to
-   *  `ctx.tool.humanPresent` (NOT `ctx.tool.interactive` — that's a POLICY approval-path
-   *  signal, and co-pilot presence must not loosen policy verdicts) and offers the
-   *  `ask_user` tool (WS-C): the model can pause for a human decision. Absent/false ⇒
-   *  unattended (headless/eval) — ask_user isn't offered and, if forced, returns
-   *  "proceed" so a run never hangs. */
+  /** POLICY approval-path only. The REPL keeps this false so `ask` DENYs honestly
+   *  (no per-action UI). Do not use this to offer co-pilot tools — see
+   *  `humanPresent` / `offerTaskTools` / `offerPresentPlan`. */
   interactive?: boolean;
+  /** TTY co-pilot is present. Sets `ctx.tool.humanPresent` and offers `ask_user`.
+   *  Must not set `ctx.tool.interactive` (that loosens policy `ask`). */
+  humanPresent?: boolean;
+  /** Put `task_*` in `this.tools`. `offeredToolsFor` still withholds them until
+   *  `activePlanId` is bound. REPL always true. */
+  offerTaskTools?: boolean;
+  /** Put `present_plan` in `this.tools`. `offeredToolsFor` still withholds it
+   *  outside plan mode. REPL always true. */
+  offerPresentPlan?: boolean;
   /** Seed the deferred-gate flag at construction: an edit written before an ask_user
    *  pause that has NOT yet been validated. Set when a caller rebuilds the Session (e.g.
    *  the REPL's /clear) but must not drop the still-pending gate — the first send that
@@ -1456,16 +1462,18 @@ export class Session {
         ? cfg.conventions.topics()
         : [];
 
-    // Task tools are advertised in the session list for interactive co-pilot
-    // sessions; offeredToolsFor withholds them until activePlanId is set.
+    // Co-pilot tools are independent of policy `interactive` (#298). REPL passes
+    // humanPresent / offerTaskTools / offerPresentPlan; offeredToolsFor still
+    // withholds task_* until activePlanId and present_plan outside plan mode.
     this.tools = toolsFor(
       false,
       {},
       offerConventions,
       offerCheck,
-      cfg.interactive === true,
+      cfg.humanPresent === true,
       conventionTopics,
-      cfg.interactive === true
+      cfg.offerTaskTools === true,
+      cfg.offerPresentPlan === true
     );
 
     this.ctx = ctx;
@@ -1646,7 +1654,9 @@ export class Session {
         // answer; absent/false ⇒ unattended, ask_user proceeds without hanging. Set
         // `humanPresent`, NOT `interactive` — the latter is a POLICY signal (approval
         // path) and co-pilot presence must not loosen policy verdicts.
-        ...(cfg.interactive === true ? { humanPresent: true } : {}),
+        ...(cfg.humanPresent === true || cfg.interactive === true
+          ? { humanPresent: true }
+          : {}),
         // The adapter's convention library — spread into every IToolContext (so
         // `pull_conventions` reads its guides) and read by the reactive push. Gated on
         // `pullConventions` (the same flag that OFFERS the tool + enables the push), so a
@@ -1984,6 +1994,14 @@ export class Session {
     this.activePlanId = planId;
     this.ctx.tool.activePlanId = planId;
     this.refreshChecklistContract();
+  }
+
+  /** Merge extra deny/allow/ask rules (Phaser build deny of vite/playwright). */
+  appendPolicyRules(rules: IPolicyRules): void {
+    this.ctx.tool.policyRules = mergePolicyRules(
+      this.ctx.tool.policyRules,
+      rules
+    );
   }
 
   /** Session-bound plan id, or null when none approved yet. */

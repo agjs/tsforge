@@ -4,6 +4,7 @@
  * dispatcher, plan-mode flow, and the inline overlays (palette, @ picker,
  * /config, /help). Extracted from cli.ts; the entry point stays `repl(args)`.
  */
+import { writeSync } from "node:fs";
 import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
@@ -70,9 +71,11 @@ import { boringstackStackAdapter } from "../loop/boringstack/planning";
 import { phaserStackAdapter } from "../loop/phaser/planning";
 import { phaserPlanSchema } from "../loop/phaser/plan-extension";
 import { runPhaserBuild } from "../loop/phaser/build";
-import { createPhaserHostSession } from "../loop/phaser/build-session";
 import { bunExec } from "../loop/phaser/exec";
-import { LOOP_LIMITS } from "../loop/loop.constants";
+import { PHASER_NO_DEV_DENY } from "../loop/phaser/build-config";
+import { phaserHostFromSession } from "./phaser-repl-host";
+import { shouldDispatchReplLine } from "./repl-line";
+import { resolveChromeStatus } from "./repl-status";
 import { resolveScaffoldedWorkspace } from "../scaffold/receipt";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -109,6 +112,7 @@ import {
   AgentTreeModel,
   PaneScreen,
   createMouseCsiFilter,
+  RESTORE_TERMINAL,
   canUsePaneTui,
   PANE_MIN_ROWS,
   INPUT_INNER_ROWS_MAX,
@@ -171,6 +175,8 @@ import {
   normalizePlanDraft,
   goalFromMessages,
   loadPlan,
+  firstOpenItem,
+  focusPlanItemByTitle,
 } from "../loop/worklist";
 import type { IPlanDocument, IChecklistItemDraft } from "../loop/worklist";
 import {
@@ -377,7 +383,7 @@ export async function runGreenfieldPlanning(
   ui: IGreenfieldPlanningUi,
   propose: GreenfieldPropose
 ): Promise<void> {
-  echo("▸ planning your product first...\n");
+  echo("▸ planning your product first…  Ctrl+C cancels\n");
   ui.startLive?.();
   ui.report({
     kind: "agent_spawned",
@@ -432,6 +438,16 @@ export async function runGreenfieldPlanning(
     try {
       plan = await propose(description, stack, echo, onToken);
     } catch (err) {
+      const aborted =
+        (err instanceof Error && err.name === "AbortError") ||
+        (err instanceof Error && /abort/i.test(err.message));
+
+      if (aborted) {
+        fail("▸ planner cancelled\n");
+
+        return;
+      }
+
       const message = err instanceof Error ? err.message : String(err);
 
       fail(`▸ planner failed: ${message}\n`);
@@ -475,6 +491,9 @@ export async function runGreenfieldPlanning(
 /** Narrow approval — GENERAL plan mode, where the model asks clarifying
  *  questions: a "yes" may ANSWER a question, so only unambiguous approval
  *  words exit the mode and start implementing. */
+export { shouldDispatchReplLine } from "./repl-line";
+export { resolveChromeStatus } from "./repl-status";
+
 export function isPlanApproval(line: string): boolean {
   return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
 }
@@ -760,6 +779,9 @@ async function initReplSession(args: ICliArgs): Promise<{
     // executeTool then rejected anyway but with a message claiming a human was
     // consulted. Flip back to humanAtKeyboard() only when a real prompt lands.
     interactive: false,
+    humanPresent: humanAtKeyboard(),
+    offerTaskTools: true,
+    offerPresentPlan: true,
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
@@ -887,16 +909,12 @@ function maybeWritePlanModeIntro(planMode: boolean): void {
 
 /**
  * Wire terminal restoration for a pane-TUI session. `'exit'` covers a normal
- * return/`process.exit`. But a signal the process doesn't HANDLE terminates it
- * WITHOUT firing 'exit', leaving the pane on the alternate screen with SGR
- * mouse tracking on and a colored/hidden cursor — spewing `\x1b[<…M` into the
- * shell until a blind `reset`. SIGHUP (closed tab / ssh drop) and SIGTERM (a
- * supervisor, `timeout tsforge …`) are the vectors; the editor's readline
- * SIGINT handler covers Ctrl+C, and in raw editor mode Ctrl+C arrives as a
- * keypress not a signal, so only these two need wiring. On a signal we restore,
- * then re-raise with the default disposition so the exit status still reflects
- * the signal (128+n). `leave`/`close` are idempotent. The editor handle is read
- * through a getter because it's assigned later, inside the prompt loop.
+ * return/`process.exit`. A signal the process doesn't HANDLE terminates it
+ * WITHOUT firing 'exit', leaving SGR mouse tracking on — iTerm then pastes
+ * `0;23;22M` into the shell on every click. SIGTERM/SIGHUP restore then re-raise.
+ * Do NOT hook SIGINT: the editor owns Ctrl+C (abort vs quit). Stealing SIGINT
+ * leaves the alt screen and kills Ctrl+G.
+ * `writeSync` so the `'exit'` path cannot drop the bytes.
  */
 function installTerminalRestore(
   paneScreen: { leave: () => void },
@@ -905,6 +923,12 @@ function installTerminalRestore(
   const restore = (): void => {
     getEditor()?.close();
     paneScreen.leave();
+
+    try {
+      writeSync(1, RESTORE_TERMINAL);
+    } catch {
+      // stdout already gone
+    }
   };
 
   process.on("exit", restore);
@@ -1591,7 +1615,13 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     session.setActivePlanId(plan.id);
-    syncWorklistPanel(plan);
+    const first = firstOpenItem(plan.items);
+    const focused =
+      first === null
+        ? null
+        : focusPlanItemByTitle(args.dir, plan.id, first.title);
+
+    syncWorklistPanel(focused ?? plan);
     planMode = false;
     planDiscussed = false;
     session.setPlanMode(false);
@@ -1610,20 +1640,28 @@ export async function repl(args: ICliArgs): Promise<number> {
     echo("  ✓ plan approved — implementing\n");
 
     if (stored !== null) {
-      const host = await createPhaserHostSession({
-        provider: makeProvider(activeModelEntry),
-        cwd: args.dir,
-        contextWindow,
-        maxTurns: LOOP_LIMITS.webMaxTurns,
-        report,
-      });
+      session.appendPolicyRules(PHASER_NO_DEV_DENY);
+      await drive(async (opts) => {
+        const result = await runPhaserBuild({
+          cwd: args.dir,
+          plan: stored.plan,
+          host: phaserHostFromSession(session, {
+            cwd: args.dir,
+            sendOpts: () => opts,
+            onPlanChanged: (plan) => {
+              syncWorklistPanel(plan);
+            },
+          }),
+          exec: bunExec,
+          echo,
+          signal: opts.signal,
+          steer: opts.steer,
+        });
 
-      await runPhaserBuild({
-        cwd: args.dir,
-        plan: stored.plan,
-        host,
-        exec: bunExec,
-        echo,
+        return {
+          status: result.status === "done" ? "done" : "stuck",
+          turns: 0,
+        };
       });
 
       return;
@@ -1728,7 +1766,11 @@ export async function repl(args: ICliArgs): Promise<number> {
     );
 
     return proposePlan(
-      { planner: plannerProvider, onToken },
+      {
+        planner: plannerProvider,
+        onToken,
+        ...(active === null ? {} : { signal: active.signal }),
+      },
       { description },
       stack.planSchema,
       greenfieldConstraints(stack, echoPlan)
@@ -1848,6 +1890,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       // executeTool then rejected anyway but with a message claiming a human was
       // consulted. Flip back to humanAtKeyboard() only when a real prompt lands.
       interactive: false,
+      humanPresent: humanAtKeyboard(),
+      offerTaskTools: true,
+      offerPresentPlan: true,
       // Keep the SCOPED format janitor on across /clear — else the rebuilt session
       // silently reverts to no formatting for the rest of the session.
       coreFormat: true,
@@ -2148,20 +2193,26 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   // Current state as the status surface sees it — pane footer and plain prompt.
-  const statusInfo = (): IStatusInfo => ({
-    model: modelInfo(provider.config).model,
-    contextTokens: session.contextTokens,
-    contextWindow,
-    turns: lastTurns,
-    elapsedMs: lastElapsedMs,
-    status: lastStatus,
-    scope: scopeLabel(session.scope),
-    mode: modeById(currentModeId).label,
-    tokensPerSecond: session.metrics.lastTokensPerSecond,
-    ...(spinner.frameLabel().length > 0
-      ? { activity: spinner.frameLabel() }
-      : {}),
-  });
+  const statusInfo = (): IStatusInfo => {
+    const chrome = resolveChromeStatus({
+      busy: paneScreen.isBusy,
+      lastStatus,
+      activity: spinner.frameLabel(),
+    });
+
+    return {
+      model: modelInfo(provider.config).model,
+      contextTokens: session.contextTokens,
+      contextWindow,
+      turns: lastTurns,
+      elapsedMs: lastElapsedMs,
+      status: chrome.status,
+      scope: scopeLabel(session.scope),
+      mode: modeById(currentModeId).label,
+      tokensPerSecond: session.metrics.lastTokensPerSecond,
+      ...(chrome.activity !== undefined ? { activity: chrome.activity } : {}),
+    };
+  };
 
   // Pane console — the only interactive UI on a TTY.
   const paneScreen = new PaneScreen(process.stdout);
@@ -2996,7 +3047,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     const submitLine = (raw: string): void => {
       const line = raw.trim();
 
-      if (line.length === 0) {
+      if (!shouldDispatchReplLine(raw)) {
         if (!busy) {
           prompt();
         }
@@ -3042,6 +3093,17 @@ export async function repl(args: ICliArgs): Promise<number> {
     // Handle one idle line (slash command or a message), then any queued follow-up.
     const runLine = async (line: string): Promise<void> => {
       busy = true;
+      // So Ctrl+C / /exit abort product planning (not just Session.send). Without
+      // this, planning has busy=true and active=null: interrupt thinks we're idle,
+      // closes the editor, and the process dies with mouse tracking still on.
+      active = new AbortController();
+
+      // Slash commands (help/config overlays) must not start the turn spinner —
+      // busy ticks fight the overlay and drop Enter. Real sends still show working.
+      if (!line.startsWith("/")) {
+        lastStatus = "working";
+        spinner.start();
+      }
 
       if (keymapOpen) {
         keymapOpen = false;
@@ -3054,11 +3116,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       try {
         if (line.startsWith("/")) {
           if (await command(line)) {
+            closed = true;
+
             if (rl !== null) {
               rl.close();
             }
 
-            return;
+            editorHandle?.close();
           }
         } else {
           await dispatch(line);
@@ -3072,8 +3136,15 @@ export async function repl(args: ICliArgs): Promise<number> {
         echo(`\n⚠ ${err instanceof Error ? err.message : String(err)}\n`);
       } finally {
         closeAgentTurn(); // seal the agent card's bottom cap before re-prompting
+        spinner.stop();
+
+        if (lastStatus === "working") {
+          lastStatus = "ready";
+        }
+
         busy = false;
         paneScreen.setBusy(false);
+        active = null;
       }
 
       // Mid-run approve aborted the discuss turn — bind + implement before any

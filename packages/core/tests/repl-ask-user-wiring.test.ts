@@ -31,6 +31,48 @@ test("both REPL Session.create sites (init + /clear) set interactive: false (no 
   expect(src).not.toContain("interactive: humanAtKeyboard()");
 });
 
+test("both REPL Session.create sites offer present_plan + task_* without policy-interactive", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+
+  const createCount = (src.match(/Session\.create\(/g) ?? []).length;
+  const humanPresentCount = (
+    src.match(/humanPresent: humanAtKeyboard\(\)/g) ?? []
+  ).length;
+  const taskCount = (src.match(/offerTaskTools: true/g) ?? []).length;
+  const planCount = (src.match(/offerPresentPlan: true/g) ?? []).length;
+
+  expect(createCount).toBeGreaterThanOrEqual(2);
+  expect(humanPresentCount).toBe(createCount);
+  expect(taskCount).toBe(createCount);
+  expect(planCount).toBe(createCount);
+});
+
+test("Phaser approve drives the live REPL session, not a second Session", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+
+  expect(src).toContain("phaserHostFromSession(session");
+  expect(src).not.toContain("createPhaserHostSession");
+});
+
+test("installTerminalRestore does not steal SIGINT from Ctrl+C", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+  const restore = src.slice(
+    src.indexOf("function installTerminalRestore"),
+    src.indexOf("function announceGithub")
+  );
+
+  expect(restore).toContain("SIGTERM");
+  expect(restore).toContain("SIGHUP");
+  expect(restore).not.toContain("SIGINT");
+  expect(restore).toContain("RESTORE_TERMINAL");
+});
+
 // #103: the scoped format janitor is opt-in (coreFormat). The interactive REPL enables it,
 // and — like `interactive` — the /clear rebuild does NOT reuse the init config, so a rebuild
 // that dropped the flag would silently revert the session to no formatting. Every REPL

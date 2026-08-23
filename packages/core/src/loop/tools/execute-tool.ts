@@ -31,6 +31,7 @@ import {
 } from "./task-tools";
 import { doPresentPlan } from "./present-plan-tool";
 import { reject, type IToolContext } from "./tool-context";
+import { planFocusReject } from "./plan-focus-gate";
 import {
   classifyAction,
   evaluatePolicy,
@@ -191,6 +192,12 @@ export async function executeTool(
       `plan mode: \`${call.name}\` is disabled — explore with read-only tools and ` +
         "present your plan as text; the user must approve it before files can change."
     );
+  }
+
+  const focusErr = planFocusReject(call.name, ctx);
+
+  if (focusErr !== null) {
+    return reject(ctx, call.name, focusErr);
   }
 
   // Error boundary: a handler must hand the model a tool-error STRING, never throw

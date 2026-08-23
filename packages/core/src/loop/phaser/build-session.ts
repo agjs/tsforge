@@ -10,6 +10,7 @@ export interface IPhaserHostDeps {
   contextWindow: number;
   maxTurns: number;
   report: Reporter;
+  activePlanId?: string | null;
 }
 
 /**
@@ -30,5 +31,9 @@ export async function createPhaserHostSession(
     ...PHASER_BUILD_SESSION,
     guidance: `${brief}\n\n${PHASER_BUILD_SESSION.guidance}`,
     report: deps.report,
+    offerTaskTools: true,
+    ...(typeof deps.activePlanId === "string" && deps.activePlanId.length > 0
+      ? { activePlanId: deps.activePlanId }
+      : {}),
   });
 }

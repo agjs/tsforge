@@ -318,7 +318,8 @@ export function toolsFor(
   offerCheck = false,
   offerAskUser = false,
   conventionTopics: readonly string[] = [],
-  offerTaskTools = false
+  offerTaskTools = false,
+  offerPresentPlan = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -339,9 +340,11 @@ export function toolsFor(
   // (an interactive co-pilot session); off for autonomous eval/CI so the model isn't
   // tempted to ask a question no one will answer. The handler ALSO guards on
   // ctx.humanPresent, so a stray call in an unattended run returns "proceed" not a hang.
-  // present_plan rides the same opt-in; offeredToolsFor withholds it outside plan mode.
-  const askUser: AdvertisedTool[] = offerAskUser
-    ? [ASK_USER_TOOL, PRESENT_PLAN_TOOL]
+  // present_plan is its own opt-in: policy `interactive` must not steal the plan tool.
+  // offeredToolsFor withholds present_plan outside plan mode.
+  const askUser: AdvertisedTool[] = offerAskUser ? [ASK_USER_TOOL] : [];
+  const presentPlan: AdvertisedTool[] = offerPresentPlan
+    ? [PRESENT_PLAN_TOOL]
     : [];
 
   // Session-bound checklist tools — only when a plan was approved for this session
@@ -375,6 +378,7 @@ export function toolsFor(
       ...conventions,
       ...check,
       ...askUser,
+      ...presentPlan,
       ...taskTools,
       ...web,
       ...git,
@@ -394,6 +398,7 @@ export function toolsFor(
     ...conventions,
     ...check,
     ...askUser,
+    ...presentPlan,
     ...taskTools,
     ...LSP_TOOLS,
     ...web,

@@ -19,9 +19,11 @@ export const PHASER_NO_DEV_DENY: IPolicyRules = {
 
 export const PHASER_SLICE_GUIDANCE =
   "You are filling ONE Phaser slice. The files are already generated and wired. " +
+  "The matching checklist item is already focused — do not wander off the list. " +
   "Edit only the scoped files. Domain stays Phaser-free. Tests are co-located. " +
   "The architecture brief is already in the system prompt — do not list or search src/ to re-orient. " +
-  "import * as Phaser from 'phaser'. Never ignoreDestroy. Never construct GameObjects in update.";
+  "import * as Phaser from 'phaser'. Never ignoreDestroy. Never construct GameObjects in update. " +
+  "task_complete when the slice is green, then the harness focuses the next item.";
 
 export const PHASER_BUILD_SESSION: {
   readonly executionMode: ExecutionMode;

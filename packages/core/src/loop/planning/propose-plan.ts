@@ -56,6 +56,7 @@ export async function proposePlan<TUi>(
   deps: {
     planner: IProvider;
     onToken?: (text: string, channel: "reasoning" | "content" | "tool") => void;
+    signal?: AbortSignal;
   },
   input: { description: string; mockups?: readonly string[] },
   schema: IPlanSchema<TUi>,
@@ -113,6 +114,7 @@ export async function proposePlan<TUi>(
   };
 
   const tokenOpts = deps.onToken === undefined ? {} : { onToken: deps.onToken };
+  const signalOpts = deps.signal === undefined ? {} : { signal: deps.signal };
 
   // First attempt: temperature 0 (deterministic)
   const res1 = await deps.planner.complete(
@@ -120,7 +122,7 @@ export async function proposePlan<TUi>(
       { role: "system", content: system },
       { role: "user", content: userMessage },
     ],
-    { temperature: 0, ...tokenOpts }
+    { temperature: 0, ...tokenOpts, ...signalOpts }
   );
 
   // A first attempt that fails to parse OR strips to zero usable slices both fall
@@ -138,7 +140,7 @@ export async function proposePlan<TUi>(
       { role: "system", content: system },
       { role: "user", content: userMessage },
     ],
-    { temperature: 0.7, ...tokenOpts }
+    { temperature: 0.7, ...tokenOpts, ...signalOpts }
   );
 
   return usable(parse(res2.content));
