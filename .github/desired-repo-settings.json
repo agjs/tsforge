@@ -1,5 +1,5 @@
 {
-  "description": "Desired GitHub settings for agjs/tsforge (mirrors boringstack-xyz/boringstack). Applied via scripts/audit-repo-settings.sh. Note: branch protection + GitHub secret scanning require a public repo or GitHub Pro on private repos — merge settings apply on all plans.",
+  "description": "Desired GitHub settings for boringstack-xyz/tsforge (mirrors boringstack-xyz/boringstack). Applied via scripts/audit-repo-settings.sh. Note: branch protection + GitHub secret scanning require a public repo or GitHub Pro on private repos — merge settings apply on all plans.",
   "security_and_analysis": {
     "secret_scanning": "enabled",
     "secret_scanning_push_protection": "enabled",

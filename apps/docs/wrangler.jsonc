@@ -5,7 +5,8 @@
 // straight to Cloudflare's edge.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tsforge-docs",
+  // Must match the Cloudflare Pages project name (dashboard).
+  "name": "tsforge",
   "compatibility_date": "2026-06-12",
   "observability": {
     "enabled": true

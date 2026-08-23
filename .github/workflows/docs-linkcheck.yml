@@ -92,7 +92,7 @@ jobs:
             --max-retries 0
             --root-dir ${{ github.workspace }}/apps/docs/dist
             --exclude '^https?://(localhost|127\.0\.0\.1|.*\.localhost)'
-            --exclude 'github\.com/agjs/tsforge'
+            --exclude 'github\.com/boringstack-xyz/tsforge'
             '${{ github.workspace }}/apps/docs/dist/**/*.html'
           fail: false
         env:

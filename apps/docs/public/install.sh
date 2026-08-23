@@ -7,12 +7,12 @@
 # Environment:
 #   TSFORGE_REF=main|v0.1.0     git ref when installing from GitHub (default: main)
 #   TSFORGE_LIB=~/.local/share/tsforge   clone location for git install
-#   TSFORGE_REPO=https://github.com/agjs/tsforge.git
+#   TSFORGE_REPO=https://github.com/boringstack-xyz/tsforge.git
 #   BUN_INSTALL=~/.bun          Bun install root (installed automatically if missing)
 
 set -euo pipefail
 
-TSFORGE_REPO="${TSFORGE_REPO:-https://github.com/agjs/tsforge.git}"
+TSFORGE_REPO="${TSFORGE_REPO:-https://github.com/boringstack-xyz/tsforge.git}"
 TSFORGE_REF="${TSFORGE_REF:-main}"
 TSFORGE_LIB="${TSFORGE_LIB:-${HOME}/.local/share/tsforge}"
 

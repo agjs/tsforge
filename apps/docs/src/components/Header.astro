@@ -24,7 +24,7 @@ const version = `v${pkg.version}`;
 const FALLBACK_STARS = 19;
 let stars: number = FALLBACK_STARS;
 try {
-  const res = await fetch("https://api.github.com/repos/agjs/tsforge", {
+  const res = await fetch("https://api.github.com/repos/boringstack-xyz/tsforge", {
     headers: { "User-Agent": "tsforge-docs", Accept: "application/vnd.github+json" },
   });
   if (res.ok) {
@@ -66,7 +66,7 @@ const starLabel = formatStars(stars);
     {shouldRenderSearch && <div class="tf-nav-search min-w-0 print:hidden"><Search /></div>}
     <a
       class="flex items-center gap-2 border border-border h-9 px-3 text-[12px] text-foreground no-underline hover:border-border-strong transition-colors"
-      href="https://github.com/agjs/tsforge"
+      href="https://github.com/boringstack-xyz/tsforge"
       rel="noopener noreferrer"
       target="_blank"
       aria-label="tsforge on GitHub"
@@ -112,7 +112,7 @@ const starLabel = formatStars(stars);
     }
 
     try {
-      const res = await fetch("https://api.github.com/repos/agjs/tsforge", {
+      const res = await fetch("https://api.github.com/repos/boringstack-xyz/tsforge", {
         headers: { Accept: "application/vnd.github+json" },
       });
 

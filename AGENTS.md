@@ -39,7 +39,7 @@ CI runs on every PR and push to `main` — see the workflow table in `CONTRIBUTI
 before every push. `bun run validate` alone is not enough — CI fails on ARCHITECTURE.md
 / RULES.md drift even when validate is green.
 
-Remote: https://github.com/agjs/tsforge
+Remote: https://github.com/boringstack-xyz/tsforge
 
 ## House rules
 

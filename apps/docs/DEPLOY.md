@@ -8,8 +8,8 @@ The site in `apps/docs/` is an [Astro Starlight](https://starlight.astro.build) 
 
 2. **Create a Pages project.**
    - Cloudflare dashboard → Workers & Pages → Create application → Pages → Connect to Git.
-   - Authorize GitHub and select the `agjs/tsforge` repository.
-   - Project name: `tsforge-docs` (becomes the `*.pages.dev` subdomain).
+   - Authorize GitHub and select the `boringstack-xyz/tsforge` repository.
+   - Project name: `tsforge` (must match `wrangler.jsonc` `name`; becomes the `*.pages.dev` subdomain).
 
 3. **Build settings.**
 
@@ -42,7 +42,7 @@ The rule catalog page is generated at build time from `packages/core/RULES.md` v
 ## How deploys work
 
 - Push to `main` (docs paths) → Cloudflare auto-builds with `bun run build:ci`.
-- Pushes to other branches → preview deployment at `<branch>.tsforge-docs.pages.dev`.
+- Pushes to other branches → preview deployment at `<branch>.tsforge.pages.dev`.
 - Manual production deploy: `bun run deploy` (runs `build:ci` then `wrangler deploy`).
 - Rollback: Pages dashboard → Deployments → pick a previous deployment → Rollback.
 
