@@ -179,6 +179,21 @@ export async function runScaffold(
     await ensurePhaserCatalog(dest, deps.fs, deps.run);
   }
 
+  // Without this, node_modules never exists before the gate's first `bun run
+  // check` — bun's on-demand resolve-and-run then fetches only the invoked
+  // binary itself, not the project's real devDependencies, so tools whose
+  // usage is only detectable via config files (knip's eslint/prettier/husky/
+  // lint-staged/playwright/commitlint plugins) get misreported as unused. A
+  // half-scaffold the gate can never pass is worse than a clear, early stop.
+  phase("Installing dependencies…");
+  const installed = await deps.run(dest, ["bun", "install"]);
+
+  if (installed.exitCode !== 0) {
+    throw new Error(
+      `scaffold: bun install failed (exit ${String(installed.exitCode)}): ${installed.stderr.trim()}`
+    );
+  }
+
   phase("Applying your configuration…");
   const configured = await applyScaffold(dest, manifest, plan, deps);
   const gateCwd =
