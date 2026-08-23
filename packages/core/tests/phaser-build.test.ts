@@ -132,6 +132,90 @@ describe("runPhaserBuild", () => {
     expect(result.status).toBe("done");
     expect(execLog.some((c) => c.includes("test:smoke"))).toBe(true);
   });
+
+  test("completeItem fires for each slice, in order, once it goes green", async () => {
+    const completeLog: string[] = [];
+    const host: IPhaserHost = {
+      setScope: () => undefined,
+      setGate: () => undefined,
+      send: () => Promise.resolve({ status: "done", turns: 1 }),
+      completeItem: (title) => {
+        completeLog.push(title);
+      },
+    };
+
+    const result = await runPhaserBuild({
+      cwd: "/tmp/game",
+      plan: planOf("Coin", "Gem"),
+      host,
+      exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+      generate: () =>
+        Promise.resolve({ skipped: true, argv: null, paths: ["a.ts"] }),
+      wire: () => Promise.resolve({ paths: [] }),
+    });
+
+    expect(result.status).toBe("done");
+    expect(result.completed).toEqual(["Coin", "Gem"]);
+    expect(completeLog).toEqual(["Coin", "Gem"]);
+  });
+
+  test("completeItem does not fire when the slice parks (non-done status)", async () => {
+    const completeLog: string[] = [];
+    const host: IPhaserHost = {
+      setScope: () => undefined,
+      setGate: () => undefined,
+      send: () => Promise.resolve({ status: "stuck", turns: 1 }),
+      completeItem: (title) => {
+        completeLog.push(title);
+      },
+    };
+
+    const result = await runPhaserBuild({
+      cwd: "/tmp/game",
+      plan: planOf("Coin"),
+      host,
+      exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+      generate: () =>
+        Promise.resolve({ skipped: true, argv: null, paths: ["a.ts"] }),
+      wire: () => Promise.resolve({ paths: [] }),
+    });
+
+    expect(result.status).toBe("parked");
+    expect(result.completed).toEqual([]);
+    expect(completeLog).toEqual([]);
+  });
+
+  test("completeItem does not fire when the smoke test fails", async () => {
+    const completeLog: string[] = [];
+    const host: IPhaserHost = {
+      setScope: () => undefined,
+      setGate: () => undefined,
+      send: () => Promise.resolve({ status: "done", turns: 1 }),
+      completeItem: (title) => {
+        completeLog.push(title);
+      },
+    };
+
+    const result = await runPhaserBuild({
+      cwd: "/tmp/game",
+      plan: planOf("Coin"),
+      host,
+      exec: (argv) =>
+        Promise.resolve(
+          argv.includes("test:smoke")
+            ? { code: 1, stdout: "", stderr: "smoke fail" }
+            : { code: 0, stdout: "", stderr: "" }
+        ),
+      generate: () =>
+        Promise.resolve({ skipped: true, argv: null, paths: ["a.ts"] }),
+      wire: () => Promise.resolve({ paths: [] }),
+      runSmoke: true,
+    });
+
+    expect(result.status).toBe("parked");
+    expect(result.completed).toEqual([]);
+    expect(completeLog).toEqual([]);
+  });
 });
 
 describe("PHASER_NO_DEV_DENY", () => {

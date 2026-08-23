@@ -131,3 +131,118 @@ test("runPhaserBuild parks when the abort signal is already aborted", async () =
   expect(result.status).toBe("parked");
   expect(result.parked).toBe("Flap");
 });
+
+function phaserProduct(...ids: string[]): PhaserProductPlan {
+  return {
+    product: "g",
+    slices: ids.map((id) => ({
+      entity: { id, desc: id, fields: [], relationships: [], rules: [] },
+      ui: {
+        kind: "feature" as const,
+        scene: "World",
+        feature: id.toLowerCase(),
+      },
+      verification: {
+        mustRemainTrue: ["a"],
+        mustNotHappen: ["b"],
+        acceptanceCheck: "bun test",
+      },
+    })),
+  };
+}
+
+test("a full build marks every slice's checklist item done on disk", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-host-"));
+
+  try {
+    const norm = normalizePlanDraft(
+      { goal: "game", items: [{ title: "Flap" }, { title: "Pipes" }] },
+      "game"
+    );
+
+    expect(norm.ok).toBe(true);
+
+    if (!norm.ok) {
+      return;
+    }
+
+    const plan = persistPlanDocument(dir, norm.plan);
+    const host = phaserHostFromSession(
+      {
+        setScope: () => undefined,
+        setGate: () => undefined,
+        send: () => Promise.resolve({ status: "done", turns: 1 }),
+        getActivePlanId: () => plan.id,
+      },
+      { cwd: dir }
+    );
+
+    const result = await runPhaserBuild({
+      cwd: dir,
+      plan: phaserProduct("Flap", "Pipes"),
+      host,
+      exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+      generate: () =>
+        Promise.resolve({ skipped: true, argv: null, paths: ["a.ts"] }),
+      wire: () => Promise.resolve({ paths: [] }),
+    });
+
+    expect(result.status).toBe("done");
+
+    const loaded = loadPlan(dir, plan.id);
+
+    expect(loaded?.items[0]?.status).toBe("done");
+    expect(loaded?.items[0]?.completedAt).toBeDefined();
+    expect(loaded?.items[1]?.status).toBe("done");
+    expect(loaded?.items[1]?.completedAt).toBeDefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a parked slice leaves its checklist item open on disk", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-host-"));
+
+  try {
+    const norm = normalizePlanDraft(
+      { goal: "game", items: [{ title: "Flap" }] },
+      "game"
+    );
+
+    expect(norm.ok).toBe(true);
+
+    if (!norm.ok) {
+      return;
+    }
+
+    const plan = persistPlanDocument(dir, norm.plan);
+    const host = phaserHostFromSession(
+      {
+        setScope: () => undefined,
+        setGate: () => undefined,
+        send: () => Promise.resolve({ status: "stuck", turns: 1 }),
+        getActivePlanId: () => plan.id,
+      },
+      { cwd: dir }
+    );
+
+    const result = await runPhaserBuild({
+      cwd: dir,
+      plan: phaserProduct("Flap"),
+      host,
+      exec: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+      generate: () =>
+        Promise.resolve({ skipped: true, argv: null, paths: ["a.ts"] }),
+      wire: () => Promise.resolve({ paths: [] }),
+    });
+
+    expect(result.status).toBe("parked");
+
+    const loaded = loadPlan(dir, plan.id);
+
+    expect(loaded?.items[0]?.status).not.toBe("done");
+    expect(loaded?.items[0]?.completedAt).toBeUndefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

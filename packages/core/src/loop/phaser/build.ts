@@ -20,6 +20,8 @@ export interface IPhaserHost {
   ): Promise<{ status: string; turns: number }>;
   /** Bind the matching worklist item before fill so the Tasks rail is not idle. */
   focusItem?(title: string): void;
+  /** Mark the matching checklist item done after a slice's build succeeds. */
+  completeItem?(title: string): void;
 }
 
 export interface IPhaserBuildResult {
@@ -124,6 +126,7 @@ export async function runPhaserBuild(opts: {
       }
     }
 
+    opts.host.completeItem?.(slice.entity.id);
     completed.push(slice.entity.id);
   }
 
