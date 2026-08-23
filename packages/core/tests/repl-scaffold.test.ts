@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   archetypeStep,
+  buildReplScaffoldSteps,
   resolveScaffoldDest,
   scaffoldFromAnswers,
 } from "../src/cli/repl-scaffold";
+import { driveWizard, renderFrame } from "../src/render/wizard";
 import {
   loadBundledManifest,
   type runScaffold,
@@ -60,6 +62,54 @@ test("archetype step offers boringstack, astro, phaser", () => {
   const values = step.options.map((o) => o.value);
 
   expect(values).toEqual(["boringstack", "astro", "phaser"]);
+});
+
+test("picking Phaser goes to the folder name, not a second 'choose project type'", () => {
+  const steps = buildReplScaffoldSteps();
+  const s = driveWizard(steps, ["down", "down", "confirm"]);
+
+  expect(s.single.archetype).toBe("phaser");
+  expect(s.status).toBe("active");
+  expect(steps[s.stepIndex]?.key).toBe("projectDir");
+  expect(s.stepIndex).not.toBe(steps.length);
+
+  const frame = renderFrame(s, steps, false, "", "tsforge scaffold");
+
+  expect(frame).toContain("Project directory");
+  expect(frame).not.toContain("Review");
+});
+
+test("Phaser review lists type + folder once, not a re-ask of project type alone", () => {
+  const steps = buildReplScaffoldSteps();
+  const s = driveWizard(steps, [
+    "down",
+    "down",
+    "confirm",
+    { char: "g" },
+    { char: "a" },
+    { char: "m" },
+    { char: "e" },
+    "confirm",
+  ]);
+
+  expect(s.stepIndex).toBe(steps.length);
+  expect(s.status).toBe("active");
+  expect(s.text.projectDir).toBe("game");
+
+  const frame = renderFrame(s, steps, false, "", "tsforge scaffold");
+
+  expect(frame).toContain("Review");
+  expect(frame).toContain("Phaser");
+  expect(frame).toContain("game");
+  expect(frame).toContain("Project directory");
+});
+
+test("Boringstack still asks for admin after the folder name", () => {
+  const steps = buildReplScaffoldSteps();
+  const s = driveWizard(steps, ["confirm", { char: "a" }, "confirm"]);
+
+  expect(s.single.archetype).toBe("boringstack");
+  expect(steps[s.stepIndex]?.key).toBe("superuserEmail");
 });
 
 test("resolveScaffoldDest: a plain name resolves under cwd (NOT a throwaway temp)", () => {
