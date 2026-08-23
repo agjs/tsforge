@@ -754,20 +754,25 @@ async function scaffoldMode(argv: readonly string[]): Promise<number> {
     return 1;
   }
 
+  const { parseScaffoldArgs } = await import("./scaffold/scaffold-cli");
+  const { formatScaffoldHandoff } = await import("./scaffold/handoff");
+  const archetype = parseScaffoldArgs(argv).answers.archetype;
+
   process.stdout.write(
-    [
-      "",
-      `scaffold ready → ${outcome.dir}`,
-      `  cloned   ${outcome.resolvedSha}`,
-      `  booted   ${String(outcome.booted)}${outcome.bootError === undefined ? "" : ` (${outcome.bootError})`}`,
-      "",
-      "configured .env:",
-      ...outcome.summary.map((l) => `  ${l}`),
-      "",
-      "build it:",
-      `  tsforge --dir ${outcome.gateCwd} --accept '${outcome.gateCommand}' "<your first feature>"`,
-      "",
-    ].join("\n")
+    formatScaffoldHandoff(
+      {
+        dir: outcome.dir,
+        sha: outcome.resolvedSha,
+        booted: outcome.booted,
+        summary: outcome.summary,
+        archetype,
+        interactive: false,
+        ...(outcome.bootError === undefined
+          ? {}
+          : { bootError: outcome.bootError }),
+      },
+      process.stdout.isTTY
+    )
   );
 
   return outcome.bootError === undefined ? 0 : 1;

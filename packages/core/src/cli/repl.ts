@@ -56,7 +56,10 @@ import type {
   IProductPlan,
 } from "../loop/planning/plan-types";
 import { proposePlan } from "../loop/planning/propose-plan";
-import { productPlanToDraft } from "../loop/planning/product-plan-ui";
+import {
+  productPlanToDraft,
+  plannerSliceIds,
+} from "../loop/planning/product-plan-ui";
 import { readPlan, writePlan } from "../loop/planning/plan-store";
 import {
   adapterSessionExtras,
@@ -339,6 +342,12 @@ export const PLANNER_LABEL = "product planner";
 export interface IGreenfieldPlanningUi {
   readonly report: Reporter;
   present(plan: IPlanDocument): void;
+  /** Arm the tree spinner so running rows animate. */
+  startLive?(): void;
+  /** Stop the spinner and clear the tree — the PLAN card is the result. */
+  stopLive?(): void;
+  /** Human progress into the planner detail pane (slice names, not JSON). */
+  note?(text: string): void;
 }
 
 /** Injectable planner so tests drive the present/approve path without a live model. */
@@ -369,6 +378,7 @@ export async function runGreenfieldPlanning(
   propose: GreenfieldPropose
 ): Promise<void> {
   echo("▸ planning your product first...\n");
+  ui.startLive?.();
   ui.report({
     kind: "agent_spawned",
     task: "session",
@@ -382,77 +392,84 @@ export async function runGreenfieldPlanning(
     message: PLANNER_LABEL,
   });
 
+  const seen = new Set<string>();
+  let raw = "";
+
   const onToken = (
     text: string,
     channel: "reasoning" | "content" | "tool"
   ): void => {
-    ui.report({
-      kind: "token",
-      task: "session",
-      agentId: PLANNER_AGENT_ID,
-      message: text,
-      channel,
-    });
+    if (channel !== "content") {
+      return;
+    }
+
+    raw += text;
+
+    for (const id of plannerSliceIds(raw)) {
+      if (seen.has(id)) {
+        continue;
+      }
+
+      seen.add(id);
+      ui.note?.(`· ${id}\n`);
+    }
   };
 
-  let plan;
+  const fail = (message: string): void => {
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: false,
+    });
+    echo(message);
+  };
 
   try {
-    plan = await propose(description, stack, echo, onToken);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    let plan;
 
-    ui.report({
-      kind: "agent_result",
-      task: "session",
-      agentId: PLANNER_AGENT_ID,
-      message: PLANNER_LABEL,
-      passed: false,
-    });
-    echo(`▸ planner failed: ${message}\n`);
+    try {
+      plan = await propose(description, stack, echo, onToken);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
 
-    return;
-  }
+      fail(`▸ planner failed: ${message}\n`);
 
-  if (plan === null) {
-    ui.report({
-      kind: "agent_result",
-      task: "session",
-      agentId: PLANNER_AGENT_ID,
-      message: PLANNER_LABEL,
-      passed: false,
-    });
-    echo(
-      "▸ planner did not return a usable plan — try a more specific description\n"
+      return;
+    }
+
+    if (plan === null) {
+      fail(
+        "▸ planner did not return a usable plan — try a more specific description\n"
+      );
+
+      return;
+    }
+
+    const normalized = normalizePlanDraft(
+      productPlanToDraft(plan),
+      plan.product
     );
 
-    return;
-  }
+    if (!normalized.ok) {
+      fail(`▸ ${normalized.error}\n`);
 
-  const normalized = normalizePlanDraft(productPlanToDraft(plan), plan.product);
+      return;
+    }
 
-  if (!normalized.ok) {
+    await writePlan(dir, plan, "draft");
+    ui.present(normalized.plan);
     ui.report({
       kind: "agent_result",
       task: "session",
       agentId: PLANNER_AGENT_ID,
       message: PLANNER_LABEL,
-      passed: false,
+      passed: true,
     });
-    echo(`▸ ${normalized.error}\n`);
-
-    return;
+  } finally {
+    ui.stopLive?.();
   }
-
-  await writePlan(dir, plan, "draft");
-  ui.present(normalized.plan);
-  ui.report({
-    kind: "agent_result",
-    task: "session",
-    agentId: PLANNER_AGENT_ID,
-    message: PLANNER_LABEL,
-    passed: true,
-  });
 }
 
 /** Narrow approval — GENERAL plan mode, where the model asks clarifying
@@ -1673,10 +1690,29 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
+  const plannerLive: {
+    start: () => void;
+    stop: () => void;
+    note: (text: string) => void;
+  } = {
+    start: () => undefined,
+    stop: () => undefined,
+    note: () => undefined,
+  };
+
   const greenfieldUi: IGreenfieldPlanningUi = {
     report,
     present: (plan) => {
       session.presentHarnessPlan(plan);
+    },
+    startLive: () => {
+      plannerLive.start();
+    },
+    stopLive: () => {
+      plannerLive.stop();
+    },
+    note: (text) => {
+      plannerLive.note(text);
     },
   };
 
@@ -2390,8 +2426,6 @@ export async function repl(args: ICliArgs): Promise<number> {
         paneScreen.setWorklistBadge(pendingPlanBadge(plan));
         syncPaneChrome();
       }
-
-      echo(`\n${planHint(true, cols)}\n`);
     });
   };
 
@@ -2457,12 +2491,15 @@ export async function repl(args: ICliArgs): Promise<number> {
       .filter((l) => l.length > 0);
     const body =
       lines.length === 0
-        ? [paint("    (working…)", STYLE.dim, true)]
+        ? [paint("    drafting…", STYLE.dim, true)]
         : lines
             .slice(-AGENT_DETAIL_LINES)
             .map((l) => `    ${l.slice(0, width)}`);
+    // One child: the row already names it. Don't repeat `↳ product planner`.
+    const header =
+      rows.length <= 1 ? [] : [paint(`  ↳ ${label}`, STYLE.dim, true)];
 
-    return [paint(`  ↳ ${label}`, STYLE.dim, true), ...body];
+    return [...header, ...body];
   };
 
   const repaintTree = (): void => {
@@ -2591,6 +2628,19 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   observeEvents(feedTree);
+
+  plannerLive.start = (): void => {
+    spinner.start();
+  };
+
+  plannerLive.stop = (): void => {
+    spinner.stop();
+    resetTree();
+  };
+
+  plannerLive.note = (text: string): void => {
+    pushAgentOutput(PLANNER_AGENT_ID, text);
+  };
 
   // Switch the interactive mode (via the extensible registry) and reflect it in
   // the pane footer. The single entry point for /plan, Shift+Tab, and startup —

@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { productPlanToDraft } from "../src/loop/planning/product-plan-ui";
+import {
+  plannerSliceIds,
+  productPlanToDraft,
+} from "../src/loop/planning/product-plan-ui";
 import { normalizePlanDraft } from "../src/loop/worklist";
 import { formatPlanProposal } from "../src/loop/worklist/panel";
 import { PLANNER_EXAMPLE } from "../src/loop/phaser/plan-extension";
@@ -10,7 +13,7 @@ test("productPlanToDraft is titles and details, not a JSON blob of ui", () => {
   expect(draft.goal).toContain("grid adventure");
   expect(draft.items[0]?.title).toBe("Coin");
   expect(draft.items[0]?.detail).toContain("collectible");
-  expect(draft.items[0]?.detail).toContain("feature");
+  expect(draft.items[0]?.detail).not.toContain("feature");
   expect(JSON.stringify(draft)).not.toContain('"mustRemainTrue"');
 });
 
@@ -31,4 +34,11 @@ test("the PLAN card paints Coin, not the raw product-plan JSON", () => {
   expect(card).toContain("type approve to build");
   expect(card).not.toContain('"slices"');
   expect(card).not.toContain("mustRemainTrue");
+});
+
+test("plannerSliceIds reads entity ids out of streaming JSON, not the raw blob", () => {
+  const raw = JSON.stringify(PLANNER_EXAMPLE);
+
+  expect(plannerSliceIds(raw)).toEqual(["Coin"]);
+  expect(plannerSliceIds(raw.slice(0, 40))).toEqual([]);
 });

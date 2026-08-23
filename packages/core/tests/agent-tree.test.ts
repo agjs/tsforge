@@ -265,10 +265,10 @@ describe("renderAgentTree", () => {
       selectedId: "b",
     });
 
-    // The unselected row keeps the plain space; the selected row gets `▸`
-    // (which replaces the label's leading space, so column alignment holds).
+    // The unselected row keeps a plain gap; the selected row gets `▸ ` so
+    // the caret is not jammed into the label (`▸verify`).
     expect(lines[1]?.includes("▸")).toBe(false);
-    expect(lines[2]?.includes("▸verify")).toBe(true);
+    expect(lines[2]?.includes("▸ verify")).toBe(true);
     // Exactly one caret across the whole tree.
     expect(lines.filter((l) => l.includes("▸"))).toHaveLength(1);
   });

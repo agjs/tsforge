@@ -168,8 +168,10 @@ describe("wizard render (no color)", () => {
     const s = driveWizard(STEPS, ["confirm", "confirm"]);
     const frame = renderFrame(s, STEPS, false, "PREVIEW-BLOCK");
 
-    expect(frame).toContain("nothing is written until you Apply");
-    expect(frame).toContain("Naming: bare PascalCase");
+    expect(frame).toContain("apply to create it");
+    expect(frame).toContain("Naming");
+    expect(frame).toContain("bare PascalCase");
+    expect(frame).not.toContain("Naming: bare PascalCase");
     expect(frame).toContain("PREVIEW-BLOCK");
     expect(frame).toContain("enter apply");
   });

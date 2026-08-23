@@ -46,6 +46,8 @@ export {
   makeScaffoldRunDeps,
 } from "./run-scaffold";
 export type { IScaffoldDeps, IScaffoldOutcome } from "./run-scaffold";
+export { formatScaffoldHandoff } from "./handoff";
+export type { IScaffoldHandoff } from "./handoff";
 export { realRunner, realFs, realPoller } from "./io";
 export type { IScaffoldRunner, IScaffoldFs, IReadyPoller } from "./io";
 export {

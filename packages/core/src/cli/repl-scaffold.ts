@@ -11,6 +11,7 @@ import {
   makeScaffoldRunDeps,
   loadScaffoldSource,
   loadBundledManifest,
+  formatScaffoldHandoff,
   isArchetype,
 } from "../scaffold";
 import { existsSync } from "node:fs";
@@ -50,6 +51,7 @@ export function archetypeStep(): IWizardStep {
     key: "archetype",
     kind: "single",
     title: "Choose a project type",
+    reviewTitle: "Project type",
     explanation: "What would you like to scaffold?",
     evidence: [],
     options: [
@@ -180,7 +182,7 @@ export function resolveScaffoldDest(
   return { dest };
 }
 
-/** Print the handoff block shown after a successful scaffold. */
+/** Print the handoff card shown after a successful scaffold. */
 function printHandoff(
   out: (s: string) => void,
   dir: string,
@@ -188,24 +190,21 @@ function printHandoff(
   booted: boolean,
   bootError: string | undefined,
   summary: readonly string[],
-  gateCmd: string
+  archetype: string
 ): void {
-  const gateDir = dir;
-
   out(
-    [
-      "",
-      `scaffold ready → ${dir}`,
-      `  cloned   ${resolvedSha}`,
-      `  booted   ${String(booted)}${bootError === undefined ? "" : ` (${bootError})`}`,
-      "",
-      "configured .env:",
-      ...summary.map((l) => `  ${l}`),
-      "",
-      "build it:",
-      `  tsforge --dir ${gateDir} --accept '${gateCmd}' "<your first feature>"`,
-      "",
-    ].join("\n")
+    formatScaffoldHandoff(
+      {
+        dir,
+        sha: resolvedSha,
+        booted,
+        summary,
+        archetype,
+        interactive: true,
+        ...(bootError === undefined ? {} : { bootError }),
+      },
+      process.stdout.isTTY
+    )
   );
 }
 
@@ -314,15 +313,8 @@ export async function scaffoldFromAnswers(
       outcome.booted,
       outcome.bootError,
       outcome.summary,
-      outcome.gateCommand
+      answers.archetype
     );
-
-    // Planning is triggered by REPL interception on the first build request.
-    if (answers.archetype === "boringstack" || answers.archetype === "phaser") {
-      out(
-        "\n✓ scaffold complete — next prompt plans the product in this folder\n"
-      );
-    }
 
     return outcome.dir;
   } catch (err: unknown) {

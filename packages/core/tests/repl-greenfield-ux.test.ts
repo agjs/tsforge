@@ -81,6 +81,7 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
     const session = await sessionIn(dir);
     const echoes: string[] = [];
     const events: ILoopEvent[] = [];
+    const notes: string[] = [];
     let painted = "";
 
     session.setOnPlanPresented((plan) => {
@@ -101,6 +102,9 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
         },
         present: (plan) => {
           session.presentHarnessPlan(plan);
+        },
+        note: (text) => {
+          notes.push(text);
         },
       },
       fixturePropose
@@ -151,8 +155,10 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
 
     expect(kinds[0]).toBe("agent_spawned");
     expect(kinds[1]).toBe("agent_started");
-    expect(kinds).toContain("token");
+    expect(kinds).not.toContain("token");
     expect(kinds.at(-1)).toBe("agent_result");
+    expect(notes.join("")).toContain("· Coin");
+    expect(notes.join("")).not.toContain("mustRemainTrue");
     expect(events[0]?.agentId).toBe(PLANNER_AGENT_ID);
     expect(events[0]?.message).toBe(PLANNER_LABEL);
     expect(events.at(-1)?.passed).toBe(true);
