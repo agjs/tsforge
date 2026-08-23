@@ -97,6 +97,28 @@ test("a co-located *.test.ts satisfies the requirement", () => {
   }
 });
 
+test("a *.setup.ts scene composition/wiring file is exempt, even with no test", () => {
+  delete process.env.TSFORGE_TDD;
+  const dir = mkdtempSync(join(tmpdir(), "tsforge-tdd-"));
+
+  mkdirSync(join(dir, "src/runtime/phaser/scenes/WorldScene"), {
+    recursive: true,
+  });
+
+  const setupFile = "src/runtime/phaser/scenes/WorldScene/WorldScene.setup.ts";
+
+  writeFileSync(
+    join(dir, setupFile),
+    "export function setupWorldScene(): void {}\n"
+  );
+
+  try {
+    expect(siblingViolations(dir, [setupFile])).toHaveLength(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- BoringStack monorepo: knip only treats tests/** as test entries ---
 const BS_SERVICE = "apps/api/src/api/note/note.service.ts";
 const BS_MIRRORED = "apps/api/tests/api/note/note.service.test.ts";
