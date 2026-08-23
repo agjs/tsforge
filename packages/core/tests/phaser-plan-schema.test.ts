@@ -3,6 +3,7 @@ import {
   isPhaserViewIntent,
   phaserPlanSchema,
   PLANNER_EXAMPLE,
+  PLANNER_SYSTEM,
 } from "../src/loop/phaser/plan-extension";
 import { isProductPlan } from "../src/loop/planning/plan-store";
 import { parsePlanJson } from "../src/loop/planning/propose-plan";
@@ -16,6 +17,18 @@ test("PLANNER_EXAMPLE is a valid Phaser product plan", () => {
     )
   ).toBe(true);
   expect(isPhaserViewIntent(PLANNER_EXAMPLE.slices[0]?.ui)).toBe(true);
+  expect(PLANNER_EXAMPLE.slices.map((s) => s.entity.id)).toEqual([
+    "Flap",
+    "Pipes",
+    "Crash",
+    "Score",
+  ]);
+});
+
+test("the planner prompt is playable systems, not sprite-CRUD", () => {
+  expect(PLANNER_SYSTEM).toContain("PLAYABLE SYSTEMS");
+  expect(PLANNER_SYSTEM).not.toContain("one per entity");
+  expect(PLANNER_SYSTEM).not.toContain("PascalCase noun, e.g. Coin");
 });
 
 test("a BoringStack-shaped ui is rejected", () => {

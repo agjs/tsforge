@@ -25,7 +25,7 @@ import {
   type IPickerView,
 } from "../render/file-menu";
 import { listWorkspaceFiles } from "../lib/fs";
-import { relative } from "node:path";
+import { basename, relative } from "node:path";
 import { composeMessage } from "../loop/prompt";
 import { compactSummaryLine } from "../loop/context-hygiene";
 import { resolveImageInput } from "./image-input";
@@ -1893,7 +1893,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     if (opts?.silent === true) {
       if (opts.dest !== undefined) {
-        echo(`▸ now working in ${opts.dest}\n`);
+        echo(`▸ now in ${basename(opts.dest)}\n`);
       }
 
       return;

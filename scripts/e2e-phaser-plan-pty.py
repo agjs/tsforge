@@ -38,32 +38,30 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 ROWS, COLS = 40, 120
 PLANNER_EXAMPLE = {
     "product": (
-        "A grid adventure that adds collectible coins on the existing World scene."
+        "A side-scrolling flap game: tap to rise, fall with gravity, "
+        "dodge scrolling pipe pairs, score for each gap passed."
     ),
     "slices": [
         {
             "entity": {
-                "id": "Coin",
-                "desc": "A collectible coin the player picks up for score.",
+                "id": "Flap",
+                "desc": "Gravity pulls the bird down; a tap adds an upward impulse.",
                 "fields": [
-                    {"name": "value", "type": "number"},
-                    {"name": "collected", "type": "boolean"},
+                    {"name": "vy", "type": "number"},
+                    {"name": "alive", "type": "boolean"},
                 ],
-                "relationships": ["exists on the World grid"],
-                "rules": ["a coin is collected at most once"],
+                "relationships": ["drives the bird sprite on World"],
+                "rules": ["a flap while dead does nothing"],
             },
             "ui": {
                 "kind": "feature",
                 "scene": "World",
-                "feature": "coin",
-                "catalog": "items",
-                "input": "none",
+                "feature": "flap",
+                "input": "pointer",
             },
             "verification": {
-                "mustRemainTrue": [
-                    "collecting a coin increases score by its value"
-                ],
-                "mustNotHappen": ["a collected coin cannot be collected again"],
+                "mustRemainTrue": ["without input the bird's vy increases downward"],
+                "mustNotHappen": ["the bird flies with no gravity"],
                 "acceptanceCheck": "bun test",
             },
         }
@@ -81,7 +79,7 @@ def _decide(messages):
         for m in messages
         if m.get("role") == "system" and isinstance(m.get("content"), str)
     )
-    if "product architect for a Phaser" in joined_sys:
+    if "game designer for a Phaser" in joined_sys or "product architect for a Phaser" in joined_sys:
         return content_chunks(json.dumps(PLANNER_EXAMPLE))
     return content_chunks("ok")
 
@@ -123,11 +121,11 @@ def scenario(port):
         got, buf = read_until(
             master,
             lambda b: "type approve to build" in strip(b).lower()
-            or ("Coin" in strip(b) and "PLAN" in strip(b)),
+            or ("Flap" in strip(b) and "PLAN" in strip(b)),
             30,
             buf,
         )
-        t.check("PLAN card landed (Coin / type approve to build)", got)
+        t.check("PLAN card landed (Flap / type approve to build)", got)
 
         plain = strip(buf).lower()
         t.check(
@@ -161,8 +159,8 @@ def scenario(port):
         )
         vis = strip(visible_text(buf, rows=ROWS, cols=COLS)).lower()
         t.check(
-            "screen still shows the Coin PLAN card after approve",
-            "coin" in vis and "plan" in vis,
+            "screen still shows the Flap PLAN card after approve",
+            "flap" in vis and "plan" in vis,
         )
         t.check(
             "screen did not dump slices JSON after approve",

@@ -98,7 +98,12 @@ describe("phaserStackAdapter", () => {
       PHASER_RESERVED_ENTITY_IDS
     );
 
-    expect(stripped.slices.map((s) => s.entity.id)).toEqual(["Coin"]);
+    expect(stripped.slices.map((s) => s.entity.id)).toEqual([
+      "Flap",
+      "Pipes",
+      "Crash",
+      "Score",
+    ]);
 
     const playerPlan = {
       product: "x",

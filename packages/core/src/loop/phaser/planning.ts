@@ -6,7 +6,11 @@ import { phaserConventionProvider } from "./conventions";
 import { phaserContextBrief } from "./context-brief";
 import { phaserPlanSchemaErased } from "./plan-extension";
 
-export const PHASER_PLANNER_GUIDANCE = `This build targets the Phaser-TypeScript-AI-First-Starter, which ALREADY PROVIDES a WASD grid demo: Player, Grid, Wall, Movement, Interaction, Hud, SaveGame, Progression, and Boot/World scenes. Do NOT propose a slice that REBUILDS those — no Player, Grid, Wall, Movement, Hud, Save, Boot, or World entity. Treat them as existing actors/views your new entities extend. Propose the product's own domain (a Coin, a Shop, a new scene) normally. Phaser is a render substrate: domain stays Phaser-free, features tick+dispose, scenes are thin views with SHUTDOWN dispose.`;
+export const PHASER_PLANNER_GUIDANCE = `This build targets the Phaser-TypeScript-AI-First-Starter. It SHIPS a WASD grid demo (Player, Grid, Wall, Movement, Interaction, Hud, SaveGame, Progression, Boot/World). That demo is a placeholder, not the product.
+
+Plan PLAYABLE SYSTEMS of the game the user asked for (Flap, Pipes, Crash, Score) — not a CRUD list of sprites (Bird, Pipe, Score as records) and not coins-on-a-grid unless they asked for a grid collectathon.
+
+Do NOT emit slices named Player, Grid, Wall, Movement, Hud, Save, Boot, or World. Do NOT keep WASD as the core loop of a different genre. Add new features on World (or a new scene) that ARE the new loop. Domain stays Phaser-free; features tick+dispose; scenes are thin views with SHUTDOWN dispose.`;
 
 export const PHASER_RESERVED_ENTITY_IDS: ReadonlySet<string> = new Set([
   "player",

@@ -118,25 +118,25 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
     expect(echoText).not.toContain("planning cancelled");
 
     expect(painted).toContain("PLAN");
-    expect(painted).toContain("Coin");
+    expect(painted).toContain("Flap");
     expect(painted).toContain("type approve to build");
     expect(painted).not.toContain('"slices"');
     expect(painted).not.toContain("mustRemainTrue");
 
-    const screen = new VirtualScreen(20, 80);
+    const screen = new VirtualScreen(40, 80);
 
     screen.feed(`${painted}\n`);
     const vis = screen.text();
 
     expect(vis).toContain("PLAN");
-    expect(vis).toContain("Coin");
+    expect(vis).toContain("Flap");
     expect(vis).toContain("type approve to build");
     expect(vis).not.toContain('"slices"');
 
     const pending = session.getPendingPlan();
 
     expect(pending).not.toBeNull();
-    expect(pending?.items.some((i) => i.title === "Coin")).toBe(true);
+    expect(pending?.items.some((i) => i.title === "Flap")).toBe(true);
 
     const stored = await readPlan(dir, phaserPlanSchema);
 
@@ -157,7 +157,7 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
     expect(kinds[1]).toBe("agent_started");
     expect(kinds).not.toContain("token");
     expect(kinds.at(-1)).toBe("agent_result");
-    expect(notes.join("")).toContain("· Coin");
+    expect(notes.join("")).toContain("· Flap");
     expect(notes.join("")).not.toContain("mustRemainTrue");
     expect(events[0]?.agentId).toBe(PLANNER_AGENT_ID);
     expect(events[0]?.message).toBe(PLANNER_LABEL);

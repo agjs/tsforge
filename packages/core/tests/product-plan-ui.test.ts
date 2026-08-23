@@ -10,14 +10,14 @@ import { PLANNER_EXAMPLE } from "../src/loop/phaser/plan-extension";
 test("productPlanToDraft is titles and details, not a JSON blob of ui", () => {
   const draft = productPlanToDraft(PLANNER_EXAMPLE);
 
-  expect(draft.goal).toContain("grid adventure");
-  expect(draft.items[0]?.title).toBe("Coin");
-  expect(draft.items[0]?.detail).toContain("collectible");
+  expect(draft.goal).toContain("flap");
+  expect(draft.items[0]?.title).toBe("Flap");
+  expect(draft.items[0]?.detail).toContain("Gravity");
   expect(draft.items[0]?.detail).not.toContain("feature");
   expect(JSON.stringify(draft)).not.toContain('"mustRemainTrue"');
 });
 
-test("the PLAN card paints Coin, not the raw product-plan JSON", () => {
+test("the PLAN card paints Flap, not the raw product-plan JSON", () => {
   const draft = productPlanToDraft(PLANNER_EXAMPLE);
   const norm = normalizePlanDraft(draft, PLANNER_EXAMPLE.product);
 
@@ -30,7 +30,9 @@ test("the PLAN card paints Coin, not the raw product-plan JSON", () => {
   const card = formatPlanProposal(norm.plan, 80, false);
 
   expect(card).toContain("PLAN");
-  expect(card).toContain("Coin");
+  expect(card).toContain("Flap");
+  expect(card).toContain("Pipes");
+  expect(card).not.toContain("Bird");
   expect(card).toContain("type approve to build");
   expect(card).not.toContain('"slices"');
   expect(card).not.toContain("mustRemainTrue");
@@ -39,6 +41,6 @@ test("the PLAN card paints Coin, not the raw product-plan JSON", () => {
 test("plannerSliceIds reads entity ids out of streaming JSON, not the raw blob", () => {
   const raw = JSON.stringify(PLANNER_EXAMPLE);
 
-  expect(plannerSliceIds(raw)).toEqual(["Coin"]);
+  expect(plannerSliceIds(raw)).toEqual(["Flap", "Pipes", "Crash", "Score"]);
   expect(plannerSliceIds(raw.slice(0, 40))).toEqual([]);
 });

@@ -110,74 +110,138 @@ export function isPhaserViewIntent(value: unknown): value is IPhaserViewIntent {
   return true;
 }
 
-export const PLANNER_EXAMPLE = {
+export const PLANNER_EXAMPLE: IProductPlan<IPhaserViewIntent> = {
   product:
-    "A grid adventure that adds collectible coins on the existing World scene.",
+    "A side-scrolling flap game: tap to rise, fall with gravity, dodge scrolling pipe pairs, score for each gap passed.",
   slices: [
     {
       entity: {
-        id: "Coin",
-        desc: "A collectible coin the player picks up for score.",
+        id: "Flap",
+        desc: "Gravity pulls the bird down; a tap or key press adds an upward impulse.",
         fields: [
-          { name: "value", type: "number" },
-          { name: "collected", type: "boolean" },
+          { name: "vy", type: "number" },
+          { name: "alive", type: "boolean" },
         ],
-        relationships: ["exists on the World grid"],
-        rules: ["a coin is collected at most once"],
+        relationships: ["drives the bird sprite on World"],
+        rules: ["a flap while dead does nothing"],
       },
       ui: {
         kind: "feature",
         scene: "World",
-        feature: "coin",
-        catalog: "items",
+        feature: "flap",
+        input: "pointer",
+      },
+      verification: {
+        mustRemainTrue: ["without input the bird's vy increases downward"],
+        mustNotHappen: ["the bird flies with no gravity"],
+        acceptanceCheck: "bun test",
+      },
+    },
+    {
+      entity: {
+        id: "Pipes",
+        desc: "Pipe pairs spawn on the right, scroll left, and recycle off-screen.",
+        fields: [
+          { name: "speed", type: "number" },
+          { name: "gap", type: "number" },
+        ],
+        relationships: ["obstacles the bird must fly through"],
+        rules: ["a pair always has a passable gap"],
+      },
+      ui: {
+        kind: "feature",
+        scene: "World",
+        feature: "pipes",
         input: "none",
       },
       verification: {
-        mustRemainTrue: ["collecting a coin increases score by its value"],
-        mustNotHappen: ["a collected coin cannot be collected again"],
+        mustRemainTrue: ["pipes move left every tick while the run is live"],
+        mustNotHappen: ["a pipe pair with no gap"],
+        acceptanceCheck: "bun test",
+      },
+    },
+    {
+      entity: {
+        id: "Crash",
+        desc: "Overlapping a pipe or leaving the playfield ends the run.",
+        fields: [{ name: "hit", type: "boolean" }],
+        relationships: ["reads Flap alive and Pipes bounds"],
+        rules: ["a crash sets alive false and stops scrolling"],
+      },
+      ui: {
+        kind: "feature",
+        scene: "World",
+        feature: "crash",
+        input: "none",
+      },
+      verification: {
+        mustRemainTrue: ["a crash stops pipe scrolling"],
+        mustNotHappen: ["the bird continues after a hit"],
+        acceptanceCheck: "bun test",
+      },
+    },
+    {
+      entity: {
+        id: "Score",
+        desc: "Passing a pipe gap adds one point and updates the HUD.",
+        fields: [{ name: "value", type: "number" }],
+        relationships: ["increments when a pipe pair is cleared"],
+        rules: ["score never decreases during a live run"],
+      },
+      ui: {
+        kind: "feature",
+        scene: "World",
+        feature: "score",
+        input: "none",
+      },
+      verification: {
+        mustRemainTrue: ["clearing a gap increases score by 1"],
+        mustNotHappen: ["score ticks while the bird is dead"],
         acceptanceCheck: "bun test",
       },
     },
   ],
-} satisfies IProductPlan<IPhaserViewIntent>;
+};
 
-export const PLANNER_SYSTEM = `You are a product architect for a Phaser 4 TypeScript game built from the Phaser-TypeScript-AI-First-Starter. From the product description, propose a domain model as feature slices (one per entity). Respond with ONLY a JSON object — no prose, no markdown fences — matching this schema EXACTLY. Use these exact key names and value shapes; do not add, rename, or nest differently.
+export const PLANNER_SYSTEM = `You are a game designer for a Phaser 4 TypeScript game from the Phaser-TypeScript-AI-First-Starter. From the product description, propose the PLAYABLE SYSTEMS of that game — not a CRUD inventory of sprites. Respond with ONLY a JSON object — no prose, no markdown fences — matching this schema EXACTLY. Use these exact key names and value shapes; do not add, rename, or nest differently.
 
 Schema:
 {
-  "product": "<one short paragraph: what the game is for>",
+  "product": "<one short paragraph: the loop the player feels>",
   "slices": [
     {
       "entity": {
-        "id": "<PascalCase noun, e.g. Coin>",
-        "desc": "<one line>",
-        "fields": [ { "name": "<camelCase>", "type": "<string|number|boolean|Date|string[]>", "optional": <true if omittable, else omit this key> } ],
-        "relationships": [ "<plain-English sentence>" ],
-        "rules": [ "<plain-English invariant>" ]
+        "id": "<PascalCase SYSTEM name, e.g. Flap or Pipes — never a sprite-noun inventory like Bird>",
+        "desc": "<what the player does or what happens, one line>",
+        "fields": [ { "name": "<camelCase runtime state>", "type": "<string|number|boolean|Date|string[]>", "optional": <true if omittable, else omit this key> } ],
+        "relationships": [ "<which other systems this reads or drives>" ],
+        "rules": [ "<a play-feel invariant>" ]
       },
       "ui": {
         "kind": "<feature | scene | module | content | port>",
-        "scene": "<existing or new scene key id, e.g. World — never a raw scene.start string literal>",
-        "feature": "<OPTIONAL: src/features folder name when kind is feature, e.g. coin>",
+        "scene": "<World, Boot, or a new scene key — never a scene.start string>",
+        "feature": "<REQUIRED when kind is feature: src/features folder, e.g. flap>",
         "catalog": "<OPTIONAL: items | levels | tileTypes | balance>",
-        "input": "<OPTIONAL: keyboard | pointer | none>"
+        "input": "<keyboard | pointer | none — pointer/keyboard if the player acts>"
       },
       "verification": {
-        "mustRemainTrue": [ "<invariant that must always hold>" ],
-        "mustNotHappen": [ "<at least one thing that must never happen>" ],
-        "acceptanceCheck": "<a shell command that verifies the slice, e.g. bun test>"
+        "mustRemainTrue": [ "<something the player can see in 10 seconds>" ],
+        "mustNotHappen": [ "<a fail-state that must never occur>" ],
+        "acceptanceCheck": "<bun test>"
       }
     }
   ]
 }
 
 Rules for the JSON:
-- This is NOT a web app. Do not emit screens, nav, layout, or home. The slice "ui" is a Phaser view intent.
+- This is a GAME. Slices are systems the player feels (Flap, Pipes, Crash, Score), NOT database entities and NOT one slice per sprite noun (do not emit Bird + Pipe + Score as "records").
+- Plan the game they asked for. If they asked for a flap/arcade/shooter, do NOT turn it into coins on a grid.
+- The starter's WASD grid demo (Player, Grid, Wall, Movement) is a placeholder. Do not rebuild those as slices. Do not keep WASD as the core loop of a different genre. Add new features on World (or a new scene) that ARE the new loop.
+- This is NOT a web app. No screens, nav, layout, or home.
 - "kind": "feature" requires "feature". "kind": "content" requires "catalog". "kind": "port" omits "feature".
-- "scene" is an identifier (World, Boot, Shop), never a path.
-- Domain lives in src/domain and MUST NOT import phaser. Features tick + dispose. Scenes are thin Phaser.Scene + setup returning { update, dispose } with events.once(SHUTDOWN).
-- Prefer bun run new:feature / new:scene / new:module, then fill in. import * as Phaser from 'phaser'. Branded scene/texture keys.
-- Do NOT rebuild Player, Grid, Wall, Movement, Interaction, Hud, SaveGame, or the Boot/World scenes — the starter already ships those. Extend them.
+- "scene" is an identifier (World, Boot, GameOver), never a path.
+- Domain stays Phaser-free. Features tick + dispose. Scenes are thin Phaser.Scene + setup returning { update, dispose } with events.once(SHUTDOWN).
+- Prefer bun run new:feature / new:scene / new:module, then fill in.
 
 Complete example (follow this shape precisely):
 ${JSON.stringify(PLANNER_EXAMPLE, null, 2)}`;
