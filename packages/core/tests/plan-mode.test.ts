@@ -1,11 +1,13 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
+import type { ILoopEvent } from "../src/loop/loop.types";
 import { Session } from "../src/loop";
 import { isReadOnlyCommand } from "../src/loop/tools/file-ops";
+import { READONLY_STREAK_LIMIT } from "../src/loop/loop.constants";
 
 async function withDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-plan-"));
@@ -60,6 +62,74 @@ test("plan mode rejects a write tool at the execute layer — nothing reaches di
     expect(result.status).toBe("responded");
     expect(existsSync(join(dir, "x.ts"))).toBe(false);
     expect(toolResults.some((t) => t.includes("plan mode"))).toBe(true);
+  });
+});
+
+// A genuine plan-mode survey of an unfamiliar codebase can easily need MORE
+// reads than READONLY_STREAK_LIMIT before the model is ready to propose —
+// mutating tools are structurally unavailable the whole time (ctx.tool.readOnly),
+// so "only reading" is the CORRECT behavior here, not a stuck signal. Before the
+// fix, this tripped the same escalation ladder tuned for a model that CAN write
+// but won't, forcing a false "I'm stuck" raise-hand on a model that was simply
+// doing its job.
+test("plan mode survives reading more files than READONLY_STREAK_LIMIT without a false stuck escalation", async () => {
+  await withDir(async (dir) => {
+    const fileCount = READONLY_STREAK_LIMIT + 5;
+
+    await mkdir(join(dir, "src"), { recursive: true });
+
+    for (let i = 0; i < fileCount; i += 1) {
+      await writeFile(
+        join(dir, "src", `f${i}.ts`),
+        `export const f${i} = ${i};\n`
+      );
+    }
+
+    let calls = 0;
+    const events: ILoopEvent[] = [];
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        if (calls <= fileCount) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: String(calls),
+                name: "read",
+                arguments: { file: `src/f${calls - 1}.ts` },
+              },
+            ],
+          };
+        }
+
+        return { content: "here's the plan", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      report: (e) => events.push(e),
+    });
+
+    session.setPlanMode(true);
+
+    const result = await session.send("survey the codebase, then plan");
+
+    // Read through every file across `fileCount` turns (well past the old
+    // 12-turn limit) and settled normally on a plain reply — no premature
+    // "I'm stuck" raise-hand, no readonly-spin re-steer nudge injected.
+    expect(calls).toBe(fileCount + 1);
+    expect(result.status).toBe("responded");
+    expect(result.awaitingUser).toBeUndefined();
+    expect(events.some((e) => e.kind === "stuck")).toBe(false);
+    expect(
+      events.some(
+        (e) => e.kind === "tool" && e.message.includes("only reading")
+      )
+    ).toBe(false);
   });
 });
 

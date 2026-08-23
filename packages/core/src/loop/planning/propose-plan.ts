@@ -41,6 +41,51 @@ export function stripReservedSlices<TUi>(
 }
 
 /**
+ * Strip reserved-entity slices from an already-validated plan and re-check
+ * `extraCheck` on the result — shared by `proposePlan` (one-shot raw
+ * completion) and `propose_product_plan` (routed through the real turn loop),
+ * so both paths apply identically strict post-validation rules. Returns null
+ * when stripping leaves zero usable slices, or the post-strip `extraCheck`
+ * fails (a transformed plan is never returned unchecked).
+ */
+export function applyPlanConstraints<TUi>(
+  plan: IProductPlan<TUi>,
+  schema: IPlanSchema<TUi>,
+  constraints: IPlanConstraints = {}
+): IProductPlan<TUi> | null {
+  const { reservedEntities, onStripped } = constraints;
+
+  if (reservedEntities === undefined) {
+    return plan; // stack-agnostic: never strip
+  }
+
+  // Compute drops directly from the reserved-set membership (not object identity),
+  // so this stays correct even if stripReservedSlices is later rewritten to copy.
+  const droppedIds = plan.slices
+    .map((s) => s.entity.id)
+    .filter((id) => reservedEntities.has(id.toLowerCase()));
+
+  if (droppedIds.length > 0) {
+    onStripped(droppedIds); // REQUIRED by the type — a drop is never silent
+  }
+
+  const stripped = stripReservedSlices(plan, reservedEntities);
+
+  if (stripped.slices.length === 0) {
+    return null;
+  }
+
+  // Re-apply the schema's cross-slice rule to the STRIPPED plan: stripping can invalidate an
+  // invariant that held on the full plan (e.g. removing the slice that satisfied it), so a
+  // transformed plan is never returned unchecked.
+  if (schema.extraCheck !== undefined && !schema.extraCheck(stripped)) {
+    return null;
+  }
+
+  return stripped;
+}
+
+/**
  * Ask the model to propose a structured product plan from a description.
  * Returns null when the model's response can't be parsed into a usable plan.
  * Retries once at higher temperature (0 → 0.7) on parse failure.
@@ -76,42 +121,8 @@ export async function proposePlan<TUi>(
 
   const usable = (
     parsed: IProductPlan<TUi> | null
-  ): IProductPlan<TUi> | null => {
-    if (parsed === null) {
-      return null;
-    }
-
-    const { reservedEntities, onStripped } = constraints;
-
-    if (reservedEntities === undefined) {
-      return parsed; // stack-agnostic: never strip
-    }
-
-    // Compute drops directly from the reserved-set membership (not object identity),
-    // so this stays correct even if stripReservedSlices is later rewritten to copy.
-    const droppedIds = parsed.slices
-      .map((s) => s.entity.id)
-      .filter((id) => reservedEntities.has(id.toLowerCase()));
-
-    if (droppedIds.length > 0) {
-      onStripped(droppedIds); // REQUIRED by the type — a drop is never silent
-    }
-
-    const stripped = stripReservedSlices(parsed, reservedEntities);
-
-    if (stripped.slices.length === 0) {
-      return null;
-    }
-
-    // Re-apply the schema's cross-slice rule to the STRIPPED plan: stripping can invalidate an
-    // invariant that held on the full plan (e.g. removing the slice that satisfied it), so a
-    // transformed plan is never returned unchecked.
-    if (schema.extraCheck !== undefined && !schema.extraCheck(stripped)) {
-      return null;
-    }
-
-    return stripped;
-  };
+  ): IProductPlan<TUi> | null =>
+    parsed === null ? null : applyPlanConstraints(parsed, schema, constraints);
 
   const tokenOpts = deps.onToken === undefined ? {} : { onToken: deps.onToken };
   const signalOpts = deps.signal === undefined ? {} : { signal: deps.signal };

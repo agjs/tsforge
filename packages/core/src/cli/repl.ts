@@ -56,12 +56,13 @@ import type {
   IPlanConstraints,
   IProductPlan,
 } from "../loop/planning/plan-types";
-import { proposePlan } from "../loop/planning/propose-plan";
+import { applyPlanConstraints } from "../loop/planning/propose-plan";
+import { productPlanToDraft } from "../loop/planning/product-plan-ui";
 import {
-  productPlanToDraft,
-  plannerSliceIds,
-} from "../loop/planning/product-plan-ui";
-import { readPlan, writePlan } from "../loop/planning/plan-store";
+  readPlan,
+  writePlan,
+  isProductPlan,
+} from "../loop/planning/plan-store";
 import {
   adapterSessionExtras,
   resolveStackAdapter,
@@ -92,7 +93,7 @@ import { renderEditor } from "../editor/view";
 import { flags } from "../config/flags";
 import type { OpenAICompatibleProvider } from "../inference";
 import type { IModelEntry } from "../models-config";
-import { resolveCapabilityModel, loadModelsConfig } from "../models-config";
+import { loadModelsConfig } from "../models-config";
 import {
   renderStatus,
   userBubble,
@@ -356,13 +357,28 @@ export interface IGreenfieldPlanningUi {
   note?(text: string): void;
 }
 
-/** Injectable planner so tests drive the present/approve path without a live model. */
-export type GreenfieldPropose = (
-  description: string,
-  stack: IStackAdapter,
-  echo: (s: string) => void,
-  onToken: (text: string, channel: "reasoning" | "content" | "tool") => void
-) => Promise<IProductPlan | null>;
+/** Validated propose_product_plan payload, or a rejection the model can act on
+ *  (and retry within the same turn — no more temperature-0-then-0.7 trick). */
+export type ProductPlanValidation =
+  { ok: true; plan: IProductPlan } | { ok: false; error: string };
+
+/** The Session methods greenfield planning actually needs — not a second
+ *  Session (phaserHostFromSession's "not a second Session" precedent).
+ *  Injectable so tests drive the ask_user/propose_product_plan path without a
+ *  live model. */
+export interface IGreenfieldSession {
+  setGreenfieldMode(
+    on: boolean,
+    hooks?: {
+      readonly validate: (raw: unknown) => ProductPlanValidation;
+      readonly onProposed: (plan: IProductPlan) => Promise<void>;
+    }
+  ): void;
+  send(
+    message: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ status: string; turns: number; awaitingUser?: string }>;
+}
 
 /** Draft or approved product plan on disk, or a pending PLAN card — do not re-plan. */
 export async function stackHasProductPlan(
@@ -372,17 +388,57 @@ export async function stackHasProductPlan(
   return (await readPlan(dir, stack.planSchema)) !== null;
 }
 
-/** The greenfield planning flow: planner subagent → yellow PLAN card, pending
- *  until the human types approve. Does not dump JSON and does not wait on
- *  readline (pane editor has `rl === null`). */
+/** Validate a raw propose_product_plan payload against `stack`'s schema, then
+ *  apply the same strip-reserved + recheck pass `proposePlan` uses
+ *  (`applyPlanConstraints`) — both entry points enforce identically strict rules. */
+function validateProductPlan(
+  raw: unknown,
+  stack: IStackAdapter,
+  constraints: IPlanConstraints
+): ProductPlanValidation {
+  const schema = stack.planSchema;
+
+  if (!isProductPlan(raw, schema.validateUi, schema.extraCheck)) {
+    return {
+      ok: false,
+      error:
+        "invalid plan — every slice needs entity{id,desc,fields,relationships,rules}, " +
+        "a ui matching this stack's shape, and verification{mustRemainTrue,mustNotHappen,acceptanceCheck}",
+    };
+  }
+
+  const result = applyPlanConstraints(raw, schema, constraints);
+
+  if (result === null) {
+    return {
+      ok: false,
+      error:
+        "every slice was reserved/already provided by the starter, or the plan " +
+        "fails the stack's cross-slice rule once reserved slices are stripped — revise and try again",
+    };
+  }
+
+  return { ok: true, plan: result };
+}
+
+/** The greenfield planning flow: routes the description through the REAL
+ *  agentic turn loop (ask_user + propose_product_plan) instead of a one-shot
+ *  tool-less completion, so the model can ask the few clarifying questions
+ *  that matter before committing to a plan — the same "plan-first" philosophy
+ *  the harness already promises for normal coding sessions (plan-default.ts).
+ *  An ask_user pause returns here with `awaitingUser` set; the caller's normal
+ *  answer-routing (same path every other ask_user pause uses) resumes the
+ *  conversation — greenfield mode stays on the session across that pause, so
+ *  the resumed send still offers propose_product_plan. Does not dump JSON. */
 export async function runGreenfieldPlanning(
   dir: string,
   description: string,
   echo: (s: string) => void,
   stack: IStackAdapter,
   ui: IGreenfieldPlanningUi,
-  propose: GreenfieldPropose
-): Promise<void> {
+  session: IGreenfieldSession,
+  opts: { signal?: AbortSignal } = {}
+): Promise<{ status: string; turns: number; awaitingUser?: string }> {
   echo("▸ planning your product first…  Ctrl+C cancels\n");
   ui.startLive?.();
   ui.report({
@@ -398,30 +454,54 @@ export async function runGreenfieldPlanning(
     message: PLANNER_LABEL,
   });
 
-  const seen = new Set<string>();
-  let raw = "";
+  const constraints = greenfieldConstraints(stack, echo);
 
-  const onToken = (
-    text: string,
-    channel: "reasoning" | "content" | "tool"
-  ): void => {
-    if (channel !== "content") {
+  const onProposed = async (plan: IProductPlan): Promise<void> => {
+    const normalized = normalizePlanDraft(
+      productPlanToDraft(plan),
+      plan.product
+    );
+
+    if (!normalized.ok) {
+      echo(`▸ ${normalized.error}\n`);
+
       return;
     }
 
-    raw += text;
-
-    for (const id of plannerSliceIds(raw)) {
-      if (seen.has(id)) {
-        continue;
-      }
-
-      seen.add(id);
-      ui.note?.(`· ${id}\n`);
-    }
+    await writePlan(dir, plan, "draft");
+    ui.present(normalized.plan);
   };
 
-  const fail = (message: string): void => {
+  session.setGreenfieldMode(true, {
+    validate: (raw) => validateProductPlan(raw, stack, constraints),
+    onProposed,
+  });
+
+  try {
+    const result = await session.send(
+      `Product description: ${description}`,
+      opts
+    );
+
+    if (result.awaitingUser !== undefined) {
+      // Leave greenfield mode ON — the human's answer resumes this same
+      // conversation through the normal answer-routing path, and the session
+      // still offers ask_user/propose_product_plan for that resumed send.
+      return result;
+    }
+
+    session.setGreenfieldMode(false);
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: result.status === "done" || result.status === "responded",
+    });
+
+    return result;
+  } catch (err) {
+    session.setGreenfieldMode(false);
     ui.report({
       kind: "agent_result",
       task: "session",
@@ -429,60 +509,25 @@ export async function runGreenfieldPlanning(
       message: PLANNER_LABEL,
       passed: false,
     });
-    echo(message);
-  };
 
-  try {
-    let plan;
+    const aborted =
+      (err instanceof Error && err.name === "AbortError") ||
+      (err instanceof Error && /abort/i.test(err.message));
 
-    try {
-      plan = await propose(description, stack, echo, onToken);
-    } catch (err) {
-      const aborted =
-        (err instanceof Error && err.name === "AbortError") ||
-        (err instanceof Error && /abort/i.test(err.message));
-
-      if (aborted) {
-        fail("▸ planner cancelled\n");
-
-        return;
-      }
-
-      const message = err instanceof Error ? err.message : String(err);
-
-      fail(`▸ planner failed: ${message}\n`);
-
-      return;
-    }
-
-    if (plan === null) {
-      fail(
-        "▸ planner did not return a usable plan — try a more specific description\n"
-      );
-
-      return;
-    }
-
-    const normalized = normalizePlanDraft(
-      productPlanToDraft(plan),
-      plan.product
+    echo(
+      aborted
+        ? "▸ planner cancelled\n"
+        : `▸ planner failed: ${err instanceof Error ? err.message : String(err)}\n`
     );
 
-    if (!normalized.ok) {
-      fail(`▸ ${normalized.error}\n`);
-
-      return;
-    }
-
-    await writePlan(dir, plan, "draft");
-    ui.present(normalized.plan);
-    ui.report({
-      kind: "agent_result",
-      task: "session",
-      agentId: PLANNER_AGENT_ID,
-      message: PLANNER_LABEL,
-      passed: true,
-    });
+    // Resolve, don't throw — matches the prior one-shot planner's contract
+    // (it never let an exception escape) and drive()'s: it has no catch
+    // around its own run(opts) call, so a throw here would skip persist()/
+    // reviewAfterGreen() and propagate uncaught into the REPL's line loop.
+    return {
+      status: aborted ? "interrupted" : "stuck",
+      turns: 0,
+    };
   } finally {
     ui.stopLive?.();
   }
@@ -1754,37 +1799,20 @@ export async function repl(args: ICliArgs): Promise<number> {
     },
   };
 
-  const proposeProductPlan: GreenfieldPropose = async (
-    description,
-    stack,
-    echoPlan,
-    onToken
-  ) => {
-    const plannerResolved = await resolveCapabilityModel("planner");
-    const plannerProvider = makeProvider(
-      plannerResolved?.entry ?? activeModelEntry
-    );
-
-    return proposePlan(
-      {
-        planner: plannerProvider,
-        onToken,
-        ...(active === null ? {} : { signal: active.signal }),
-      },
-      { description },
-      stack.planSchema,
-      greenfieldConstraints(stack, echoPlan)
-    );
-  };
-
+  // Greenfield planning is a real turn on THIS session (not a second Session,
+  // not a raw tool-less completion) — session.setGreenfieldMode/send already
+  // satisfy IGreenfieldSession structurally, so it's passed straight through.
   const planProduct = (stack: IStackAdapter, line: string): Promise<void> =>
-    runGreenfieldPlanning(
-      args.dir,
-      line,
-      echo,
-      stack,
-      greenfieldUi,
-      proposeProductPlan
+    drive((opts) =>
+      runGreenfieldPlanning(
+        args.dir,
+        line,
+        echo,
+        stack,
+        greenfieldUi,
+        session,
+        opts
+      )
     );
 
   const dispatch = async (line: string): Promise<void> => {

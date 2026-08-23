@@ -122,6 +122,7 @@ import {
   TASK_ADD_TOOL,
   TASK_UPDATE_TOOL,
   PRESENT_PLAN_TOOL,
+  PROPOSE_PRODUCT_PLAN_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -214,7 +215,8 @@ type AdvertisedTool =
   | typeof TASK_UNCOMPLETE_TOOL
   | typeof TASK_ADD_TOOL
   | typeof TASK_UPDATE_TOOL
-  | typeof PRESENT_PLAN_TOOL;
+  | typeof PRESENT_PLAN_TOOL
+  | typeof PROPOSE_PRODUCT_PLAN_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
  *  image tools are advertised. Resolved once by the driver (run.ts) so
@@ -319,7 +321,8 @@ export function toolsFor(
   offerAskUser = false,
   conventionTopics: readonly string[] = [],
   offerTaskTools = false,
-  offerPresentPlan = false
+  offerPresentPlan = false,
+  offerProductPlan = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -345,6 +348,13 @@ export function toolsFor(
   const askUser: AdvertisedTool[] = offerAskUser ? [ASK_USER_TOOL] : [];
   const presentPlan: AdvertisedTool[] = offerPresentPlan
     ? [PRESENT_PLAN_TOOL]
+    : [];
+  // propose_product_plan — greenfield product planning's structured-output tool.
+  // Offered only during Session.setGreenfieldMode(true), independent of
+  // present_plan/plan mode (a different flow: pre-approval discovery for a NEW
+  // product, not read-only exploration of an existing one).
+  const productPlan: AdvertisedTool[] = offerProductPlan
+    ? [PROPOSE_PRODUCT_PLAN_TOOL]
     : [];
 
   // Session-bound checklist tools — only when a plan was approved for this session
@@ -379,6 +389,7 @@ export function toolsFor(
       ...check,
       ...askUser,
       ...presentPlan,
+      ...productPlan,
       ...taskTools,
       ...web,
       ...git,
@@ -510,6 +521,12 @@ export interface ILoopCtxTool {
   onPlanChanged?: IToolContext["onPlanChanged"];
   /** present_plan proposal callback (REPL renders pending plan). */
   onPlanPresented?: IToolContext["onPlanPresented"];
+  /** propose_product_plan's schema-aware validator — a closure
+   *  runGreenfieldPlanning builds with the concrete stack schema in scope. Set
+   *  only while Session.setGreenfieldMode(true) is active. */
+  productPlanValidate?: IToolContext["productPlanValidate"];
+  /** propose_product_plan proposal callback (REPL renders the PLAN card). */
+  onProductPlanProposed?: IToolContext["onProductPlanProposed"];
   /** Gate rail refresh after settle / rollback. */
   onGateChanged?: IToolContext["onGateChanged"];
 }

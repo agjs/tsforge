@@ -9,6 +9,7 @@ import type { IValidateResult } from "../../validate/validate.types";
 import type { IConventionProvider } from "../conventions-provider";
 import type { IPlanDocument } from "../worklist/checklist.types";
 import type { IGateRailView } from "../session-gate-view";
+import type { IProductPlan } from "../planning/plan-types";
 
 /** What one on-demand gate run produced for the `check` tool: the standard
  *  validate result PLUS the files the gate's autofix reformatted/rewrote on disk
@@ -212,6 +213,19 @@ export interface IToolContext {
   onPlanChanged?: (plan: IPlanDocument) => void;
   /** Fired when present_plan validates a proposal (pending until human approve). */
   onPlanPresented?: (plan: IPlanDocument) => void;
+  /** Validate + strip a raw propose_product_plan payload against the active
+   *  greenfield stack's schema/constraints. A closure `runGreenfieldPlanning`
+   *  builds with the concrete stack schema in scope (Phaser/BoringStack), so
+   *  this generic tool-context stays schema-agnostic — same generic/erased
+   *  split `proposePlan<TUi>` already uses. Absent ⇒ propose_product_plan
+   *  refuses (see offerProductPlan / Session.setGreenfieldMode). */
+  productPlanValidate?: (
+    raw: unknown
+  ) => { ok: true; plan: IProductPlan } | { ok: false; error: string };
+  /** Fired when propose_product_plan validates a proposal (pending until human
+   *  approve) — awaited before the tool call returns, so the draft is on disk
+   *  and the PLAN card is rendered before the model's next turn. */
+  onProductPlanProposed?: (plan: IProductPlan) => Promise<void> | void;
   /** Fired after gate settle / rollback — REPL refreshes the Gate rail. */
   onGateChanged?: (view: IGateRailView) => void;
 }

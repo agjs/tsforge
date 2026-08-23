@@ -335,6 +335,10 @@ export interface ISessionConfig {
   onPlanChanged?: (plan: IPlanDocument) => void;
   /** Fired when present_plan proposes a plan (REPL renders pending proposal). */
   onPlanPresented?: (plan: IPlanDocument) => void;
+  /** Put `propose_product_plan` in `this.tools`. `offeredToolsFor` still
+   *  withholds it outside greenfield mode (see `setGreenfieldMode`). REPL
+   *  always true — same posture as `offerPresentPlan`. */
+  offerProductPlan?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -1354,6 +1358,12 @@ export class Session {
    *  advertised tool list per call — `this.tools` itself is never mutated, so
    *  toggling off restores everything with zero bookkeeping. */
   private planMode = false;
+  /** GREENFIELD planning discovery: a transient state distinct from `planMode`
+   *  (pre-approval discovery for a NEW product, not read-only exploration of an
+   *  existing one). Filters `propose_product_plan` into the advertised set per
+   *  call, same "this.tools never mutated" posture as planMode. Set/cleared by
+   *  `setGreenfieldMode` — never a second `Session.create()`. */
+  private greenfieldMode = false;
   /**
    * Set when Phase B continues after GREEN with an open checklist — the next
    * driveInner iteration must reset readonly-spin counters (fresh item work).
@@ -1473,7 +1483,8 @@ export class Session {
       cfg.humanPresent === true,
       conventionTopics,
       cfg.offerTaskTools === true,
-      cfg.offerPresentPlan === true
+      cfg.offerPresentPlan === true,
+      cfg.offerProductPlan === true
     );
 
     this.ctx = ctx;
@@ -1986,6 +1997,30 @@ export class Session {
     // (e.g. an explicit --policy-mode ci), not a hard reset to "default".
     this.ctx.tool.policyMode = on ? "plan" : this.baseMode;
     this.planIntroPending = on;
+  }
+
+  /** Toggle GREENFIELD planning discovery for the CURRENT send — distinct from
+   *  `setPlanMode` (read-only exploration of an EXISTING codebase). ON wires
+   *  `propose_product_plan`'s validator + proposal callback onto the ambient
+   *  tool context and advertises the tool; OFF clears both. Never a second
+   *  `Session.create()` — same live session, same TUI, just a transient flag,
+   *  so runGreenfieldPlanning can safely call this per-send without recreating
+   *  session state (deferred gates, plan mode, activePlanId, …). */
+  setGreenfieldMode(
+    on: boolean,
+    hooks?: {
+      readonly validate: IToolContext["productPlanValidate"];
+      readonly onProposed: IToolContext["onProductPlanProposed"];
+    }
+  ): void {
+    this.greenfieldMode = on;
+    this.ctx.tool.productPlanValidate = on ? hooks?.validate : undefined;
+    this.ctx.tool.onProductPlanProposed = on ? hooks?.onProposed : undefined;
+    // Same hard guarantee setPlanMode gives GENERAL plan mode — mutating tools
+    // are rejected at dispatch even on a salvaged/forced call, not just
+    // withheld from advertisement. OR with planMode so turning greenfield off
+    // never clobbers a separately-active plan mode's guarantee.
+    this.ctx.tool.readOnly = on || this.planMode;
   }
 
   /** Bind this session to a plan file id (after approve or `--continue`). Offers
@@ -2713,7 +2748,8 @@ export class Session {
         suppressedIntegrationServers(this.ctx.tool)
       ),
       activeOverlay()?.toolOverrides ?? [],
-      this.activePlanId !== null && this.activePlanId.length > 0
+      this.activePlanId !== null && this.activePlanId.length > 0,
+      this.greenfieldMode
     );
 
     // Readonly-spin recovery: withhold read/search so soft text cannot be ignored.
@@ -3238,11 +3274,22 @@ export class Session {
       };
     }
 
-    const readonlyStreak = nextReadonlyStreak({
-      previous: carry.readonlyStreak,
-      progressed,
-      attemptedWrite,
-    });
+    // The readonly-spin detector exists to catch a model that CAN write but
+    // won't — it's a category error when write tools aren't even offered
+    // (plan mode / greenfield planning: `ctx.tool.readOnly` is the same hard
+    // guarantee that already rejects a mutating call at dispatch). "Only
+    // reading" is the CORRECT, expected behavior there, not a stuck signal —
+    // pin the streak at 0 rather than escalating a session that structurally
+    // cannot do anything else. The per-send `maxTurns` backstop still bounds
+    // a genuinely runaway read-only-mode session.
+    const readonlyStreak =
+      this.ctx.tool.readOnly === true
+        ? 0
+        : nextReadonlyStreak({
+            previous: carry.readonlyStreak,
+            progressed,
+            attemptedWrite,
+          });
 
     if (readonlyStreak === 0) {
       return {

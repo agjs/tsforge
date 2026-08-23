@@ -401,24 +401,29 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
   });
 });
 
-// The multi-adapter planning claim: runGreenfieldPlanning must plan through the RESOLVED
-// adapter's schema (`stack.planSchema`), not a hardcoded boringstack schema.
-const SCHEMA_WIRING = "proposePlan($$$A, $$$B, stack.planSchema, $$$C)";
+// The multi-adapter planning claim: propose_product_plan's validator must read the
+// RESOLVED adapter's schema (`stack.planSchema`), not a hardcoded boringstack/phaser
+// schema. Greenfield planning now routes through the real turn loop
+// (validateProductPlan), not a direct proposePlan(..., stack.planSchema, ...) call —
+// the schema-resolution seam moved but the same "never hardcode a stack's schema"
+// property must still hold.
+const SCHEMA_WIRING = "const schema = stack.planSchema;";
 
-describe("runGreenfieldPlanning plans through the RESOLVED adapter's schema (ast-grep guard)", () => {
-  test("the real proposePlan call passes stack.planSchema (the resolved adapter's)", () => {
+describe("validateProductPlan reads the RESOLVED adapter's schema (ast-grep guard)", () => {
+  test("the real validateProductPlan reads stack.planSchema (the resolved adapter's)", () => {
     expect(countMatches(SCHEMA_WIRING, REPL_TS)).toBe(1);
   });
 
-  test("SANITY: the resolved-schema call shape matches (so the negative fails for the right reason)", async () => {
-    const ok = "proposePlan(deps, input, stack.planSchema, constraints);";
+  test("SANITY: the resolved-schema shape matches (so the negative fails for the right reason)", async () => {
+    const ok =
+      "function validateProductPlan(raw, stack, constraints) { const schema = stack.planSchema; }";
 
     expect(await countOnPat(SCHEMA_WIRING, ok)).toBe(1);
   });
 
-  test("rejects a proposePlan call that hardcodes a concrete schema (the seam-bypass regression)", async () => {
+  test("rejects code that hardcodes a concrete schema (the seam-bypass regression)", async () => {
     const hardcoded =
-      "proposePlan(deps, input, boringstackPlanSchema, constraints);";
+      "function validateProductPlan(raw, stack, constraints) { const schema = boringstackPlanSchema; }";
 
     expect(await countOnPat(SCHEMA_WIRING, hardcoded)).toBe(0);
   });

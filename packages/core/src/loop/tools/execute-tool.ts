@@ -30,6 +30,7 @@ import {
   doTaskUpdate,
 } from "./task-tools";
 import { doPresentPlan } from "./present-plan-tool";
+import { doProposeProductPlan } from "./propose-product-plan-tool";
 import { reject, type IToolContext } from "./tool-context";
 import { planFocusReject } from "./plan-focus-gate";
 import {
@@ -99,6 +100,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.taskAdd]: doTaskAdd,
   [TOOL_NAME.taskUpdate]: doTaskUpdate,
   [TOOL_NAME.presentPlan]: doPresentPlan,
+  [TOOL_NAME.productPlan]: doProposeProductPlan,
 };
 
 function isToolName(name: string): name is ToolName {

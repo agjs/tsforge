@@ -16,10 +16,12 @@ import {
   stackHasProductPlan,
   PLANNER_AGENT_ID,
   PLANNER_LABEL,
-  type GreenfieldPropose,
+  type IGreenfieldSession,
+  type ProductPlanValidation,
 } from "../src/cli/repl";
 import { Session } from "../src/loop";
 import type { ILoopEvent } from "../src/loop";
+import type { IProductPlan } from "../src/loop/planning/plan-types";
 import { phaserStackAdapter } from "../src/loop/phaser/planning";
 import {
   PLANNER_EXAMPLE,
@@ -30,6 +32,7 @@ import { formatPlanProposal } from "../src/loop/worklist/panel";
 import { persistPlanDocument } from "../src/loop/worklist";
 import { AgentTreeModel, renderAgentTree } from "../src/render/agent-tree";
 import { VirtualScreen } from "./helpers/virtual-screen";
+import type { IProvider } from "../src/inference";
 
 const dirs: string[] = [];
 
@@ -69,11 +72,33 @@ async function sessionIn(dir: string): Promise<Session> {
   });
 }
 
-const fixturePropose: GreenfieldPropose = async (_d, _s, _e, onToken) => {
-  onToken(JSON.stringify(PLANNER_EXAMPLE), "content");
+/** Fake IGreenfieldSession — simulates the model calling propose_product_plan
+ *  with the fixture plan on the first send, without a live model or the real
+ *  turn loop (that path is covered end-to-end by propose-product-plan-tool.test.ts
+ *  and the ask_user pause/resume case below). */
+function fixtureGreenfieldSession(): IGreenfieldSession {
+  let hooks:
+    | {
+        readonly validate: (raw: unknown) => ProductPlanValidation;
+        readonly onProposed: (plan: IProductPlan) => Promise<void>;
+      }
+    | undefined;
 
-  return PLANNER_EXAMPLE;
-};
+  return {
+    setGreenfieldMode(on, h) {
+      hooks = on ? h : undefined;
+    },
+    async send() {
+      const result = hooks?.validate(PLANNER_EXAMPLE);
+
+      if (result?.ok === true) {
+        await hooks?.onProposed(result.plan);
+      }
+
+      return { status: "done", turns: 1 };
+    },
+  };
+}
 
 describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () => {
   test("presents the yellow PLAN card, not a JSON blob, and sets pendingPlan (pane path, no readline)", async () => {
@@ -81,7 +106,6 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
     const session = await sessionIn(dir);
     const echoes: string[] = [];
     const events: ILoopEvent[] = [];
-    const notes: string[] = [];
     let painted = "";
 
     session.setOnPlanPresented((plan) => {
@@ -103,11 +127,8 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
         present: (plan) => {
           session.presentHarnessPlan(plan);
         },
-        note: (text) => {
-          notes.push(text);
-        },
       },
-      fixturePropose
+      fixtureGreenfieldSession()
     );
 
     const echoText = echoes.join("");
@@ -157,8 +178,6 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
     expect(kinds[1]).toBe("agent_started");
     expect(kinds).not.toContain("token");
     expect(kinds.at(-1)).toBe("agent_result");
-    expect(notes.join("")).toContain("· Flap");
-    expect(notes.join("")).not.toContain("mustRemainTrue");
     expect(events[0]?.agentId).toBe(PLANNER_AGENT_ID);
     expect(events[0]?.message).toBe(PLANNER_LABEL);
     expect(events.at(-1)?.passed).toBe(true);
@@ -206,7 +225,7 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
           session.presentHarnessPlan(plan);
         },
       },
-      fixturePropose
+      fixtureGreenfieldSession()
     );
 
     const afterPresent = {
@@ -297,5 +316,106 @@ describe("Phaser greenfield UX — PLAN card, pending plan, approve binds", () =
 
     expect(planned).toBe(1);
     expect(sent).toBe(0);
+  });
+});
+
+describe("greenfield planning asks the few clarifying questions that matter (real session, real turn loop)", () => {
+  test("ask_user pauses mid-planning; the human's answer resumes the SAME session, then propose_product_plan renders the PLAN card", async () => {
+    const dir = await phaserDir();
+    let turn = 0;
+
+    const provider: IProvider = {
+      async complete() {
+        turn += 1;
+
+        if (turn === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "ask_user",
+                arguments: {
+                  question:
+                    "Should hitting a pipe end the run, or just bounce?",
+                },
+              },
+            ],
+          };
+        }
+
+        if (turn === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "2",
+                name: "propose_product_plan",
+                arguments: {
+                  product: PLANNER_EXAMPLE.product,
+                  slices: PLANNER_EXAMPLE.slices,
+                },
+              },
+            ],
+          };
+        }
+
+        // A well-behaved model stops calling tools once it's been told to wait
+        // for approval — plain text, no tool calls, so the turn yields normally
+        // instead of tripping the readonly-spin escalation ladder.
+        return { content: "sounds good, let me know!", toolCalls: [] };
+      },
+    };
+
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      humanPresent: true,
+      offerProductPlan: true,
+    });
+
+    let painted = "";
+
+    session.setOnPlanPresented((plan) => {
+      painted = formatPlanProposal(plan, 80, false);
+    });
+
+    const first = await runGreenfieldPlanning(
+      dir,
+      "a flappy bird clone",
+      () => undefined,
+      phaserStackAdapter,
+      {
+        report: () => undefined,
+        present: (plan) => {
+          session.presentHarnessPlan(plan);
+        },
+      },
+      session
+    );
+
+    // Paused on the model's question — nothing presented yet.
+    expect(first.status).toBe("responded");
+    expect(first.awaitingUser).toContain("bounce");
+    expect(painted).toBe("");
+
+    // The human's answer resumes the SAME conversation via the ordinary
+    // session.send path (exactly what the REPL's answer-routing calls) — not
+    // a second runGreenfieldPlanning call, and not a second Session.
+    const second = await session.send("bounce off pipes, no crash");
+
+    // Not another pause — the turn settled after propose_product_plan (a
+    // read-only tool: nothing to gate, so it yields "responded" rather than
+    // "done", which is reserved for a mutating turn's green gate).
+    expect(second.awaitingUser).toBeUndefined();
+    expect(second.status).toBe("responded");
+    expect(painted).toContain("PLAN");
+    expect(painted).toContain("Flap");
+    expect(session.getPendingPlan()).not.toBeNull();
+
+    const stored = await readPlan(dir, phaserPlanSchema);
+
+    expect(stored?.status).toBe("draft");
   });
 });

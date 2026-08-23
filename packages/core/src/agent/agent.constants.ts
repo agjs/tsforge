@@ -56,6 +56,7 @@ export const TOOL_NAME = {
   taskAdd: "task_add",
   taskUpdate: "task_update",
   presentPlan: "present_plan",
+  productPlan: "propose_product_plan",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -163,6 +164,12 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // Propose a structured plan for human approve — no workspace / disk write until
   // approve. Plan-mode-safe. Offered in plan mode only (see offeredToolsFor).
   [TOOL_NAME.presentPlan]: { readOnly: true, scriptExposable: false },
+  // Same posture as present_plan (structured proposal, no disk write until
+  // approve), but for a GREENFIELD product plan (entity/ui/verification slices)
+  // rather than a checklist. Offered only during greenfield planning discovery
+  // (see Session.setGreenfieldMode). Not script-exposable — interactive control
+  // flow, not a data call a program should make.
+  [TOOL_NAME.productPlan]: { readOnly: true, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -1453,6 +1460,85 @@ export const PRESENT_PLAN_TOOL = {
           },
         },
       },
+    },
+  },
+} as const;
+
+const PRODUCT_PLAN_SLICE_SCHEMA = {
+  type: "object",
+  properties: {
+    entity: {
+      type: "object",
+      description: "The domain entity this slice is built around.",
+      properties: {
+        id: { type: "string", description: "PascalCase, e.g. 'Bookmark'." },
+        desc: { type: "string" },
+        fields: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              type: { type: "string" },
+              optional: { type: "boolean" },
+            },
+            required: ["name", "type"],
+          },
+        },
+        relationships: {
+          type: "array",
+          items: { type: "string" },
+          description: "e.g. 'belongsTo User'.",
+        },
+        rules: { type: "array", items: { type: "string" } },
+      },
+      required: ["id", "desc", "fields", "relationships", "rules"],
+    },
+    // Stack-specific UI intent (screens/nav/layout for BoringStack, scene/kind/
+    // feature for Phaser) — deliberately loose at the wire level; the handler
+    // validates it strictly against the active stack's IPlanSchema.validateUi.
+    ui: { type: "object" },
+    verification: {
+      type: "object",
+      properties: {
+        mustRemainTrue: { type: "array", items: { type: "string" } },
+        mustNotHappen: { type: "array", items: { type: "string" } },
+        acceptanceCheck: {
+          type: "string",
+          description: "Runnable command, outcome-oriented.",
+        },
+      },
+      required: ["mustRemainTrue", "mustNotHappen", "acceptanceCheck"],
+    },
+  },
+  required: ["entity", "ui", "verification"],
+} as const;
+
+export const PROPOSE_PRODUCT_PLAN_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.productPlan,
+    description:
+      "Propose the structured GREENFIELD PRODUCT plan for human approval. Call when " +
+      "ready — do NOT dump JSON into chat. If the one-line product description leaves a " +
+      "genuine product decision unresolved (not something you could reasonably assume), " +
+      "ask_user first; otherwise propose directly. Does not write files or unlock editing " +
+      "until they approve. If rejected for an invalid slice, fix what the error names and " +
+      "call again.",
+    parameters: {
+      type: "object",
+      properties: {
+        product: {
+          type: "string",
+          description: "One-paragraph product purpose.",
+        },
+        slices: {
+          type: "array",
+          description: "Non-empty list of entity/ui/verification slices.",
+          items: PRODUCT_PLAN_SLICE_SCHEMA,
+        },
+      },
+      required: ["product", "slices"],
     },
   },
 } as const;
