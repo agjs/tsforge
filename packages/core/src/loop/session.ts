@@ -1165,6 +1165,17 @@ function gateIntegrityRed(key: string, message: string): IValidateResult {
   };
 }
 
+/** Indirection so a stale post-`await` read of `state.active` can't be narrowed
+ *  to a compile-time literal: `setGate` mutates the SAME `state` object from a
+ *  different closure, invisible to this file's control-flow analysis, so a
+ *  direct `state.active` read after an `await` looks "always true" to the
+ *  checker even though it can genuinely have flipped to `false` by then (the
+ *  whole point of the re-check below). A function boundary forces a fresh,
+ *  unnarrowed `boolean` read. */
+function isGateStillActive(state: { active: boolean }): boolean {
+  return state.active;
+}
+
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
@@ -1256,6 +1267,14 @@ function makeAutoGateRunner(
           }
         );
 
+        // Re-check: `setGate` may have fired WHILE the awaits above were in
+        // flight. A manual override must win — apply nothing from this now-
+        // stale resolution and fall through to the manual command below,
+        // rather than silently reverting `setGate`'s effect.
+        if (!isGateStillActive(state)) {
+          return validate(ctx.task, cwd, parse, opts ?? {});
+        }
+
         // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
         // --continue / a /clear rebuild, so a display label would run as a
         // command. Only adopt it when something actually GATED — a nothing-
@@ -1280,6 +1299,13 @@ function makeAutoGateRunner(
 
       if (state.active) {
         const r = await resolve();
+
+        // Re-check: `setGate` may have fired WHILE `resolve()` was in flight —
+        // its `state.active` read above is now stale. A manual override must
+        // win, not get silently reverted by a resolution that started before it.
+        if (!isGateStillActive(state)) {
+          return validate(ctx.task, cwd, parse, opts ?? {});
+        }
 
         if (r.downgrade !== undefined) {
           // The re-resolved gate fell below the session's stage floor (e.g.
