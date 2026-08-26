@@ -8,6 +8,7 @@ import { LOOP_LIMITS, RUN_STATUS } from "../src/loop";
 import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import type { IErrorItem } from "../src/validate";
 import { commandGate } from "../src/gate/gate-runner";
+import { TsService } from "../src/lsp";
 
 /** The settleGate steps extracted for unit testing (review item 4): checkStuck
  *  composes the three convergence guards; autoFixStep reports what the janitor
@@ -363,6 +364,55 @@ describe("autoFixStep", () => {
     // …the now-out-of-scope touched file is left exactly as it was.
     expect(readFileSync(join(dir, "out.ts"), "utf8")).toBe(messy);
   }, 30_000);
+
+  // Same #103-shaped bug, but for the TS quick-fix janitor rather than the format
+  // step: task.files defaults to the whole repo in the interactive REPL, and
+  // resolving that glob made tsFixAll re-scan and "fix" every file in the
+  // scaffold on every gate cycle, not just what the model wrote this turn. It
+  // must scope to ctx.tool.touched like the format step already does.
+  test("whole-repo scope → tsFixAll only fixes the TOUCHED file, untouched sibling left alone", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-tsfix-"));
+
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ES2022",
+          module: "ES2022",
+          strict: true,
+          noUnusedLocals: true,
+          noEmit: true,
+          skipLibCheck: true,
+        },
+        include: ["*.ts"],
+      })
+    );
+
+    const withUnusedLocal =
+      "export function f(): number {\n  const unused = 1;\n  return 2;\n}\n";
+
+    writeFileSync(join(dir, "touched.ts"), withUnusedLocal);
+    writeFileSync(join(dir, "sibling.ts"), withUnusedLocal);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["**/*"] },
+      tool: { touched: new Set(["touched.ts"]) },
+      tsService: new TsService(dir),
+    };
+
+    await autoFixStep(ctx);
+
+    // The touched file's unused local was fixed away…
+    expect(readFileSync(join(dir, "touched.ts"), "utf8")).not.toContain(
+      "unused"
+    );
+    // …and the untouched sibling — in scope via the whole-repo glob, but never
+    // written by the model — is left exactly as it was.
+    expect(readFileSync(join(dir, "sibling.ts"), "utf8")).toBe(withUnusedLocal);
+  });
 });
 
 describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {

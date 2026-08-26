@@ -6,7 +6,11 @@ import { resolveGate } from "../src/cli/gate-setup";
 import { parseArgs } from "../src/cli";
 import { profileFlagError, policyModeFlagError } from "../src/cli/args";
 import { isProfileId } from "../src/config/profiles";
-import { autoGateCarry, resumedProfileArg } from "../src/cli/repl";
+import {
+  autoGateCarry,
+  reboundGateForRebuild,
+  resumedProfileArg,
+} from "../src/cli/repl";
 import {
   saveSession,
   loadSession,
@@ -647,6 +651,74 @@ test("resumedProfileArg keeps a resumed session's profile unless the CLI passes 
   // A corrupted / hand-edited saved profile is IGNORED (never applied or re-persisted).
   expect(resumedProfileArg("", rec("bogus"))).toBe("");
   expect(resumedProfileArg("", rec("__proto__"))).toBe("");
+});
+
+// TS5058: `.tsforge/tsconfig.gate.json` is an EPHEMERAL overlay `tscPart()` writes
+// fresh relative to whatever directory the gate was resolved against. A /scaffold
+// or /dir directory change must re-resolve the gate fresh against the NEW cwd, not
+// carry the OLD directory's auto-gate resolver forward — else the resolver keeps
+// writing the overlay under the OLD dir while the gate's `-p` path resolves
+// against the NEW one, and every gate run fails forever with a path the model can
+// never fix (it's a harness artifact, not something in its editable scope).
+test("reboundGateForRebuild re-resolves fresh on a directory change, not the old dir's gate", async () => {
+  const oldDirGate = {
+    accept: "tsc -p OLD/.tsforge/tsconfig.gate.json",
+    autoGate: async () => ({
+      command: "tsc -p OLD/.tsforge/tsconfig.gate.json",
+      stackProfile: {
+        name: "old",
+        packs: [],
+        confidence: "guess" as const,
+        reason: "",
+      },
+    }),
+    autoGateActive: true,
+  };
+
+  let resolveCalls = 0;
+
+  const fakeResolve = async () => {
+    resolveCalls += 1;
+
+    return {
+      accept: "tsc -p NEW/.tsforge/tsconfig.gate.json",
+      gateLabel: "auto gate (tsc)",
+      autoGate: async () => ({
+        command: "tsc -p NEW/.tsforge/tsconfig.gate.json",
+        stackProfile: {
+          name: "new",
+          packs: [],
+          confidence: "guess" as const,
+          reason: "",
+        },
+      }),
+    };
+  };
+
+  const args = { ...parseArgs([]), dir: "/new/dir" };
+
+  const unchanged = await reboundGateForRebuild(
+    args,
+    false,
+    oldDirGate,
+    fakeResolve
+  );
+
+  expect(unchanged.accept).toBe(oldDirGate.accept);
+  expect(unchanged.autoGate).toBe(oldDirGate.autoGate);
+  expect(resolveCalls).toBe(0);
+
+  const changed = await reboundGateForRebuild(
+    args,
+    true,
+    oldDirGate,
+    fakeResolve
+  );
+
+  expect(resolveCalls).toBe(1);
+  expect(changed.accept).toBe("tsc -p NEW/.tsforge/tsconfig.gate.json");
+  expect(changed.accept).not.toBe(oldDirGate.accept);
+  expect(changed.autoGate).not.toBe(oldDirGate.autoGate);
 });
 
 // A typo'd or value-less `--profile` must fail loudly (return an error), not silently run
