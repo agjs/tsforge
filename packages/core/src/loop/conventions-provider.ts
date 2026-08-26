@@ -24,4 +24,10 @@ export interface IConventionProvider {
   /** Gate rules backing a topic. Lets the session state which of them the ACTIVE
    *  profile actually fails on, so a guide never promises enforcement it lacks. */
   rulesForTopic(topic: string): readonly string[];
+  /**
+   * Optional stack-specific path → topic map. When present, the write-time pull
+   * gate uses THIS instead of the core React `pathToConventionTopics`. Phaser
+   * implements it; BoringStack leaves it unset so `.tsx` still maps to anatomy.
+   */
+  topicsForPath?(file: string): readonly string[];
 }

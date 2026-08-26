@@ -136,6 +136,38 @@ export function renderPathTopicMap(available: readonly string[]): string {
 }
 
 /**
+ * Path→topic table from a provider's own `topicsForPath` + probe samples, so a
+ * stack map cannot drift from the function the pull gate actually calls.
+ */
+export function renderProbedPathTopicMap(
+  available: readonly string[],
+  topicsForPath: (file: string) => readonly string[],
+  probes: readonly { readonly label: string; readonly sample: string }[]
+): string {
+  const avail = new Set<string>(available);
+  const rows: [label: string, topics: string][] = [];
+
+  for (const probe of probes) {
+    const topics: string[] = [];
+
+    for (const topic of topicsForPath(probe.sample)) {
+      if (avail.has(topic) && !topics.includes(topic)) {
+        topics.push(topic);
+      }
+    }
+
+    rows.push([probe.label, topics.join(", ")]);
+  }
+
+  const rendered = rows
+    .filter(([, topics]) => topics.length > 0)
+    .map(([label, topics]) => `${label} → ${topics}`)
+    .join("; ");
+
+  return rendered.length > 0 ? `Path→topics: ${rendered}.` : "";
+}
+
+/**
  * Topic ids a first write to `file` requires but the session has not pulled;
  * empty means the write may proceed. Pure — the shared decision both write
  * tools gate on.
@@ -147,6 +179,8 @@ export function missingConventionTopics(
     readonly touched: ReadonlySet<string> | undefined;
     readonly pulledTopics: ReadonlySet<string> | undefined;
     readonly availableTopics: readonly string[];
+    /** Stack mapper; when set, replaces core `pathToConventionTopics`. */
+    readonly topicsForPath?: (file: string) => readonly string[];
   }
 ): string[] {
   if (!opts.conventionsActive) {
@@ -163,7 +197,21 @@ export function missingConventionTopics(
     return [];
   }
 
-  const needed = pathToConventionTopics(norm, opts.availableTopics);
+  const avail = new Set<string>(opts.availableTopics);
+  const needed: string[] = [];
+
+  if (opts.topicsForPath === undefined) {
+    for (const topic of pathToConventionTopics(norm, opts.availableTopics)) {
+      needed.push(topic);
+    }
+  } else {
+    for (const topic of opts.topicsForPath(norm)) {
+      if (avail.has(topic) && !needed.includes(topic)) {
+        needed.push(topic);
+      }
+    }
+  }
+
   const pulled = opts.pulledTopics ?? new Set<string>();
 
   return needed.filter((t) => !pulled.has(t));
@@ -196,6 +244,11 @@ export function conventionPullGate(
     touched: ctx.touched,
     pulledTopics: ctx.pulledTopics,
     availableTopics: provider.topics(),
+    ...(provider.topicsForPath === undefined
+      ? {}
+      : {
+          topicsForPath: (path: string) => provider.topicsForPath?.(path) ?? [],
+        }),
   });
 
   if (missing.length === 0) {

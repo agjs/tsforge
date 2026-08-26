@@ -188,13 +188,14 @@ describe("runScaffold — full boringstack", () => {
       onPhase: (m) => phases.push(m),
     });
 
-    expect(phases).toHaveLength(3);
+    expect(phases).toHaveLength(4);
     expect(phases[0]).toContain("Cloning");
-    expect(phases[1]).toContain("configuration");
-    expect(phases[2]).toContain("Starting services");
+    expect(phases[1]).toContain("Installing dependencies");
+    expect(phases[2]).toContain("configuration");
+    expect(phases[3]).toContain("Starting services");
   });
 
-  test("onPhase reports only clone + configure when boot is skipped", async () => {
+  test("onPhase reports only clone + install + configure when boot is skipped", async () => {
     const { fs } = memFs({
       [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
     });
@@ -208,11 +209,75 @@ describe("runScaffold — full boringstack", () => {
       onPhase: (m) => phases.push(m),
     });
 
-    // Exactly the two non-boot phases, in order — no "starting services" the run
-    // won't perform.
-    expect(phases).toHaveLength(2);
+    // Exactly the three non-boot phases, in order — no "starting services" the
+    // run won't perform.
+    expect(phases).toHaveLength(3);
     expect(phases[0]).toContain("Cloning");
-    expect(phases[1]).toContain("configuration");
+    expect(phases[1]).toContain("Installing dependencies");
+    expect(phases[2]).toContain("configuration");
+  });
+
+  test("installs dependencies at the scaffold root before configuring", async () => {
+    const { fs } = memFs({
+      [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+    });
+    const calls: { cwd: string; argv: readonly string[] }[] = [];
+
+    const run: IScaffoldRunner = (cwd, argv) => {
+      calls.push({ cwd, argv });
+
+      return Promise.resolve<IShellRun>({
+        stdout: argv[1] === "rev-parse" ? `${SHA}\n` : "",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      });
+    };
+
+    await runScaffold(MANIFEST, answers("boringstack"), DEST, {
+      run,
+      fs,
+      boot: { poll: pollUp },
+      skipBoot: true,
+    });
+
+    const installIndex = calls.findIndex(
+      (c) => c.argv[0] === "bun" && c.argv[1] === "install"
+    );
+
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(calls[installIndex]?.cwd).toBe(DEST);
+  });
+
+  test("a failed install throws and never reaches configure/boot", async () => {
+    const { fs } = memFs({
+      [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+    });
+    let bootCalled = false;
+    const run: IScaffoldRunner = (_cwd, argv) =>
+      Promise.resolve<IShellRun>({
+        stdout: argv[1] === "rev-parse" ? `${SHA}\n` : "",
+        stderr:
+          argv[0] === "bun" && argv[1] === "install" ? "network error" : "",
+        exitCode: argv[0] === "bun" && argv[1] === "install" ? 1 : 0,
+        timedOut: false,
+      });
+
+    await expect(
+      runScaffold(MANIFEST, answers("boringstack"), DEST, {
+        run,
+        fs,
+        boot: {
+          poll: () => {
+            bootCalled = true;
+
+            return Promise.resolve(200);
+          },
+        },
+      })
+    ).rejects.toThrow(/bun install failed/iu);
+
+    expect(bootCalled).toBe(false);
   });
 
   test("astro never reports a boot phase (static build, no stack)", async () => {

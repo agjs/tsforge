@@ -21,6 +21,9 @@ const TASK_TOOL_NAMES: ReadonlySet<string> = new Set([
 /** Propose-plan tool — only useful in plan mode (approve binds the proposal). */
 const PRESENT_PLAN_NAME = TOOL_NAME.presentPlan;
 
+/** Greenfield product-plan tool — only useful during Session.setGreenfieldMode. */
+const PRODUCT_PLAN_NAME = TOOL_NAME.productPlan;
+
 /** The minimal shape shared by advertised tools and MCP tool schemas. */
 interface INamedTool {
   readonly function: { readonly name: string; readonly description?: string };
@@ -72,7 +75,8 @@ export function offeredToolsFor<T extends INamedTool, U extends INamedTool>(
   planMode: boolean,
   mcpSchemas: readonly U[],
   wiring: readonly IToolWiring[] = [],
-  offerTaskTools = false
+  offerTaskTools = false,
+  greenfieldMode = false
 ): (T | U)[] {
   const scoped = tools.filter((t) => {
     if (!offerTaskTools && TASK_TOOL_NAMES.has(t.function.name)) {
@@ -84,15 +88,26 @@ export function offeredToolsFor<T extends INamedTool, U extends INamedTool>(
       return false;
     }
 
+    // propose_product_plan only during greenfield discovery — a distinct,
+    // transient state from planMode (pre-approval discovery for a NEW
+    // product, not read-only exploration of an existing one).
+    if (!greenfieldMode && t.function.name === PRODUCT_PLAN_NAME) {
+      return false;
+    }
+
     return true;
   });
-  const base = planMode
-    ? scoped.filter(
-        (t) =>
-          READ_ONLY_TOOL_NAMES.has(t.function.name) ||
-          t.function.name === TOOL_NAME.run
-      )
-    : [...scoped];
+  // Greenfield planning gets the SAME read-only restriction plan mode does —
+  // it is pre-approval discovery for a NEW product, same "cannot mutate yet"
+  // contract, just a distinct transient flag from planMode.
+  const base =
+    planMode || greenfieldMode
+      ? scoped.filter(
+          (t) =>
+            READ_ONLY_TOOL_NAMES.has(t.function.name) ||
+            t.function.name === TOOL_NAME.run
+        )
+      : [...scoped];
 
   const offered = mcpSchemas.length > 0 ? [...base, ...mcpSchemas] : base;
 

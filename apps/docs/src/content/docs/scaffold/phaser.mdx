@@ -13,14 +13,14 @@ owns the clone descriptor (repo, git tag, gate).
 
 ## What you get
 
-| | |
-|---|---|
-| Archetype | `phaser` |
-| Clone | `boringstack-xyz/Phaser-TypeScript-AI-First-Starter` at a pinned tag (`v0.1.6`, overridable with `--ref`) |
-| Demo | The playable WASD grid + pickups + S/R save stays. First features **extend** it. |
-| Gate | `bun run check` |
-| Boot | None — no Docker, no `.env` |
-| Pack | The `phaser` ESLint pack auto-detects from the `phaser` dependency |
+|           |                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| Archetype | `phaser`                                                                                                  |
+| Clone     | `boringstack-xyz/Phaser-TypeScript-AI-First-Starter` at a pinned tag (`v0.1.6`, overridable with `--ref`) |
+| Demo      | The playable WASD grid + pickups + S/R save stays. First features **extend** it.                          |
+| Gate      | `bun run check`                                                                                           |
+| Boot      | None — no Docker, no `.env`                                                                               |
+| Pack      | The `phaser` ESLint pack auto-detects from the `phaser` dependency                                        |
 
 ## When it runs
 
@@ -33,8 +33,13 @@ Or interactively: `/scaffold` → **Phaser** → folder name.
 Off a TTY there are no extra questions (same as Astro). `--ref` overrides the pin;
 `PHASER_TEMPLATE_REPO` clones a local checkout instead of GitHub.
 
-After it finishes, the first agent turn in that directory **plans** the product
-(Phaser view intent: scene / feature / content — not list/detail/form screens).
+After it finishes, the first agent turn in that directory **already has the
+map** — layers, generators (`bun run new:feature|scene|module|content|port`),
+wire points (`gameConfig.ts`, `WorldScene.setup.ts`, `composeRuntime.ts`), the
+reserved demo, and `docs/ai/catalog.md`. It must **not** `/map` or walk `src/`
+to orient. It then **plans** the product (Phaser view intent: scene / feature /
+module / content / port — not list/detail/form screens). Approve the plan and
+tsforge generates + wires each slice, then fills against `bun run check`.
 The starter's Player / Grid / Wall / Movement / Hud / Save are reserved and will
 be stripped if the planner tries to rebuild them.
 
@@ -46,6 +51,7 @@ tsforge --dir ./my-game --accept 'bun run check' "add a coin pickup"
 
 1. **Clone** the Phaser template at the pin, resolving HEAD into `.tsforge/scaffold.json` with `"archetype": "phaser"`.
 2. **Stamp identity** — `package.json` `name` and the HTML title from the folder name.
-3. **Hand off** — no compose, no boot. `bun run check` is the gate.
+3. **Catalog** — if `docs/ai/catalog.md` is missing, run `bun run catalog` (never fails the scaffold).
+4. **Hand off** — no compose, no boot. `bun run check` is the gate. The next tsforge session injects the architecture brief immediately.
 
 See also [BoringStack scaffolding](/scaffold/boringstack/).

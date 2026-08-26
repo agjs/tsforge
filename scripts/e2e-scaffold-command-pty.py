@@ -23,6 +23,7 @@ from ptyharness import (  # noqa: E402
     reap,
     spawn_tsforge,
     start_stub_server,
+    visible_text,
     wait_for,
 )
 
@@ -48,28 +49,18 @@ def main():
     t.check("/scaffold RUNS and opens the wizard (first screen renders)", opened)
     t.check("no 'unknown command' when running /scaffold", "unknown command" not in obuf)
 
-    # Type WHILE the wizard is active. Enter selects the default project type
-    # (boringstack) and MUST advance the archetype step to its Review screen. If the
-    # editor/readline were also consuming stdin, this keystroke would not drive the
-    # wizard forward — this is what proves the wizard owns stdin (the race the panel
-    # flagged on the fire-and-forget browser path).
-    os.write(m, b"\r")
-    # Pane overlay width can soft-truncate the Review subtitle ("…until you Apply"
-    # → "…until y"); match a stable prefix + the selected archetype label.
-    reviewed, _ = read_until(
-        m,
-        lambda b: "Review" in b
-        and "Boringstack" in b
-        and "nothing is written until" in b,
-        10,
+    # Type WHILE the wizard is active. Down×2 + Enter picks Phaser and MUST
+    # advance to "Project directory" — not a Review that re-asks "Choose a
+    # project type". If the editor/readline were also consuming stdin, these
+    # keystrokes would not drive the wizard forward.
+    os.write(m, b"\x1b[B\x1b[B\r")
+    advanced, abuf = read_until(m, lambda b: "Project directory" in b, 10)
+    t.check("Phaser advances to Project directory (not a second type pick)", advanced)
+    vis = visible_text(abuf, rows=24, cols=100)
+    t.check(
+        "visible screen is the folder step, not a Review of project type",
+        "Project directory" in vis and "Review" not in vis,
     )
-    t.check("keystroke reaches the WIZARD (Enter → Review, Boringstack selected)", reviewed)
-
-    # A second Enter applies the archetype choice and opens the config wizard whose
-    # first step is "Project directory" — proving keystrokes keep flowing to the wizard.
-    os.write(m, b"\r")
-    advanced, _ = read_until(m, lambda b: "Project directory" in b, 10)
-    t.check("wizard advances to the config step (Project directory)", advanced)
 
     # Esc cancels the wizard cleanly (awaited path returns, nothing created).
     # Cancel copy may wrap across pane rows ("nothing was" / "created.") — don't

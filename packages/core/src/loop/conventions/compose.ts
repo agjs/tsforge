@@ -81,5 +81,30 @@ export function composeConventionProviders(
 
       return out;
     },
+    ...(providers.some((p) => p.topicsForPath !== undefined)
+      ? {
+          topicsForPath: (file: string): readonly string[] => {
+            const out: string[] = [];
+            const seen = new Set<string>();
+
+            for (const p of providers) {
+              if (p.topicsForPath === undefined) {
+                continue;
+              }
+
+              for (const topic of p.topicsForPath(file)) {
+                if (seen.has(topic) || !seenTopics.has(topic)) {
+                  continue;
+                }
+
+                seen.add(topic);
+                out.push(topic);
+              }
+            }
+
+            return out;
+          },
+        }
+      : {}),
   };
 }

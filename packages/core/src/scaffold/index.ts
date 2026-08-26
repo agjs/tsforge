@@ -15,8 +15,13 @@ export { ARCHETYPES, isArchetype } from "./scaffold.types";
 export { parseManifest, loadBundledManifest } from "./boringstack-manifest";
 export { loadPhaserTemplate } from "./phaser-manifest";
 export { loadScaffoldSource } from "./scaffold-source";
-export { readScaffoldArchetype } from "./receipt";
-export { applyPhaserIdentity, phaserPackageName } from "./apply-phaser";
+export { readScaffoldArchetype, resolveScaffoldedWorkspace } from "./receipt";
+export type { IScaffoldWorkspaceIo } from "./receipt";
+export {
+  applyPhaserIdentity,
+  ensurePhaserCatalog,
+  phaserPackageName,
+} from "./apply-phaser";
 export { parseScaffoldArgs } from "./scaffold-cli";
 export type { IScaffoldCliOptions } from "./scaffold-cli";
 export { answersToPlan } from "./plan";
@@ -41,6 +46,8 @@ export {
   makeScaffoldRunDeps,
 } from "./run-scaffold";
 export type { IScaffoldDeps, IScaffoldOutcome } from "./run-scaffold";
+export { formatScaffoldHandoff } from "./handoff";
+export type { IScaffoldHandoff } from "./handoff";
 export { realRunner, realFs, realPoller } from "./io";
 export type { IScaffoldRunner, IScaffoldFs, IReadyPoller } from "./io";
 export {

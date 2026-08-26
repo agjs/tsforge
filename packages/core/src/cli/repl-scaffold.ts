@@ -1,11 +1,17 @@
 import { runWizard } from "../render/wizard";
-import type { IWizardStep, IWizardView } from "../render/wizard.types";
+import type {
+  IWizardState,
+  IWizardStep,
+  IWizardView,
+} from "../render/wizard.types";
 import {
   buildScaffoldSteps,
   stateToAnswers,
   runScaffold,
   makeScaffoldRunDeps,
   loadScaffoldSource,
+  loadBundledManifest,
+  formatScaffoldHandoff,
   isArchetype,
 } from "../scaffold";
 import { existsSync } from "node:fs";
@@ -45,6 +51,7 @@ export function archetypeStep(): IWizardStep {
     key: "archetype",
     kind: "single",
     title: "Choose a project type",
+    reviewTitle: "Project type",
     explanation: "What would you like to scaffold?",
     evidence: [],
     options: [
@@ -66,6 +73,47 @@ export function archetypeStep(): IWizardStep {
     ],
     defaultIndex: 0,
   };
+}
+
+/** Show a step only for one archetype (and any extra predicate, e.g. askWhen). */
+function whenArchetype(
+  id: string,
+  inner?: (state: IWizardState) => boolean
+): (state: IWizardState) => boolean {
+  return (state) =>
+    state.single.archetype === id && (inner === undefined || inner(state));
+}
+
+/**
+ * One REPL scaffold wizard: project type, then directory, then archetype-specific
+ * questions. Phaser/Astro have no extra config — picking Phaser goes to the
+ * folder name, not a Review that re-asks "Choose a project type".
+ */
+export function buildReplScaffoldSteps(
+  stack: "dev" | "prod" | "smoke" = "dev"
+): readonly IWizardStep[] {
+  const config = buildScaffoldSteps(
+    loadBundledManifest(),
+    "boringstack",
+    stack
+  ).map((step) => ({
+    ...step,
+    visibleWhen: whenArchetype("boringstack", step.visibleWhen),
+  }));
+
+  return [
+    archetypeStep(),
+    projectDirStep(),
+    {
+      ...superuserEmailStep(),
+      visibleWhen: whenArchetype("boringstack"),
+    },
+    {
+      ...superuserPasswordStep(),
+      visibleWhen: whenArchetype("boringstack"),
+    },
+    ...config,
+  ];
 }
 
 /** Free-text step: the initial superuser (admin) login email. boringstack only —
@@ -134,7 +182,7 @@ export function resolveScaffoldDest(
   return { dest };
 }
 
-/** Print the handoff block shown after a successful scaffold. */
+/** Print the handoff card shown after a successful scaffold. */
 function printHandoff(
   out: (s: string) => void,
   dir: string,
@@ -142,30 +190,28 @@ function printHandoff(
   booted: boolean,
   bootError: string | undefined,
   summary: readonly string[],
-  gateCmd: string
+  archetype: string
 ): void {
-  const gateDir = dir;
-
   out(
-    [
-      "",
-      `scaffold ready → ${dir}`,
-      `  cloned   ${resolvedSha}`,
-      `  booted   ${String(booted)}${bootError === undefined ? "" : ` (${bootError})`}`,
-      "",
-      "configured .env:",
-      ...summary.map((l) => `  ${l}`),
-      "",
-      "build it:",
-      `  tsforge --dir ${gateDir} --accept '${gateCmd}' "<your first feature>"`,
-      "",
-    ].join("\n")
+    formatScaffoldHandoff(
+      {
+        dir,
+        sha: resolvedSha,
+        booted,
+        summary,
+        archetype,
+        interactive: true,
+        ...(bootError === undefined ? {} : { bootError }),
+      },
+      process.stdout.isTTY
+    )
   );
 }
 
 /**
- * Launch the in-REPL scaffold wizard: pick an archetype (boringstack/astro/phaser),
- * then clone + configure that template.
+ * Launch the in-REPL scaffold wizard: project type, folder name, then any
+ * archetype-specific questions (one Review at the end). Phaser has no extra
+ * config — choosing it does not re-ask the project type.
  * Suspends the editor during the wizard and resumes in a finally block.
  */
 export async function openScaffoldInRepl(
@@ -174,7 +220,7 @@ export async function openScaffoldInRepl(
   // wizard and passes a fake to verify progress (onPhase) reaches deps.out — without
   // a real clone/boot.
   run: typeof runScaffold = runScaffold
-): Promise<void> {
+): Promise<string | null> {
   deps.suspend();
 
   try {
@@ -191,75 +237,49 @@ export async function openScaffoldInRepl(
         : { viewportRows: deps.viewportRows }),
     };
 
-    // Step 1: Run archetype selection wizard
-    const archetypeState = await runWizard(
-      [archetypeStep()],
-      color,
-      wizardOpts
-    );
+    const stack = "dev";
+    const steps = buildReplScaffoldSteps(stack);
+    const state = await runWizard(steps, color, wizardOpts);
 
-    if (archetypeState.status !== "apply") {
+    if (state.status !== "apply") {
       deps.out("scaffold: cancelled — nothing was created.\n");
 
-      return;
+      return null;
     }
 
-    const selectedArchetype = archetypeState.single.archetype ?? "";
+    const selectedArchetype = state.single.archetype ?? "";
 
     if (!isArchetype(selectedArchetype)) {
       deps.out("scaffold: cancelled — unknown project type.\n");
 
-      return;
+      return null;
     }
 
     const archetype = selectedArchetype;
-    const stack = "dev";
     const manifest = loadScaffoldSource(archetype);
 
-    // Step 2: project directory name, an optional initial admin login (boringstack
-    // only — it has an auth/users layer), then the archetype's configuration steps.
-    const configSteps = buildScaffoldSteps(manifest, archetype, stack);
-    const superuserSteps =
-      archetype === "boringstack"
-        ? [superuserEmailStep(), superuserPasswordStep()]
-        : [];
-    const configState = await runWizard(
-      [projectDirStep(), ...superuserSteps, ...configSteps],
-      color,
-      wizardOpts
-    );
-
-    if (configState.status !== "apply") {
-      deps.out("scaffold: cancelled — nothing was created.\n");
-
-      return;
-    }
-
     // Resolve the destination folder (under cwd, validated, non-existent).
-    const resolved = resolveScaffoldDest(
-      deps.cwd,
-      configState.text.projectDir ?? ""
-    );
+    const resolved = resolveScaffoldDest(deps.cwd, state.text.projectDir ?? "");
 
     if ("error" in resolved) {
       deps.out(`scaffold: ${resolved.error} — nothing was created.\n`);
 
-      return;
+      return null;
     }
 
     const { dest } = resolved;
 
-    // Step 3: Convert state to answers, folding in the optional superuser (only when
+    // Convert state to answers, folding in the optional superuser (only when
     // BOTH email + password were given — the seed needs a complete credential pair).
-    const base = stateToAnswers(manifest, archetype, stack, configState);
-    const suEmail = configState.text.superuserEmail ?? "";
-    const suPassword = configState.text.superuserPassword ?? "";
+    const base = stateToAnswers(manifest, archetype, stack, state);
+    const suEmail = state.text.superuserEmail ?? "";
+    const suPassword = state.text.superuserPassword ?? "";
     const answers =
       suEmail.length > 0 && suPassword.length > 0
         ? { ...base, superuser: { email: suEmail, password: suPassword } }
         : base;
 
-    await scaffoldFromAnswers(manifest, answers, dest, deps.out, run);
+    return await scaffoldFromAnswers(manifest, answers, dest, deps.out, run);
   } finally {
     deps.resume();
   }
@@ -277,7 +297,7 @@ export async function scaffoldFromAnswers(
   dest: string,
   out: (s: string) => void,
   run: typeof runScaffold = runScaffold
-): Promise<void> {
+): Promise<string | null> {
   try {
     const outcome = await run(
       manifest,
@@ -293,18 +313,15 @@ export async function scaffoldFromAnswers(
       outcome.booted,
       outcome.bootError,
       outcome.summary,
-      outcome.gateCommand
+      answers.archetype
     );
 
-    // Planning is triggered by REPL interception on the first build request.
-    if (answers.archetype === "boringstack" || answers.archetype === "phaser") {
-      out(
-        "\n✓ scaffold complete — run planning when you submit your first build request\n"
-      );
-    }
+    return outcome.dir;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
 
     out(`scaffold failed: ${message}\n`);
+
+    return null;
   }
 }

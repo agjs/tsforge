@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   archetypeStep,
+  buildReplScaffoldSteps,
   resolveScaffoldDest,
   scaffoldFromAnswers,
 } from "../src/cli/repl-scaffold";
+import { driveWizard, renderFrame } from "../src/render/wizard";
 import {
+  formatScaffoldHandoff,
   loadBundledManifest,
   type runScaffold,
   type IScaffoldOutcome,
@@ -46,10 +49,34 @@ test("scaffoldFromAnswers forwards clone progress to out and prints the handoff"
 
   // Progress reached the sink in the standard "  → …" format...
   expect(joined).toContain("  → Cloning the project template…\n");
-  // ...the handoff printed...
-  expect(joined).toContain("scaffold ready → /tmp/proj");
-  // ...and the boringstack planning note followed.
-  expect(joined).toContain("run planning when you submit");
+  expect(joined).toContain("READY");
+  expect(joined).toContain("proj");
+  expect(joined).toContain("describe the product to plan it");
+  expect(joined).not.toContain("booted   false");
+  expect(joined).not.toContain("configured .env:");
+});
+
+test("Phaser handoff is a READY card, not a path dump or booted-false", () => {
+  const card = formatScaffoldHandoff(
+    {
+      dir: "/Users/ag/game/ddsadsa",
+      sha: "1938f4b8a85a5a2f4bdab85b70d068a7bd94fcbc",
+      booted: false,
+      summary: [],
+      archetype: "phaser",
+      interactive: true,
+    },
+    false
+  );
+
+  expect(card).toContain("READY");
+  expect(card).toContain("ddsadsa");
+  expect(card).toContain("Phaser game");
+  expect(card).toContain("describe the product to plan it");
+  expect(card).not.toContain("booted");
+  expect(card).not.toContain("configured .env");
+  expect(card).not.toContain("/Users/ag/game/ddsadsa");
+  expect(card).not.toContain("tsforge --dir");
 });
 
 test("archetype step offers boringstack, astro, phaser", () => {
@@ -60,6 +87,56 @@ test("archetype step offers boringstack, astro, phaser", () => {
   const values = step.options.map((o) => o.value);
 
   expect(values).toEqual(["boringstack", "astro", "phaser"]);
+});
+
+test("picking Phaser goes to the folder name, not a second 'choose project type'", () => {
+  const steps = buildReplScaffoldSteps();
+  const s = driveWizard(steps, ["down", "down", "confirm"]);
+
+  expect(s.single.archetype).toBe("phaser");
+  expect(s.status).toBe("active");
+  expect(steps[s.stepIndex]?.key).toBe("projectDir");
+  expect(s.stepIndex).not.toBe(steps.length);
+
+  const frame = renderFrame(s, steps, false, "", "tsforge scaffold");
+
+  expect(frame).toContain("Project directory");
+  expect(frame).not.toContain("Review");
+});
+
+test("Phaser review lists type + folder once, not a re-ask of project type alone", () => {
+  const steps = buildReplScaffoldSteps();
+  const s = driveWizard(steps, [
+    "down",
+    "down",
+    "confirm",
+    { char: "g" },
+    { char: "a" },
+    { char: "m" },
+    { char: "e" },
+    "confirm",
+  ]);
+
+  expect(s.stepIndex).toBe(steps.length);
+  expect(s.status).toBe("active");
+  expect(s.text.projectDir).toBe("game");
+
+  const frame = renderFrame(s, steps, false, "", "tsforge scaffold");
+
+  expect(frame).toContain("Review");
+  expect(frame).toContain("Project type");
+  expect(frame).toContain("Phaser");
+  expect(frame).toContain("game");
+  expect(frame).toContain("Project directory");
+  expect(frame).not.toContain("Choose a project type: Phaser");
+});
+
+test("Boringstack still asks for admin after the folder name", () => {
+  const steps = buildReplScaffoldSteps();
+  const s = driveWizard(steps, ["confirm", { char: "a" }, "confirm"]);
+
+  expect(s.single.archetype).toBe("boringstack");
+  expect(steps[s.stepIndex]?.key).toBe("superuserEmail");
 });
 
 test("resolveScaffoldDest: a plain name resolves under cwd (NOT a throwaway temp)", () => {

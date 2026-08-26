@@ -38,6 +38,18 @@ export const CURSOR_COLOR_GREEN = `${ESC}]12;#4ade80\x07`;
 /** Restore default cursor color. */
 export const CURSOR_COLOR_DEFAULT = `${ESC}]112\x07`;
 
+/**
+ * Modes the pane TUI turns on that MUST be undone even if `leave()` never ran
+ * (SIGINT after the editor closed, a hung planner). `writeSync` this from an
+ * exit hook so Node cannot drop the bytes. Safe to emit twice.
+ */
+export const RESTORE_TERMINAL =
+  DISABLE_MOUSE +
+  CURSOR_COLOR_DEFAULT +
+  CURSOR_SHAPE_DEFAULT +
+  SHOW_CURSOR +
+  EXIT_ALT;
+
 /** Move cursor to 1-based (row, col). */
 export function cup(row: number, col: number): string {
   return `${ESC}[${row};${col}H`;

@@ -506,3 +506,30 @@ test("the planner contract surfaces layout + home so plans can actually use the 
   expect(homeCount).toBe(1);
   expect(home?.ui.layout).toBe("app-sidebar");
 });
+
+test("proposePlan forwards abort to the provider", async () => {
+  const ac = new AbortController();
+
+  ac.abort();
+
+  let saw: AbortSignal | undefined;
+  const planner: IProvider = {
+    complete(_messages, opts) {
+      saw = opts?.signal;
+      const err = new Error("aborted");
+
+      err.name = "AbortError";
+
+      return Promise.reject(err);
+    },
+  };
+
+  await expect(
+    proposePlan(
+      { planner, signal: ac.signal },
+      { description: "x" },
+      boringstackPlanSchema
+    )
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(saw?.aborted).toBe(true);
+});

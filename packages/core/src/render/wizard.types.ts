@@ -14,6 +14,8 @@ export interface IWizardStep {
   readonly key: string;
   readonly kind: "single" | "multi" | "text";
   readonly title: string;
+  /** Shorter label on the Review screen. Absent → `title`. */
+  readonly reviewTitle?: string;
   readonly explanation: string;
   readonly evidence: readonly string[];
   readonly options: readonly IWizardOption[];

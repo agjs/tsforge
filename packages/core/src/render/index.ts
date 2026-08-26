@@ -70,6 +70,7 @@ export {
   stripSgr,
   stripMouseReports,
   createMouseCsiFilter,
+  RESTORE_TERMINAL,
   type IPaneInput,
   type IPaneScreenTerminal,
 } from "./frame";

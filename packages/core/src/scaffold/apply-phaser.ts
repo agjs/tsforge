@@ -1,5 +1,5 @@
 import { isRecord } from "../lib/guards";
-import type { IScaffoldFs } from "./io";
+import type { IScaffoldFs, IScaffoldRunner } from "./io";
 
 /** Lowercase npm-safe name from a scaffold folder. */
 export function phaserPackageName(folder: string): string {
@@ -47,5 +47,25 @@ export async function applyPhaserIdentity(
     if (next !== html) {
       await fs.writeText(htmlPath, next);
     }
+  }
+}
+
+/**
+ * If the clone is missing `docs/ai/catalog.md`, run the template catalog script.
+ * Never fails scaffold — a missing script or non-zero exit is ignored.
+ */
+export async function ensurePhaserCatalog(
+  dest: string,
+  fs: IScaffoldFs,
+  run: IScaffoldRunner
+): Promise<void> {
+  if (await fs.exists(`${dest}/docs/ai/catalog.md`)) {
+    return;
+  }
+
+  try {
+    await run(dest, ["bun", "run", "catalog"]);
+  } catch {
+    return;
   }
 }

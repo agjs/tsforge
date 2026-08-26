@@ -12,6 +12,7 @@ export {
   isConventionExemptPath,
   pathToConventionTopics,
   renderPathTopicMap,
+  renderProbedPathTopicMap,
   missingConventionTopics,
   conventionPullGate,
 } from "./path-topics";

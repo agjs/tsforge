@@ -636,20 +636,28 @@ function renderStep(
   }).join("\n");
 }
 
-/** One readable summary line per step for the overview ("Title: chosen"). */
+/** Stacked label / value pairs with a blank line between — not `Label: value`
+ *  jammed against the left edge. Hidden steps are omitted. */
 function overviewLines(
   steps: readonly IWizardStep[],
   state: IWizardState,
   color: boolean
 ): string[] {
-  // Hidden steps have no answer that matters — omit them from the review.
-  return steps
-    .filter((step) => isVisible(step, state))
-    .map((step) => {
-      const value = overviewValue(step, state);
+  const lines: string[] = [""];
 
-      return `  ${paint(step.title, STYLE.bold, color)}: ${value}`;
-    });
+  for (const step of steps) {
+    if (!isVisible(step, state)) {
+      continue;
+    }
+
+    const label = step.reviewTitle ?? step.title;
+
+    lines.push(paint(label, CONSOLE.soft, color));
+    lines.push(`  ${paint(overviewValue(step, state), CONSOLE.fg, color)}`);
+    lines.push("");
+  }
+
+  return lines;
 }
 
 /** The one-line answer shown for a step on the review screen. */
@@ -689,7 +697,7 @@ function renderOverview(
 
   return formatOverlayShell({
     title,
-    subtitle: `${paint("Review", STYLE.bold, color)} · nothing is written until you Apply`,
+    subtitle: `${paint("Review", STYLE.bold, color)} · apply to create it`,
     bodyLines,
     footer: "enter apply · b back · q cancel",
     columns: width,

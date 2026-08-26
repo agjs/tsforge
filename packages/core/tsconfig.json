@@ -21,5 +21,10 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
-  "exclude": ["node_modules", "dist", "tests/fixtures/phaser-starter"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests/fixtures/phaser-starter",
+    "tests/fixtures/phaser-wire"
+  ]
 }

@@ -4,6 +4,7 @@
  * dispatcher, plan-mode flow, and the inline overlays (palette, @ picker,
  * /config, /help). Extracted from cli.ts; the entry point stays `repl(args)`.
  */
+import { writeSync } from "node:fs";
 import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
@@ -25,7 +26,7 @@ import {
   type IPickerView,
 } from "../render/file-menu";
 import { listWorkspaceFiles } from "../lib/fs";
-import { relative } from "node:path";
+import { basename, relative } from "node:path";
 import { composeMessage } from "../loop/prompt";
 import { compactSummaryLine } from "../loop/context-hygiene";
 import { resolveImageInput } from "./image-input";
@@ -51,15 +52,32 @@ import {
   type ILoopEvent,
   type IReviewReport,
 } from "../loop";
-import { runPlanning } from "../loop/planning/run-planning";
-import type { IPlanConstraints } from "../loop/planning/plan-types";
+import type {
+  IPlanConstraints,
+  IProductPlan,
+} from "../loop/planning/plan-types";
+import { applyPlanConstraints } from "../loop/planning/propose-plan";
+import { productPlanToDraft } from "../loop/planning/product-plan-ui";
 import {
+  readPlan,
+  writePlan,
+  isProductPlan,
+} from "../loop/planning/plan-store";
+import {
+  adapterSessionExtras,
   resolveStackAdapter,
   type IStackAdapter,
 } from "../loop/planning/stack-adapter";
 import { boringstackStackAdapter } from "../loop/boringstack/planning";
 import { phaserStackAdapter } from "../loop/phaser/planning";
-import { loadApprovedPlan } from "../loop/planning/plan-store";
+import { phaserPlanSchema } from "../loop/phaser/plan-extension";
+import { runPhaserBuild } from "../loop/phaser/build";
+import { bunExec } from "../loop/phaser/exec";
+import { PHASER_NO_DEV_DENY } from "../loop/phaser/build-config";
+import { phaserHostFromSession } from "./phaser-repl-host";
+import { shouldDispatchReplLine } from "./repl-line";
+import { resolveChromeStatus } from "./repl-status";
+import { resolveScaffoldedWorkspace } from "../scaffold/receipt";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
 import {
@@ -75,7 +93,7 @@ import { renderEditor } from "../editor/view";
 import { flags } from "../config/flags";
 import type { OpenAICompatibleProvider } from "../inference";
 import type { IModelEntry } from "../models-config";
-import { resolveCapabilityModel, loadModelsConfig } from "../models-config";
+import { loadModelsConfig } from "../models-config";
 import {
   renderStatus,
   userBubble,
@@ -95,6 +113,7 @@ import {
   AgentTreeModel,
   PaneScreen,
   createMouseCsiFilter,
+  RESTORE_TERMINAL,
   canUsePaneTui,
   PANE_MIN_ROWS,
   INPUT_INNER_ROWS_MAX,
@@ -157,6 +176,8 @@ import {
   normalizePlanDraft,
   goalFromMessages,
   loadPlan,
+  firstOpenItem,
+  focusPlanItemByTitle,
 } from "../loop/worklist";
 import type { IPlanDocument, IChecklistItemDraft } from "../loop/worklist";
 import {
@@ -244,18 +265,15 @@ const STACK_ADAPTERS: readonly IStackAdapter[] = [
   phaserStackAdapter,
 ];
 
-/** Convention extras from the adapter that claims `dir`, if it ships a library. */
+/** Convention extras + context brief from the adapter that claims `dir`. */
 async function stackSessionExtras(dir: string): Promise<{
   readonly conventions?: IStackAdapter["conventions"];
   readonly pullConventions?: true;
+  readonly guidance?: string;
 }> {
-  const stack = await resolveStackAdapter(dir, STACK_ADAPTERS);
+  const root = await resolveScaffoldedWorkspace(dir);
 
-  if (stack?.conventions === undefined) {
-    return {};
-  }
-
-  return { conventions: stack.conventions, pullConventions: true };
+  return adapterSessionExtras(root, STACK_ADAPTERS);
 }
 
 /**
@@ -324,70 +342,242 @@ export async function greenfieldOrSend(
   await onSend();
 }
 
-/** The greenfield planning flow (description → proposed plan → human
- *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
- *  to keep its cognitive complexity down; the resolved stack adapter supplies the
- *  planner constraints (guidance + reserved-entity stripping) and this only glues them
- *  to the interactive prompt — it names no concrete stack. */
-async function runGreenfieldPlanning(
+export const PLANNER_AGENT_ID = "session:planner";
+export const PLANNER_LABEL = "product planner";
+
+/** REPL surfaces for greenfield product planning (agent tree + yellow PLAN card). */
+export interface IGreenfieldPlanningUi {
+  readonly report: Reporter;
+  present(plan: IPlanDocument): void;
+  /** Arm the tree spinner so running rows animate. */
+  startLive?(): void;
+  /** Stop the spinner and clear the tree — the PLAN card is the result. */
+  stopLive?(): void;
+  /** Human progress into the planner detail pane (slice names, not JSON). */
+  note?(text: string): void;
+}
+
+/** Validated propose_product_plan payload, or a rejection the model can act on
+ *  (and retry within the same turn — no more temperature-0-then-0.7 trick). */
+export type ProductPlanValidation =
+  { ok: true; plan: IProductPlan } | { ok: false; error: string };
+
+/** The Session methods greenfield planning actually needs — not a second
+ *  Session (phaserHostFromSession's "not a second Session" precedent).
+ *  Injectable so tests drive the ask_user/propose_product_plan path without a
+ *  live model. */
+export interface IGreenfieldSession {
+  setGreenfieldMode(
+    on: boolean,
+    hooks?: {
+      readonly validate: (raw: unknown) => ProductPlanValidation;
+      readonly onProposed: (plan: IProductPlan) => Promise<void>;
+    }
+  ): void;
+  /** Append stack-specific planning guidance to the system prompt — the SAME
+   *  `schema.system` + `constraints.guidance` text `proposePlan()` used to send
+   *  as its own system message, now folded into the live session's system
+   *  prompt so the model still gets stack guidance (e.g. Phaser's "playable
+   *  systems, not a CRUD inventory of sprites") once planning is routed
+   *  through the real turn loop instead of a one-shot completion. */
+  guide(text: string): void;
+  send(
+    message: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ status: string; turns: number; awaitingUser?: string }>;
+}
+
+/** Draft or approved product plan on disk, or a pending PLAN card — do not re-plan. */
+export async function stackHasProductPlan(
+  dir: string,
+  stack: IStackAdapter
+): Promise<boolean> {
+  return (await readPlan(dir, stack.planSchema)) !== null;
+}
+
+/** Validate a raw propose_product_plan payload against `stack`'s schema, then
+ *  apply the same strip-reserved + recheck pass `proposePlan` uses
+ *  (`applyPlanConstraints`) — both entry points enforce identically strict rules. */
+function validateProductPlan(
+  raw: unknown,
+  stack: IStackAdapter,
+  constraints: IPlanConstraints
+): ProductPlanValidation {
+  const schema = stack.planSchema;
+
+  if (!isProductPlan(raw, schema.validateUi, schema.extraCheck)) {
+    return {
+      ok: false,
+      error:
+        "invalid plan — every slice needs entity{id,desc,fields,relationships,rules}, " +
+        "a ui matching this stack's shape, and verification{mustRemainTrue,mustNotHappen,acceptanceCheck}",
+    };
+  }
+
+  const result = applyPlanConstraints(raw, schema, constraints);
+
+  if (result === null) {
+    return {
+      ok: false,
+      error:
+        "every slice was reserved/already provided by the starter, or the plan " +
+        "fails the stack's cross-slice rule once reserved slices are stripped — revise and try again",
+    };
+  }
+
+  return { ok: true, plan: result };
+}
+
+/** The greenfield planning flow: routes the description through the REAL
+ *  agentic turn loop (ask_user + propose_product_plan) instead of a one-shot
+ *  tool-less completion, so the model can ask the few clarifying questions
+ *  that matter before committing to a plan — the same "plan-first" philosophy
+ *  the harness already promises for normal coding sessions (plan-default.ts).
+ *  An ask_user pause returns here with `awaitingUser` set; the caller's normal
+ *  answer-routing (same path every other ask_user pause uses) resumes the
+ *  conversation — greenfield mode stays on the session across that pause, so
+ *  the resumed send still offers propose_product_plan. Does not dump JSON. */
+export async function runGreenfieldPlanning(
   dir: string,
   description: string,
   echo: (s: string) => void,
-  rl: ReturnType<typeof createInterface> | null,
-  activeModelEntry: IModelEntry,
-  stack: IStackAdapter
-): Promise<void> {
-  echo("▸ planning your product first...\n");
-
-  const plannerResolved = await resolveCapabilityModel("planner");
-  const plannerProvider = makeProvider(
-    plannerResolved?.entry ?? activeModelEntry
-  );
-
-  const result = await runPlanning(dir, {
-    planner: plannerProvider,
-    // The plan schema comes from the RESOLVED adapter — a project is planned + validated by the
-    // stack that detected it, not a hardcoded one.
-    schema: stack.planSchema,
-    // We only reach here when this stack adapter detected the project, so its
-    // reserved-slice rule always applies (no gap) and every drop is surfaced.
-    constraints: greenfieldConstraints(stack, echo),
-    describe: async () => {
-      await Promise.resolve();
-
-      return { description };
-    },
-    review: async (plan) => {
-      await Promise.resolve();
-
-      echo(
-        `\nProposed plan:\n${JSON.stringify(plan, null, 2)}\n` +
-          `\nApprove this plan? (approve/revise/cancel)\n`
-      );
-
-      if (rl === null) {
-        echo(
-          "(editor mode: plan review not interactive — run planning again with --plan)\n"
-        );
-
-        return { action: "cancel" };
-      }
-
-      return parseReviewResponse(await rl.question("> "));
-    },
-    out: echo,
+  stack: IStackAdapter,
+  ui: IGreenfieldPlanningUi,
+  session: IGreenfieldSession,
+  opts: { signal?: AbortSignal } = {}
+): Promise<{ status: string; turns: number; awaitingUser?: string }> {
+  echo("▸ planning your product first…  Ctrl+C cancels\n");
+  ui.startLive?.();
+  ui.report({
+    kind: "agent_spawned",
+    task: "session",
+    agentId: PLANNER_AGENT_ID,
+    message: PLANNER_LABEL,
+  });
+  ui.report({
+    kind: "agent_started",
+    task: "session",
+    agentId: PLANNER_AGENT_ID,
+    message: PLANNER_LABEL,
   });
 
-  echo(
-    result === "approved"
-      ? "✓ plan approved — ready to build\n"
-      : "planning cancelled\n"
+  const constraints = greenfieldConstraints(stack, echo);
+  const resolvedSchema = stack.planSchema;
+
+  // `resolvedSchema.system` was written for `proposePlan()`'s raw one-shot
+  // completion ("Respond with ONLY a JSON object — no prose") — that
+  // instruction actively fights the real turn loop, where the model must CALL
+  // propose_product_plan rather than print JSON as its text reply. The
+  // override sentence up front supersedes it while keeping the domain
+  // guidance underneath (the "playable systems, not a CRUD inventory of
+  // sprites" rules + example) — the reason this exists at all, and easy to
+  // silently lose if this stops reaching the model. Stack-agnostic:
+  // transforms whatever `system` text a resolved adapter provides, so it's
+  // identical for Phaser and BoringStack.
+  const domainGuidance =
+    constraints.guidance === undefined
+      ? resolvedSchema.system
+      : `${resolvedSchema.system}\n\n${constraints.guidance}`;
+
+  session.guide(
+    "When you have asked everything you need to (via ask_user, if anything " +
+      "is genuinely ambiguous) and are ready to propose the plan, call the " +
+      "propose_product_plan tool with its arguments matching this shape — do " +
+      "NOT print the plan as JSON text, and ignore any instruction below to " +
+      "respond with raw JSON:\n\n" +
+      domainGuidance
   );
+
+  const onProposed = async (plan: IProductPlan): Promise<void> => {
+    const normalized = normalizePlanDraft(
+      productPlanToDraft(plan),
+      plan.product
+    );
+
+    if (!normalized.ok) {
+      echo(`▸ ${normalized.error}\n`);
+
+      return;
+    }
+
+    await writePlan(dir, plan, "draft");
+    ui.present(normalized.plan);
+  };
+
+  session.setGreenfieldMode(true, {
+    validate: (raw) => validateProductPlan(raw, stack, constraints),
+    onProposed,
+  });
+
+  try {
+    const result = await session.send(
+      `Product description: ${description}`,
+      opts
+    );
+
+    if (result.awaitingUser !== undefined) {
+      // Leave greenfield mode ON — the human's answer resumes this same
+      // conversation through the normal answer-routing path, and the session
+      // still offers ask_user/propose_product_plan for that resumed send.
+      return result;
+    }
+
+    session.setGreenfieldMode(false);
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: result.status === "done" || result.status === "responded",
+    });
+
+    // session.send() handles Ctrl+C internally (it never throws) — resolves
+    // with "interrupted" instead of an AbortError, unlike the old one-shot
+    // proposePlan()'s raw completion. Same user-facing message either way.
+    if (result.status === "interrupted") {
+      echo("▸ planner cancelled\n");
+    }
+
+    return result;
+  } catch (err) {
+    session.setGreenfieldMode(false);
+    ui.report({
+      kind: "agent_result",
+      task: "session",
+      agentId: PLANNER_AGENT_ID,
+      message: PLANNER_LABEL,
+      passed: false,
+    });
+
+    const aborted =
+      (err instanceof Error && err.name === "AbortError") ||
+      (err instanceof Error && /abort/i.test(err.message));
+
+    echo(
+      aborted
+        ? "▸ planner cancelled\n"
+        : `▸ planner failed: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+
+    // Resolve, don't throw — matches the prior one-shot planner's contract
+    // (it never let an exception escape) and drive()'s: it has no catch
+    // around its own run(opts) call, so a throw here would skip persist()/
+    // reviewAfterGreen() and propagate uncaught into the REPL's line loop.
+    return {
+      status: aborted ? "interrupted" : "stuck",
+      turns: 0,
+    };
+  } finally {
+    ui.stopLive?.();
+  }
 }
 
 /** Narrow approval — GENERAL plan mode, where the model asks clarifying
  *  questions: a "yes" may ANSWER a question, so only unambiguous approval
  *  words exit the mode and start implementing. */
+export { shouldDispatchReplLine } from "./repl-line";
+export { resolveChromeStatus } from "./repl-status";
+
 export function isPlanApproval(line: string): boolean {
   return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
 }
@@ -580,6 +770,14 @@ async function initReplSession(args: ICliArgs): Promise<{
   activeModelEntry: IModelEntry;
   autoGate?: AutoGateResolver;
 }> {
+  const bound = await resolveScaffoldedWorkspace(args.dir);
+
+  if (bound !== args.dir) {
+    process.stdout.write(`  ↳ project is ${bound}\n`);
+    args.dir = bound;
+    process.chdir(bound);
+  }
+
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
   const activeName = activeModel.name;
@@ -665,6 +863,9 @@ async function initReplSession(args: ICliArgs): Promise<{
     // executeTool then rejected anyway but with a message claiming a human was
     // consulted. Flip back to humanAtKeyboard() only when a real prompt lands.
     interactive: false,
+    humanPresent: humanAtKeyboard(),
+    offerTaskTools: true,
+    offerPresentPlan: true,
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
@@ -792,16 +993,12 @@ function maybeWritePlanModeIntro(planMode: boolean): void {
 
 /**
  * Wire terminal restoration for a pane-TUI session. `'exit'` covers a normal
- * return/`process.exit`. But a signal the process doesn't HANDLE terminates it
- * WITHOUT firing 'exit', leaving the pane on the alternate screen with SGR
- * mouse tracking on and a colored/hidden cursor — spewing `\x1b[<…M` into the
- * shell until a blind `reset`. SIGHUP (closed tab / ssh drop) and SIGTERM (a
- * supervisor, `timeout tsforge …`) are the vectors; the editor's readline
- * SIGINT handler covers Ctrl+C, and in raw editor mode Ctrl+C arrives as a
- * keypress not a signal, so only these two need wiring. On a signal we restore,
- * then re-raise with the default disposition so the exit status still reflects
- * the signal (128+n). `leave`/`close` are idempotent. The editor handle is read
- * through a getter because it's assigned later, inside the prompt loop.
+ * return/`process.exit`. A signal the process doesn't HANDLE terminates it
+ * WITHOUT firing 'exit', leaving SGR mouse tracking on — iTerm then pastes
+ * `0;23;22M` into the shell on every click. SIGTERM/SIGHUP restore then re-raise.
+ * Do NOT hook SIGINT: the editor owns Ctrl+C (abort vs quit). Stealing SIGINT
+ * leaves the alt screen and kills Ctrl+G.
+ * `writeSync` so the `'exit'` path cannot drop the bytes.
  */
 function installTerminalRestore(
   paneScreen: { leave: () => void },
@@ -810,6 +1007,12 @@ function installTerminalRestore(
   const restore = (): void => {
     getEditor()?.close();
     paneScreen.leave();
+
+    try {
+      writeSync(1, RESTORE_TERMINAL);
+    } catch {
+      // stdout already gone
+    }
   };
 
   process.on("exit", restore);
@@ -1496,16 +1699,58 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     session.setActivePlanId(plan.id);
-    syncWorklistPanel(plan);
-    echo(
-      `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
-    );
+    const first = firstOpenItem(plan.items);
+    const focused =
+      first === null
+        ? null
+        : focusPlanItemByTitle(args.dir, plan.id, first.title);
+
+    syncWorklistPanel(focused ?? plan);
     planMode = false;
     planDiscussed = false;
     session.setPlanMode(false);
     setMode("normal");
     await persist();
+
+    const stored = await readPlan(args.dir, phaserPlanSchema);
+
+    if (stored !== null) {
+      await writePlan(args.dir, stored.plan, "approved");
+    }
+
+    echo(
+      `  ✓ plan saved — ${plan.id} (${String(plan.items.length)} top-level items)\n`
+    );
     echo("  ✓ plan approved — implementing\n");
+
+    if (stored !== null) {
+      session.appendPolicyRules(PHASER_NO_DEV_DENY);
+      await drive(async (opts) => {
+        const result = await runPhaserBuild({
+          cwd: args.dir,
+          plan: stored.plan,
+          host: phaserHostFromSession(session, {
+            cwd: args.dir,
+            sendOpts: () => opts,
+            onPlanChanged: (plan) => {
+              syncWorklistPanel(plan);
+            },
+          }),
+          exec: bunExec,
+          echo,
+          signal: opts.signal,
+          steer: opts.steer,
+        });
+
+        return {
+          status: result.status === "done" ? "done" : "stuck",
+          turns: 0,
+        };
+      });
+
+      return;
+    }
+
     await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
   };
 
@@ -1567,6 +1812,48 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
+  const plannerLive: {
+    start: () => void;
+    stop: () => void;
+    note: (text: string) => void;
+  } = {
+    start: () => undefined,
+    stop: () => undefined,
+    note: () => undefined,
+  };
+
+  const greenfieldUi: IGreenfieldPlanningUi = {
+    report,
+    present: (plan) => {
+      session.presentHarnessPlan(plan);
+    },
+    startLive: () => {
+      plannerLive.start();
+    },
+    stopLive: () => {
+      plannerLive.stop();
+    },
+    note: (text) => {
+      plannerLive.note(text);
+    },
+  };
+
+  // Greenfield planning is a real turn on THIS session (not a second Session,
+  // not a raw tool-less completion) — session.setGreenfieldMode/send already
+  // satisfy IGreenfieldSession structurally, so it's passed straight through.
+  const planProduct = (stack: IStackAdapter, line: string): Promise<void> =>
+    drive((opts) =>
+      runGreenfieldPlanning(
+        args.dir,
+        line,
+        echo,
+        stack,
+        greenfieldUi,
+        session,
+        opts
+      )
+    );
+
   const dispatch = async (line: string): Promise<void> => {
     const route = classifyReplRoute(line, approvalRouteState());
 
@@ -1592,8 +1879,20 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     // GENERAL plan mode, discussion: the agent explores read-only, asks its
     // clarifying questions, and proposes/revises a plan. Stays in plan mode.
+    // A FRESH stack-adapter project (Phaser / BoringStack, no approved product
+    // plan) must NOT take this path — that is the 94-turn tree-walk. Product
+    // planning is the plan; fall through to greenfieldOrSend via onSend=discuss
+    // only when no adapter claims the dir (or it is already planned).
     if (route === "plan-discuss") {
-      await discussInPlanMode(line);
+      await greenfieldOrSend(
+        args.dir,
+        STACK_ADAPTERS,
+        async (d, s) =>
+          session.getPendingPlan() !== null ||
+          (await stackHasProductPlan(d, s)),
+        (stack) => planProduct(stack, line),
+        () => discussInPlanMode(line)
+      );
 
       return;
     }
@@ -1607,16 +1906,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     await greenfieldOrSend(
       args.dir,
       STACK_ADAPTERS,
-      async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null,
-      (stack) =>
-        runGreenfieldPlanning(
-          args.dir,
-          line,
-          echo,
-          rl,
-          activeModelEntry,
-          stack
-        ),
+      async (d, s) =>
+        session.getPendingPlan() !== null || (await stackHasProductPlan(d, s)),
+      (stack) => planProduct(stack, line),
       () => runSend(line)
     );
   };
@@ -1628,7 +1920,15 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Assigned after the pane console exists (same pattern as handleHelp).
   let handleCopy: () => void = () => undefined;
 
-  const clearConversation = async (): Promise<void> => {
+  const clearConversation = async (opts?: {
+    readonly dest?: string;
+    readonly silent?: boolean;
+  }): Promise<void> => {
+    if (opts?.dest !== undefined) {
+      args.dir = opts.dest;
+      process.chdir(opts.dest);
+    }
+
     // Rebuild the session with the current state (config is not reused;
     // repl's /clear creates a fresh Session.create call)
     spinner.resetClock();
@@ -1657,6 +1957,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       // executeTool then rejected anyway but with a message claiming a human was
       // consulted. Flip back to humanAtKeyboard() only when a real prompt lands.
       interactive: false,
+      humanPresent: humanAtKeyboard(),
+      offerTaskTools: true,
+      offerPresentPlan: true,
       // Keep the SCOPED format janitor on across /clear — else the rebuilt session
       // silently reverts to no formatting for the rest of the session.
       coreFormat: true,
@@ -1699,6 +2002,15 @@ export async function repl(args: ICliArgs): Promise<number> {
     // fires on the first send.)
     awaitingUserAnswer = false;
     await persist();
+
+    if (opts?.silent === true) {
+      if (opts.dest !== undefined) {
+        echo(`▸ now in ${basename(opts.dest)}\n`);
+      }
+
+      return;
+    }
+
     clearScreen(); // wipe the visible terminal + scrollback, not just the state
     echo("conversation cleared\n");
   };
@@ -1948,20 +2260,26 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   // Current state as the status surface sees it — pane footer and plain prompt.
-  const statusInfo = (): IStatusInfo => ({
-    model: modelInfo(provider.config).model,
-    contextTokens: session.contextTokens,
-    contextWindow,
-    turns: lastTurns,
-    elapsedMs: lastElapsedMs,
-    status: lastStatus,
-    scope: scopeLabel(session.scope),
-    mode: modeById(currentModeId).label,
-    tokensPerSecond: session.metrics.lastTokensPerSecond,
-    ...(spinner.frameLabel().length > 0
-      ? { activity: spinner.frameLabel() }
-      : {}),
-  });
+  const statusInfo = (): IStatusInfo => {
+    const chrome = resolveChromeStatus({
+      busy: paneScreen.isBusy,
+      lastStatus,
+      activity: spinner.frameLabel(),
+    });
+
+    return {
+      model: modelInfo(provider.config).model,
+      contextTokens: session.contextTokens,
+      contextWindow,
+      turns: lastTurns,
+      elapsedMs: lastElapsedMs,
+      status: chrome.status,
+      scope: scopeLabel(session.scope),
+      mode: modeById(currentModeId).label,
+      tokensPerSecond: session.metrics.lastTokensPerSecond,
+      ...(chrome.activity !== undefined ? { activity: chrome.activity } : {}),
+    };
+  };
 
   // Pane console — the only interactive UI on a TTY.
   const paneScreen = new PaneScreen(process.stdout);
@@ -2226,8 +2544,6 @@ export async function repl(args: ICliArgs): Promise<number> {
         paneScreen.setWorklistBadge(pendingPlanBadge(plan));
         syncPaneChrome();
       }
-
-      echo(`\n${planHint(true, cols)}\n`);
     });
   };
 
@@ -2293,12 +2609,15 @@ export async function repl(args: ICliArgs): Promise<number> {
       .filter((l) => l.length > 0);
     const body =
       lines.length === 0
-        ? [paint("    (working…)", STYLE.dim, true)]
+        ? [paint("    drafting…", STYLE.dim, true)]
         : lines
             .slice(-AGENT_DETAIL_LINES)
             .map((l) => `    ${l.slice(0, width)}`);
+    // One child: the row already names it. Don't repeat `↳ product planner`.
+    const header =
+      rows.length <= 1 ? [] : [paint(`  ↳ ${label}`, STYLE.dim, true)];
 
-    return [paint(`  ↳ ${label}`, STYLE.dim, true), ...body];
+    return [...header, ...body];
   };
 
   const repaintTree = (): void => {
@@ -2427,6 +2746,19 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   observeEvents(feedTree);
+
+  plannerLive.start = (): void => {
+    spinner.start();
+  };
+
+  plannerLive.stop = (): void => {
+    spinner.stop();
+    resetTree();
+  };
+
+  plannerLive.note = (text: string): void => {
+    pushAgentOutput(PLANNER_AGENT_ID, text);
+  };
 
   // Switch the interactive mode (via the extensible registry) and reflect it in
   // the pane footer. The single entry point for /plan, Shift+Tab, and startup —
@@ -2782,7 +3114,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     const submitLine = (raw: string): void => {
       const line = raw.trim();
 
-      if (line.length === 0) {
+      if (!shouldDispatchReplLine(raw)) {
         if (!busy) {
           prompt();
         }
@@ -2828,6 +3160,17 @@ export async function repl(args: ICliArgs): Promise<number> {
     // Handle one idle line (slash command or a message), then any queued follow-up.
     const runLine = async (line: string): Promise<void> => {
       busy = true;
+      // So Ctrl+C / /exit abort product planning (not just Session.send). Without
+      // this, planning has busy=true and active=null: interrupt thinks we're idle,
+      // closes the editor, and the process dies with mouse tracking still on.
+      active = new AbortController();
+
+      // Slash commands (help/config overlays) must not start the turn spinner —
+      // busy ticks fight the overlay and drop Enter. Real sends still show working.
+      if (!line.startsWith("/")) {
+        lastStatus = "working";
+        spinner.start();
+      }
 
       if (keymapOpen) {
         keymapOpen = false;
@@ -2840,11 +3183,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       try {
         if (line.startsWith("/")) {
           if (await command(line)) {
+            closed = true;
+
             if (rl !== null) {
               rl.close();
             }
 
-            return;
+            editorHandle?.close();
           }
         } else {
           await dispatch(line);
@@ -2858,8 +3203,15 @@ export async function repl(args: ICliArgs): Promise<number> {
         echo(`\n⚠ ${err instanceof Error ? err.message : String(err)}\n`);
       } finally {
         closeAgentTurn(); // seal the agent card's bottom cap before re-prompting
+        spinner.stop();
+
+        if (lastStatus === "working") {
+          lastStatus = "ready";
+        }
+
         busy = false;
         paneScreen.setBusy(false);
+        active = null;
       }
 
       // Mid-run approve aborted the discuss turn — bind + implement before any
@@ -2925,6 +3277,10 @@ export async function repl(args: ICliArgs): Promise<number> {
                 out: (s) => process.stdout.write(s),
                 columns: transcriptCols(),
                 viewportRows: overlayBudget(),
+              }).then(async (dest) => {
+                if (dest !== null) {
+                  await clearConversation({ dest, silent: true });
+                }
               })
             : openRecipePicker({
                 cwd: args.dir,
@@ -3020,7 +3376,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // `void runLine` command row, which would race the wizard for stdin.) Extracted
     // from the command switch to keep that dispatcher's cognitive complexity down.
     openScaffold = async (): Promise<void> => {
-      await openScaffoldInRepl({
+      const dest = await openScaffoldInRepl({
         cwd: args.dir,
         suspend: () => {
           editorControl?.suspend();
@@ -3045,6 +3401,10 @@ export async function repl(args: ICliArgs): Promise<number> {
         columns: transcriptCols(),
         viewportRows: overlayBudget(),
       });
+
+      if (dest !== null) {
+        await clearConversation({ dest, silent: true });
+      }
     };
 
     // Helper: repaint the editor buffer to the pane input after palette insertion.

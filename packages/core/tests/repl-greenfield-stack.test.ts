@@ -247,7 +247,7 @@ const REPL_TS = join(import.meta.dir, "..", "src", "cli", "repl.ts");
 // The exact wiring, pinned as the LAST statement (`$$$BODY` absorbs everything before it) of the
 // runLine arrow — identified by its exact signature. All args are literal (no metavariables).
 const ANCHORED =
-  "async (line: string): Promise<void> => { $$$BODY await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line)); }";
+  "async (line: string): Promise<void> => { $$$BODY await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => session.getPendingPlan() !== null || (await stackHasProductPlan(d, s)), (stack) => planProduct(stack, line), () => runSend(line)); }";
 
 /** Count structural matches of `pattern` over `file` via ast-grep. ast-grep exits 0 with matches
  *  and 1 with none (both print valid JSON — `[…]` / `[]`), so success is "stdout parses to a JSON
@@ -311,7 +311,7 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
   const wrapArrow = (body: string): string =>
     `const runLine = async (line: string): Promise<void> => {\n  ${body}\n};\n`;
   const CORRECT_CALL =
-    "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
+    "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => session.getPendingPlan() !== null || (await stackHasProductPlan(d, s)), (stack) => planProduct(stack, line), () => runSend(line))";
 
   test("SANITY: the correct arrow shape matches (so the negatives fail for the right reason)", async () => {
     expect(await countOn(wrapArrow(`${CORRECT_CALL};`))).toBe(1);
@@ -401,30 +401,29 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
   });
 });
 
-// The multi-adapter planning claim: runGreenfieldPlanning must plan through the RESOLVED adapter's
-// schema (`schema: stack.planSchema`), not a hardcoded boringstack schema — else the whole
-// IStackAdapter.planSchema seam is decorative and a second adapter would silently be planned by
-// boringstack's schema. runGreenfieldPlanning is module-private (its runPlanning call runs real
-// capability resolution, so it is not unit-reachable), so this is a source-guard: the runPlanning
-// call inside repl.ts must carry `schema: stack.planSchema`. A hardcoded schema drops it to 0.
-const SCHEMA_WIRING =
-  "runPlanning($D, { $$$A schema: stack.planSchema, $$$B })";
+// The multi-adapter planning claim: propose_product_plan's validator must read the
+// RESOLVED adapter's schema (`stack.planSchema`), not a hardcoded boringstack/phaser
+// schema. Greenfield planning now routes through the real turn loop
+// (validateProductPlan), not a direct proposePlan(..., stack.planSchema, ...) call —
+// the schema-resolution seam moved but the same "never hardcode a stack's schema"
+// property must still hold.
+const SCHEMA_WIRING = "const schema = stack.planSchema;";
 
-describe("runGreenfieldPlanning plans through the RESOLVED adapter's schema (ast-grep guard)", () => {
-  test("the real runPlanning call passes schema: stack.planSchema (the resolved adapter's)", () => {
+describe("validateProductPlan reads the RESOLVED adapter's schema (ast-grep guard)", () => {
+  test("the real validateProductPlan reads stack.planSchema (the resolved adapter's)", () => {
     expect(countMatches(SCHEMA_WIRING, REPL_TS)).toBe(1);
   });
 
-  test("SANITY: the resolved-schema call shape matches (so the negative fails for the right reason)", async () => {
+  test("SANITY: the resolved-schema shape matches (so the negative fails for the right reason)", async () => {
     const ok =
-      "runPlanning(dir, { planner: p, schema: stack.planSchema, constraints: c });";
+      "function validateProductPlan(raw, stack, constraints) { const schema = stack.planSchema; }";
 
     expect(await countOnPat(SCHEMA_WIRING, ok)).toBe(1);
   });
 
-  test("rejects a runPlanning call that hardcodes a concrete schema (the seam-bypass regression)", async () => {
+  test("rejects code that hardcodes a concrete schema (the seam-bypass regression)", async () => {
     const hardcoded =
-      "runPlanning(dir, { planner: p, schema: boringstackPlanSchema, constraints: c });";
+      "function validateProductPlan(raw, stack, constraints) { const schema = boringstackPlanSchema; }";
 
     expect(await countOnPat(SCHEMA_WIRING, hardcoded)).toBe(0);
   });

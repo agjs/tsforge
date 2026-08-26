@@ -27,6 +27,8 @@ export default tseslint.config(
       // (not a bare `**/…` glob) so it can't shadow real code that happens to share the sentinel name.
       "packages/core/src/loop/**/__adapter_boundary_*/**",
       "packages/core/tests/fixtures/phaser-starter/**",
+      // Stripped template snippets used as wire-string fixtures, not typechecked.
+      "packages/core/tests/fixtures/phaser-wire/**",
     ],
   },
   {

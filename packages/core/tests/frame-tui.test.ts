@@ -12,6 +12,7 @@ import {
   PaneScreen,
   ENTER_ALT,
   EXIT_ALT,
+  RESTORE_TERMINAL,
   BEGIN_SYNC,
   END_SYNC,
   CLEAR_SCREEN,
@@ -444,6 +445,12 @@ describe("PaneScreen", () => {
     panes.leave();
     expect(term.text()).toContain(EXIT_ALT);
     expect(panes.active).toBe(false);
+  });
+
+  test("RESTORE_TERMINAL disables mouse and leaves the alt screen", () => {
+    expect(RESTORE_TERMINAL).toContain("1000l");
+    expect(RESTORE_TERMINAL).toContain("1006l");
+    expect(RESTORE_TERMINAL).toContain(EXIT_ALT);
   });
 
   test("overflow paints a main-pane scrollbar thumb; short content does not", () => {
@@ -1250,6 +1257,17 @@ describe("PaneScreen", () => {
     expect(panes.focusState.panelFocused).toBe(true);
     expect(panes.focusState.userCollapsed).toBe(false);
     expect(panes.mainInnerCols()).toBe(withRail);
+  });
+
+  test("Kitty CSI-u Ctrl+G also toggles the rail", () => {
+    const term = new FakeTerm();
+    const panes = new PaneScreen(term, 24, 100);
+
+    panes.enter();
+    panes.setPanel(["worklist  0/2", "[>] First"]);
+    expect(panes.focusState.panel).toBe("visibleUnfocused");
+    expect(panes.handleKey("\x1b[103;5u")).toBe("handled");
+    expect(panes.focusState.panel).toBe("hidden");
   });
 
   test("setBusy starts heartbeat ticks via onBusyTick", async () => {

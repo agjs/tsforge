@@ -307,13 +307,19 @@ export interface ISessionConfig {
    *  fixes every error in one pass. Left off for plain eval/scratch tasks (their
    *  acceptance set can be empty ⇒ vacuous). */
   offerCheck?: boolean;
-  /** A real human is present to answer (the interactive REPL sets this). Threads to
-   *  `ctx.tool.humanPresent` (NOT `ctx.tool.interactive` — that's a POLICY approval-path
-   *  signal, and co-pilot presence must not loosen policy verdicts) and offers the
-   *  `ask_user` tool (WS-C): the model can pause for a human decision. Absent/false ⇒
-   *  unattended (headless/eval) — ask_user isn't offered and, if forced, returns
-   *  "proceed" so a run never hangs. */
+  /** POLICY approval-path only. The REPL keeps this false so `ask` DENYs honestly
+   *  (no per-action UI). Do not use this to offer co-pilot tools — see
+   *  `humanPresent` / `offerTaskTools` / `offerPresentPlan`. */
   interactive?: boolean;
+  /** TTY co-pilot is present. Sets `ctx.tool.humanPresent` and offers `ask_user`.
+   *  Must not set `ctx.tool.interactive` (that loosens policy `ask`). */
+  humanPresent?: boolean;
+  /** Put `task_*` in `this.tools`. `offeredToolsFor` still withholds them until
+   *  `activePlanId` is bound. REPL always true. */
+  offerTaskTools?: boolean;
+  /** Put `present_plan` in `this.tools`. `offeredToolsFor` still withholds it
+   *  outside plan mode. REPL always true. */
+  offerPresentPlan?: boolean;
   /** Seed the deferred-gate flag at construction: an edit written before an ask_user
    *  pause that has NOT yet been validated. Set when a caller rebuilds the Session (e.g.
    *  the REPL's /clear) but must not drop the still-pending gate — the first send that
@@ -329,6 +335,10 @@ export interface ISessionConfig {
   onPlanChanged?: (plan: IPlanDocument) => void;
   /** Fired when present_plan proposes a plan (REPL renders pending proposal). */
   onPlanPresented?: (plan: IPlanDocument) => void;
+  /** Put `propose_product_plan` in `this.tools`. `offeredToolsFor` still
+   *  withholds it outside greenfield mode (see `setGreenfieldMode`). REPL
+   *  always true — same posture as `offerPresentPlan`. */
+  offerProductPlan?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -1155,6 +1165,17 @@ function gateIntegrityRed(key: string, message: string): IValidateResult {
   };
 }
 
+/** Indirection so a stale post-`await` read of `state.active` can't be narrowed
+ *  to a compile-time literal: `setGate` mutates the SAME `state` object from a
+ *  different closure, invisible to this file's control-flow analysis, so a
+ *  direct `state.active` read after an `await` looks "always true" to the
+ *  checker even though it can genuinely have flipped to `false` by then (the
+ *  whole point of the re-check below). A function boundary forces a fresh,
+ *  unnarrowed `boolean` read. */
+function isGateStillActive(state: { active: boolean }): boolean {
+  return state.active;
+}
+
 function makeAutoGateRunner(
   ctx: ILoopCtx,
   resolve: NonNullable<ISessionConfig["autoGate"]>,
@@ -1246,6 +1267,14 @@ function makeAutoGateRunner(
           }
         );
 
+        // Re-check: `setGate` may have fired WHILE the awaits above were in
+        // flight. A manual override must win — apply nothing from this now-
+        // stale resolution and fall through to the manual command below,
+        // rather than silently reverting `setGate`'s effect.
+        if (!isGateStillActive(state)) {
+          return validate(ctx.task, cwd, parse, opts ?? {});
+        }
+
         // Keep `accept` EXECUTABLE: it is persisted and re-run verbatim on
         // --continue / a /clear rebuild, so a display label would run as a
         // command. Only adopt it when something actually GATED — a nothing-
@@ -1270,6 +1299,13 @@ function makeAutoGateRunner(
 
       if (state.active) {
         const r = await resolve();
+
+        // Re-check: `setGate` may have fired WHILE `resolve()` was in flight —
+        // its `state.active` read above is now stale. A manual override must
+        // win, not get silently reverted by a resolution that started before it.
+        if (!isGateStillActive(state)) {
+          return validate(ctx.task, cwd, parse, opts ?? {});
+        }
 
         if (r.downgrade !== undefined) {
           // The re-resolved gate fell below the session's stage floor (e.g.
@@ -1348,6 +1384,12 @@ export class Session {
    *  advertised tool list per call — `this.tools` itself is never mutated, so
    *  toggling off restores everything with zero bookkeeping. */
   private planMode = false;
+  /** GREENFIELD planning discovery: a transient state distinct from `planMode`
+   *  (pre-approval discovery for a NEW product, not read-only exploration of an
+   *  existing one). Filters `propose_product_plan` into the advertised set per
+   *  call, same "this.tools never mutated" posture as planMode. Set/cleared by
+   *  `setGreenfieldMode` — never a second `Session.create()`. */
+  private greenfieldMode = false;
   /**
    * Set when Phase B continues after GREEN with an open checklist — the next
    * driveInner iteration must reset readonly-spin counters (fresh item work).
@@ -1456,16 +1498,19 @@ export class Session {
         ? cfg.conventions.topics()
         : [];
 
-    // Task tools are advertised in the session list for interactive co-pilot
-    // sessions; offeredToolsFor withholds them until activePlanId is set.
+    // Co-pilot tools are independent of policy `interactive` (#298). REPL passes
+    // humanPresent / offerTaskTools / offerPresentPlan; offeredToolsFor still
+    // withholds task_* until activePlanId and present_plan outside plan mode.
     this.tools = toolsFor(
       false,
       {},
       offerConventions,
       offerCheck,
-      cfg.interactive === true,
+      cfg.humanPresent === true,
       conventionTopics,
-      cfg.interactive === true
+      cfg.offerTaskTools === true,
+      cfg.offerPresentPlan === true,
+      cfg.offerProductPlan === true
     );
 
     this.ctx = ctx;
@@ -1646,7 +1691,9 @@ export class Session {
         // answer; absent/false ⇒ unattended, ask_user proceeds without hanging. Set
         // `humanPresent`, NOT `interactive` — the latter is a POLICY signal (approval
         // path) and co-pilot presence must not loosen policy verdicts.
-        ...(cfg.interactive === true ? { humanPresent: true } : {}),
+        ...(cfg.humanPresent === true || cfg.interactive === true
+          ? { humanPresent: true }
+          : {}),
         // The adapter's convention library — spread into every IToolContext (so
         // `pull_conventions` reads its guides) and read by the reactive push. Gated on
         // `pullConventions` (the same flag that OFFERS the tool + enables the push), so a
@@ -1978,12 +2025,44 @@ export class Session {
     this.planIntroPending = on;
   }
 
+  /** Toggle GREENFIELD planning discovery for the CURRENT send — distinct from
+   *  `setPlanMode` (read-only exploration of an EXISTING codebase). ON wires
+   *  `propose_product_plan`'s validator + proposal callback onto the ambient
+   *  tool context and advertises the tool; OFF clears both. Never a second
+   *  `Session.create()` — same live session, same TUI, just a transient flag,
+   *  so runGreenfieldPlanning can safely call this per-send without recreating
+   *  session state (deferred gates, plan mode, activePlanId, …). */
+  setGreenfieldMode(
+    on: boolean,
+    hooks?: {
+      readonly validate: IToolContext["productPlanValidate"];
+      readonly onProposed: IToolContext["onProductPlanProposed"];
+    }
+  ): void {
+    this.greenfieldMode = on;
+    this.ctx.tool.productPlanValidate = on ? hooks?.validate : undefined;
+    this.ctx.tool.onProductPlanProposed = on ? hooks?.onProposed : undefined;
+    // Same hard guarantee setPlanMode gives GENERAL plan mode — mutating tools
+    // are rejected at dispatch even on a salvaged/forced call, not just
+    // withheld from advertisement. OR with planMode so turning greenfield off
+    // never clobbers a separately-active plan mode's guarantee.
+    this.ctx.tool.readOnly = on || this.planMode;
+  }
+
   /** Bind this session to a plan file id (after approve or `--continue`). Offers
    *  task_* tools and refreshes the system checklist block. */
   setActivePlanId(planId: string | null): void {
     this.activePlanId = planId;
     this.ctx.tool.activePlanId = planId;
     this.refreshChecklistContract();
+  }
+
+  /** Merge extra deny/allow/ask rules (Phaser build deny of vite/playwright). */
+  appendPolicyRules(rules: IPolicyRules): void {
+    this.ctx.tool.policyRules = mergePolicyRules(
+      this.ctx.tool.policyRules,
+      rules
+    );
   }
 
   /** Session-bound plan id, or null when none approved yet. */
@@ -2017,6 +2096,11 @@ export class Session {
   /** Last present_plan proposal, if any (not yet approved). */
   getPendingPlan(): IPlanDocument | null {
     return this.pendingPlan;
+  }
+
+  /** Harness-authored proposal (greenfield product plan) — same pending slot as present_plan. */
+  presentHarnessPlan(plan: IPlanDocument): void {
+    this.ctx.tool.onPlanPresented?.(plan);
   }
 
   /** Take and clear the pending proposal (approve path). */
@@ -2690,7 +2774,8 @@ export class Session {
         suppressedIntegrationServers(this.ctx.tool)
       ),
       activeOverlay()?.toolOverrides ?? [],
-      this.activePlanId !== null && this.activePlanId.length > 0
+      this.activePlanId !== null && this.activePlanId.length > 0,
+      this.greenfieldMode
     );
 
     // Readonly-spin recovery: withhold read/search so soft text cannot be ignored.
@@ -3215,11 +3300,22 @@ export class Session {
       };
     }
 
-    const readonlyStreak = nextReadonlyStreak({
-      previous: carry.readonlyStreak,
-      progressed,
-      attemptedWrite,
-    });
+    // The readonly-spin detector exists to catch a model that CAN write but
+    // won't — it's a category error when write tools aren't even offered
+    // (plan mode / greenfield planning: `ctx.tool.readOnly` is the same hard
+    // guarantee that already rejects a mutating call at dispatch). "Only
+    // reading" is the CORRECT, expected behavior there, not a stuck signal —
+    // pin the streak at 0 rather than escalating a session that structurally
+    // cannot do anything else. The per-send `maxTurns` backstop still bounds
+    // a genuinely runaway read-only-mode session.
+    const readonlyStreak =
+      this.ctx.tool.readOnly === true
+        ? 0
+        : nextReadonlyStreak({
+            previous: carry.readonlyStreak,
+            progressed,
+            attemptedWrite,
+          });
 
     if (readonlyStreak === 0) {
       return {

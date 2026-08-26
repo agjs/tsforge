@@ -1,4 +1,5 @@
 import type { IConventionProvider } from "../conventions-provider";
+import { renderProbedPathTopicMap } from "./path-topics";
 import { buildPullContract } from "./pull-contract";
 
 /**
@@ -13,6 +14,13 @@ export function makeConventionProvider<T extends string>(opts: {
   readonly messagePush?: readonly {
     readonly topic: T;
     readonly pattern: RegExp;
+  }[];
+  /** Stack-specific path → topics. Absent → core React mapper at the pull gate. */
+  readonly topicsForPath?: (file: string) => readonly string[];
+  /** Probe samples for `buildGuides()` when `topicsForPath` is set. */
+  readonly pathProbes?: readonly {
+    readonly label: string;
+    readonly sample: string;
   }[];
 }): IConventionProvider {
   const topicSet = new Set<string>(opts.topics);
@@ -30,11 +38,23 @@ export function makeConventionProvider<T extends string>(opts: {
     return null;
   };
 
+  const pathMap =
+    opts.topicsForPath !== undefined && opts.pathProbes !== undefined
+      ? renderProbedPathTopicMap(
+          opts.topics,
+          opts.topicsForPath,
+          opts.pathProbes
+        )
+      : undefined;
+
   return {
-    buildGuides: () => buildPullContract(opts.topics),
+    buildGuides: () => buildPullContract(opts.topics, pathMap),
     guide: (topic) => (isTopic(topic) ? opts.guides[topic] : null),
     topics: () => [...opts.topics],
     rulesForTopic: (topic) => (isTopic(topic) ? opts.topicRules[topic] : []),
+    ...(opts.topicsForPath === undefined
+      ? {}
+      : { topicsForPath: opts.topicsForPath }),
     unseenForErrors: (errors, seen) => {
       const out: string[] = [];
 

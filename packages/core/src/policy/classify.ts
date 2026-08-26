@@ -70,6 +70,11 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.taskAdd]: "edit_file",
   [TOOL_NAME.taskUpdate]: "edit_file",
   [TOOL_NAME.presentPlan]: "read_file",
+  // Same posture as present_plan: mutates nothing until the human approves →
+  // zero-risk, allowed in every mode incl. plan. Absent here it would classify
+  // `unknown` → silently denied before the handler runs (the same DOA class
+  // ask_user/check/present_plan/pull_conventions guard against above).
+  [TOOL_NAME.productPlan]: "read_file",
   // `pull_conventions` is a pure read-only lookup of the injected convention library — it mutates
   // nothing, so it classifies `read_file` (allowed in every mode). Absent here it classified
   // `unknown` → deny before the handler ran, so a model's pull was silently denied in non-interactive

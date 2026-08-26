@@ -30,7 +30,9 @@ import {
   doTaskUpdate,
 } from "./task-tools";
 import { doPresentPlan } from "./present-plan-tool";
+import { doProposeProductPlan } from "./propose-product-plan-tool";
 import { reject, type IToolContext } from "./tool-context";
+import { planFocusReject } from "./plan-focus-gate";
 import {
   classifyAction,
   evaluatePolicy,
@@ -98,6 +100,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.taskAdd]: doTaskAdd,
   [TOOL_NAME.taskUpdate]: doTaskUpdate,
   [TOOL_NAME.presentPlan]: doPresentPlan,
+  [TOOL_NAME.productPlan]: doProposeProductPlan,
 };
 
 function isToolName(name: string): name is ToolName {
@@ -191,6 +194,12 @@ export async function executeTool(
       `plan mode: \`${call.name}\` is disabled — explore with read-only tools and ` +
         "present your plan as text; the user must approve it before files can change."
     );
+  }
+
+  const focusErr = planFocusReject(call.name, ctx);
+
+  if (focusErr !== null) {
+    return reject(ctx, call.name, focusErr);
   }
 
   // Error boundary: a handler must hand the model a tool-error STRING, never throw

@@ -7,6 +7,7 @@ import type { IGate } from "../src/gate/gate-runner";
 import { Session } from "../src/loop";
 import { forcedGateInterval, resetDriveConvergence } from "../src/loop/session";
 import type { ILoopState } from "../src/loop";
+import type { IStackProfile } from "../src/stack-detection";
 
 function loopState(over: Partial<ILoopState>): ILoopState {
   return {
@@ -80,6 +81,90 @@ test("resetDriveConvergence gives a revisit a fresh ladder while preserving cumu
   expect(state.nearGreenSamples).toBeUndefined();
   expect(state.nearGreenSpikeGap).toBeUndefined();
   expect(state.nearGreenRotation).toBeUndefined();
+});
+
+test("setGate wins a race against an in-flight autoGate re-resolution (Phaser build bug)", async () => {
+  // Real-world trace: a Phaser slice build calls setGate("bun run check") but the
+  // model's gate run kept reporting tsforge's own auto-gate identity + a TS5058 for
+  // .tsforge/tsconfig.gate.json — a file only the auto-gate's tscPart() ever writes.
+  // Root cause: setGate(string) only flips `state.active` and overwrites
+  // `ctx.task.accept` — it never replaces `ctx.gate.runner`, so an autoGate
+  // resolution ALREADY in flight (state.active read as true before the flip) still
+  // overwrites `ctx.task.accept` back to the auto-gate command once it resolves,
+  // even though setGate ran in between.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-gate-race-"));
+
+  try {
+    let releaseAutoGate: () => void = () => undefined;
+    const released = new Promise<void>((res) => {
+      releaseAutoGate = res;
+    });
+    let autoGateStarted: () => void = () => undefined;
+    const started = new Promise<void>((res) => {
+      autoGateStarted = res;
+    });
+    let autoGateCalls = 0;
+
+    const autoGate = async (): Promise<{
+      command: string;
+      stackProfile: IStackProfile;
+    }> => {
+      autoGateCalls += 1;
+      autoGateStarted();
+      await released; // pauses here — simulates the resolution being in flight
+
+      return {
+        command: "echo AUTO-GATE-COMMAND",
+        stackProfile: {
+          name: "generic",
+          packs: [],
+          confidence: "guess",
+          reason: "test fixture",
+        },
+      };
+    };
+
+    let turn = 0;
+    const provider: IProvider = {
+      async complete() {
+        turn += 1;
+
+        if (turn === 1) {
+          return {
+            content: "",
+            toolCalls: [{ id: "1", name: "check", arguments: {} }],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      offerCheck: true,
+      executionMode: "drive-to-green",
+      autoGate,
+    });
+
+    const sendPromise = session.send("run check");
+
+    await started; // the auto-gate resolver is now in flight, paused
+    session.setGate("echo MANUAL-GATE-COMMAND"); // the race: fires WHILE resolve() is pending
+    releaseAutoGate(); // let the paused resolution finish and (buggy) overwrite accept
+
+    await sendPromise;
+
+    expect(autoGateCalls).toBeGreaterThan(0);
+    expect(
+      (session as unknown as { ctx: { task: { accept: string } } }).ctx.task
+        .accept
+    ).toBe("echo MANUAL-GATE-COMMAND");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("Session.setGate flips hasGate on and routes the gate through the loop", async () => {

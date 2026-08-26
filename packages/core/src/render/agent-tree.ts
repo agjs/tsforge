@@ -215,9 +215,9 @@ function rowLine(
 ): string {
   const connector = isLast ? CONNECT_END : CONNECT_MID;
   const glyph = statusGlyph(row.status, frame);
-  // connector + glyph + the single space before the label (+ a `▸` when selected).
-  const marker = selected ? "▸" : " ";
-  const prefixWidth = displayWidth(connector) + displayWidth(glyph.text) + 1;
+  const marker = selected ? " ▸ " : " ";
+  const prefixWidth =
+    displayWidth(connector) + displayWidth(glyph.text) + displayWidth(marker);
   const budget = Math.max(0, columns - 1 - prefixWidth);
   const meta = rowMeta(row);
   const showMeta = meta.length > 0 && displayWidth(meta) <= budget;

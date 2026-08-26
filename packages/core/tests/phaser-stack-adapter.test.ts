@@ -53,6 +53,7 @@ describe("phaserStackAdapter", () => {
     expect(adapter.id).toBe("phaser");
     expect(adapter.conventions).toBeDefined();
     expect(adapter.conventions?.topics()).toContain("domain-purity");
+    expect(typeof adapter.contextBrief).toBe("function");
   });
 
   test("detect is true only for a phaser scaffold receipt", async () => {
@@ -97,7 +98,12 @@ describe("phaserStackAdapter", () => {
       PHASER_RESERVED_ENTITY_IDS
     );
 
-    expect(stripped.slices.map((s) => s.entity.id)).toEqual(["Coin"]);
+    expect(stripped.slices.map((s) => s.entity.id)).toEqual([
+      "Flap",
+      "Pipes",
+      "Crash",
+      "Score",
+    ]);
 
     const playerPlan = {
       product: "x",

@@ -186,6 +186,26 @@ describe("runScaffold — phaser", () => {
 
     expect(pkg.name).toBe("my-game");
     expect(store.get(`${DEST}/index.html`)).toContain("<title>my-game</title>");
+    expect(calls.some((c) => c.join(" ") === "bun run catalog")).toBe(true);
+  });
+
+  test("does not run catalog when docs/ai/catalog.md is already in the clone", async () => {
+    const { fs } = memFs({
+      [`${DEST}/package.json`]: JSON.stringify({ name: "phaser-ts-starter" }),
+      [`${DEST}/index.html`]:
+        "<html><head><title>Phaser TS Starter</title></head></html>\n",
+      [`${DEST}/docs/ai/catalog.md`]: "# Codebase Catalog\n",
+    });
+    const { run, calls } = recordingRunner();
+
+    await runScaffold(
+      loadPhaserTemplate(),
+      { archetype: "phaser", stack: "dev", values: {} },
+      DEST,
+      { run, fs, boot: { poll: pollUp } }
+    );
+
+    expect(calls.some((c) => c.join(" ") === "bun run catalog")).toBe(false);
   });
 
   test("refuses a Phaser archetype against a BoringStack-only manifest", async () => {
