@@ -14,7 +14,7 @@ import { TOOL_NAME } from "../agent/agent.constants";
 import { isInScope } from "../lib/scope";
 import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
-import { fileExists, resolveScopeFiles } from "../lib/fs";
+import { fileExists } from "../lib/fs";
 import {
   snapshotFixState,
   buildAutoFixSummary,
@@ -1144,11 +1144,15 @@ async function applyIdiomRewrites(
 async function applyDeterministicFixes(
   ctx: ILoopCtx
 ): Promise<Map<string, IFixCounts>> {
-  const { task, cwd, report } = ctx;
-  // Resolve globs to concrete files — iterating task.files literally would skip a
-  // glob scope like `["**/*"]` (the common interactive default), so the fixes
-  // never ran there. See P1 review.
-  const files = await resolveScopeFiles(cwd, task.files);
+  const { task, report } = ctx;
+  // Scoped to files the model ACTUALLY wrote this session (`ctx.tool.touched`) —
+  // never the whole tree. `task.files` defaults to `["**/*"]` in the interactive
+  // REPL, and resolving that glob re-expanded to the entire scaffold (capped at
+  // MAX_GLOB_FILES) on EVERY gate cycle, so the TS language service re-scanned
+  // and "fixed" hundreds of untouched template files each turn — the same
+  // whole-repo trap the format step below was already fixed to avoid (see its
+  // comment). Matches that precedent instead of duplicating the bug.
+  const files = touchedInScope(ctx);
   const counts = new Map<string, IFixCounts>();
 
   const tsFixed = await applyTsQuickFixes(ctx, files, counts);
