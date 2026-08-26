@@ -6,6 +6,8 @@
  * Context is reclaimed from tool *results* — not by projecting create/edit args
  * to `{}` (DeepSeek then re-submits empty shapes forever).
  */
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { IChatMessage, IProvider } from "../inference";
 import { TOOL_NAME } from "../agent/agent.constants";
 import { COMPACT_SYSTEM } from "./prompt";
@@ -41,12 +43,44 @@ export const PRUNE_THRESHOLD_CHARS = 8192;
 const PRUNE_HEAD_CHARS = 4096;
 const PRUNE_TAIL_CHARS = 1024;
 
+/** Relative-to-project directory where a pruned tool result's full, untruncated
+ *  content is spilled before its middle is trimmed from context — so nothing
+ *  a prune removes is ever unrecoverable, only out of the model's default view. */
+export const SPILL_DIR = ".tsforge/spilled-tool-output";
+
 /**
- * Stands in for a removed tool-result middle, and doubles as the idempotence
- * guard — a result already carrying it is never pruned again, so a second pass
- * reclaims nothing and the caller can tell that pruning is spent.
+ * Doubles as the idempotence guard — a result already carrying it is never
+ * pruned (or re-spilled) again, so a second pass reclaims nothing and the
+ * caller can tell that pruning is spent. Every marker variant (spill
+ * succeeded and names the file, or spill failed and falls back to the plain
+ * form) starts with exactly this text, so the guard only checks once.
  */
-export const PRUNE_MARKER = "\n\n[... tool result middle pruned ...]\n\n";
+export const SPILL_MARKER_PREFIX = "\n\n[... tool result middle pruned";
+
+/** Fallback marker text when the spill-to-disk write itself fails. */
+export const PRUNE_MARKER = `${SPILL_MARKER_PREFIX} ...]\n\n`;
+
+/**
+ * Best-effort: write the untruncated tool result to disk and return the
+ * project-relative path, or null if the write failed for any reason. A spill
+ * is a nice-to-have, so it must never block or fail a prune.
+ */
+async function spillToolResultToDisk(
+  cwd: string,
+  id: string,
+  content: string
+): Promise<string | null> {
+  try {
+    await mkdir(join(cwd, SPILL_DIR), { recursive: true });
+    const relPath = join(SPILL_DIR, `${id}.txt`);
+
+    await writeFile(join(cwd, relPath), content, "utf8");
+
+    return relPath;
+  } catch {
+    return null;
+  }
+}
 
 /** A prune reclaiming this fraction (1/N) of the transcript stands in for a summary. */
 const PRUNE_SUFFICIENT_DIVISOR = 4;
@@ -93,21 +127,30 @@ export function compactSummaryLine(result: {
  * dominate a long session: `run` output, test logs, gate dumps. This one is
  * purely about size and knows nothing about which tool produced the bytes.
  */
-export function pruneOversizedToolResults(messages: IChatMessage[]): number {
+export async function pruneOversizedToolResults(
+  messages: IChatMessage[],
+  cwd: string
+): Promise<number> {
   let freed = 0;
 
-  for (const m of messages) {
+  for (const [index, m] of messages.entries()) {
     if (m.role !== "tool" || m.content.length <= PRUNE_THRESHOLD_CHARS) {
       continue;
     }
 
-    if (m.content.includes(PRUNE_MARKER)) {
+    if (m.content.includes(SPILL_MARKER_PREFIX)) {
       continue;
     }
 
     const original = m.content.length;
+    const id = m.toolCallId ?? `anon_${String(index)}`;
+    const spillPath = await spillToolResultToDisk(cwd, id, m.content);
+    const marker =
+      spillPath === null
+        ? PRUNE_MARKER
+        : `${SPILL_MARKER_PREFIX} — full output saved to ${spillPath}, read it if the missing detail matters ...]\n\n`;
 
-    m.content = `${m.content.slice(0, PRUNE_HEAD_CHARS)}${PRUNE_MARKER}${m.content.slice(-PRUNE_TAIL_CHARS)}`;
+    m.content = `${m.content.slice(0, PRUNE_HEAD_CHARS)}${marker}${m.content.slice(-PRUNE_TAIL_CHARS)}`;
     freed += original - m.content.length;
   }
 
@@ -606,6 +649,7 @@ function retainStartIndex(conversation: readonly IChatMessage[]): number {
 export async function compactConversation(
   messages: IChatMessage[],
   provider: IProvider,
+  cwd: string,
   signal?: AbortSignal
 ): Promise<ICompactResult> {
   const before = messages.length;
@@ -619,7 +663,7 @@ export async function compactConversation(
   dropSuperseded(messages, isGateFeedbackInject);
   pruneEphemeralToolResidue(messages);
 
-  const prunedChars = pruneOversizedToolResults(messages);
+  const prunedChars = await pruneOversizedToolResults(messages, cwd);
 
   if (
     prunedChars > 0 &&

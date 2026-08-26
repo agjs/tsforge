@@ -2570,6 +2570,7 @@ export class Session {
     const result = await compactConversation(
       this.ctx.messages,
       this.provider,
+      this.ctx.cwd,
       signal
     );
 

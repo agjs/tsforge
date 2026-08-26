@@ -972,7 +972,11 @@ async function maybeHeadlessAutoCompact(args: {
     message: `⊙ context ~${pct}% full — auto-compacting to free room`,
   });
 
-  const compacted = await compactConversation(args.messages, args.provider);
+  const compacted = await compactConversation(
+    args.messages,
+    args.provider,
+    args.ctx.cwd
+  );
 
   args.messages.splice(0, args.messages.length, ...compacted.messages);
   args.ctx.messages = args.messages;

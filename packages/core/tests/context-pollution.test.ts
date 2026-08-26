@@ -221,7 +221,8 @@ describe("gate feedback is append-only, deduped at compaction", () => {
       },
     ];
 
-    const result = await compactConversation(messages, provider);
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-compact-"));
+    const result = await compactConversation(messages, provider, dir);
     const gates = result.messages.filter((m) => isGateFeedbackInject(m));
 
     expect(gates.length).toBeLessThanOrEqual(1);
@@ -627,7 +628,8 @@ describe("headless mid-drive compact wiring", () => {
       { role: "assistant", content: "world" },
     ];
 
-    const result = await compactConversation(messages, provider);
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-compact-"));
+    const result = await compactConversation(messages, provider, dir);
 
     expect(result.before).toBe(3);
     expect(result.after).toBe(3);

@@ -1,13 +1,19 @@
 import { test, expect, describe } from "bun:test";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { IChatMessage, IProvider } from "../src/inference";
 import {
   compactConversation,
   compactSummaryLine,
   pruneOversizedToolResults,
-  PRUNE_MARKER,
   PRUNE_THRESHOLD_CHARS,
   RETAIN_CHARS,
+  SPILL_DIR,
+  SPILL_MARKER_PREFIX,
 } from "../src/loop/context-hygiene";
+
+const TEST_CWD = await mkdtemp(join(tmpdir(), "tsforge-compaction-test-"));
 
 /** Everything a retained message really costs, tool-call arguments included. */
 function retainedChars(messages: readonly IChatMessage[]): number {
@@ -104,7 +110,8 @@ describe("compaction retain window", () => {
 
     const result = await compactConversation(
       historyWithFittingNewestStep(),
-      provider
+      provider,
+      TEST_CWD
     );
     const kept = result.messages.map((m) => m.content);
 
@@ -120,7 +127,8 @@ describe("compaction retain window", () => {
 
     const result = await compactConversation(
       historyWithFittingNewestStep(),
-      provider
+      provider,
+      TEST_CWD
     );
 
     expect(hasNoOrphanToolResult(result.messages)).toBe(true);
@@ -136,7 +144,8 @@ describe("compaction retain window", () => {
 
     const result = await compactConversation(
       historyWithFittingNewestStep(),
-      provider
+      provider,
+      TEST_CWD
     );
     const [first, second] = result.messages;
 
@@ -151,7 +160,8 @@ describe("compaction retain window", () => {
 
     const result = await compactConversation(
       historyWithOversizedNewestStep(),
-      provider
+      provider,
+      TEST_CWD
     );
 
     expect(hasNoOrphanToolResult(result.messages)).toBe(true);
@@ -179,7 +189,7 @@ describe("compaction retain window", () => {
       { role: "tool", content: "ok", toolCallId: "c1" },
     ];
 
-    const result = await compactConversation(messages, provider);
+    const result = await compactConversation(messages, provider, TEST_CWD);
 
     expect(retainedChars(result.messages)).toBeLessThanOrEqual(RETAIN_CHARS);
   });
@@ -189,7 +199,7 @@ describe("compaction retain window", () => {
     const messages = historyWithFittingNewestStep();
     const sizeBefore = retainedChars(messages);
 
-    const result = await compactConversation(messages, provider);
+    const result = await compactConversation(messages, provider, TEST_CWD);
 
     expect(retainedChars(result.messages)).toBeLessThan(sizeBefore / 2);
   });
@@ -209,7 +219,7 @@ describe("compaction retain window", () => {
       { role: "tool", content: "fresh result", toolCallId: "c1" },
     ];
 
-    const result = await compactConversation(messages, provider);
+    const result = await compactConversation(messages, provider, TEST_CWD);
 
     expect(hasNoOrphanToolResult(result.messages)).toBe(true);
     // Retention still happened — the orphan was excluded, not the whole tail.
@@ -230,11 +240,16 @@ describe("prune before summarize", () => {
       { role: "tool", content: "X".repeat(50_000), toolCallId: "c1" },
     ];
 
-    const result = await compactConversation(messages, refusingProvider);
+    const result = await compactConversation(
+      messages,
+      refusingProvider,
+      TEST_CWD
+    );
 
     expect(result.prunedChars).toBeGreaterThan(0);
     expect(result.after).toBe(result.before);
-    expect(result.messages.at(-1)?.content).toContain(PRUNE_MARKER);
+    expect(result.messages.at(-1)?.content).toContain(SPILL_MARKER_PREFIX);
+    expect(result.messages.at(-1)?.content).toContain(SPILL_DIR);
   });
 
   test("a prune that frees too little still summarizes in the same compact", async () => {
@@ -250,7 +265,7 @@ describe("prune before summarize", () => {
       { role: "tool", content: "X".repeat(10_000), toolCallId: "c1" },
     ];
 
-    const result = await compactConversation(messages, provider);
+    const result = await compactConversation(messages, provider, TEST_CWD);
 
     expect(calls()).toBe(1);
     expect(result.prunedChars).toBeUndefined();
@@ -259,26 +274,60 @@ describe("prune before summarize", () => {
     ).toBe(true);
   });
 
-  test("pruning is spent after one pass", () => {
+  test("pruning is spent after one pass", async () => {
     const messages: IChatMessage[] = [
       { role: "tool", content: "X".repeat(50_000), toolCallId: "c1" },
     ];
 
-    const first = pruneOversizedToolResults(messages);
-    const second = pruneOversizedToolResults(messages);
+    const first = await pruneOversizedToolResults(messages, TEST_CWD);
+    const second = await pruneOversizedToolResults(messages, TEST_CWD);
 
     expect(first).toBeGreaterThan(0);
     expect(second).toBe(0);
   });
 
-  test("leaves results at or under the threshold untouched", () => {
+  test("leaves results at or under the threshold untouched", async () => {
     const content = "X".repeat(PRUNE_THRESHOLD_CHARS);
     const messages: IChatMessage[] = [
       { role: "tool", content, toolCallId: "c1" },
     ];
 
-    expect(pruneOversizedToolResults(messages)).toBe(0);
+    expect(await pruneOversizedToolResults(messages, TEST_CWD)).toBe(0);
     expect(messages[0]?.content).toBe(content);
+  });
+
+  test("spills the full tool result to disk before truncating", async () => {
+    const full = "X".repeat(50_000);
+    const messages: IChatMessage[] = [
+      { role: "tool", content: full, toolCallId: "spill-c1" },
+    ];
+
+    await pruneOversizedToolResults(messages, TEST_CWD);
+
+    const relPath = join(SPILL_DIR, "spill-c1.txt");
+    const spilled = await readFile(join(TEST_CWD, relPath), "utf8");
+
+    expect(spilled).toBe(full);
+    expect(messages[0]?.content).toContain(relPath);
+  });
+
+  test("falls back to the plain marker when the spill write fails", async () => {
+    // A cwd that is itself a file (not a directory) makes mkdir(join(cwd,
+    // SPILL_DIR)) fail with ENOTDIR — the write path a real disk-full or
+    // permission error would also take.
+    const brokenCwd = join(TEST_CWD, "not-a-directory");
+
+    await writeFile(brokenCwd, "not a directory", "utf8");
+
+    const messages: IChatMessage[] = [
+      { role: "tool", content: "X".repeat(50_000), toolCallId: "c1" },
+    ];
+
+    const freed = await pruneOversizedToolResults(messages, brokenCwd);
+
+    expect(freed).toBeGreaterThan(0);
+    expect(messages[0]?.content).toContain(SPILL_MARKER_PREFIX);
+    expect(messages[0]?.content).not.toContain(SPILL_DIR);
   });
 });
 
@@ -315,7 +364,7 @@ test("compaction preserves system messages at index > 0", async () => {
     ]).flat(),
   ];
 
-  const result = await compactConversation(messages, provider);
+  const result = await compactConversation(messages, provider, TEST_CWD);
   const systems = result.messages.filter((m) => m.role === "system");
 
   expect(systems).toHaveLength(2);
