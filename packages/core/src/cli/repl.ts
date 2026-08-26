@@ -960,6 +960,48 @@ export function autoGateCarry(
   return autoGate !== undefined && active ? { autoGate } : {};
 }
 
+/**
+ * The gate a `clearConversation` rebuild should use: the CURRENT session's gate
+ * carried forward (via `autoGateCarry`) when the directory is unchanged, or a
+ * FRESH resolution against the NEW directory when it changed (scaffold, `/dir`).
+ *
+ * A directory change must never carry the OLD auto-gate resolver forward: its
+ * `tscPart()` overlay is an EPHEMERAL file written relative to whatever
+ * directory it was resolved against (`.tsforge/tsconfig.gate.json`). Reusing it
+ * for a session whose cwd is now a DIFFERENT directory detaches the overlay
+ * from where the gate actually executes — the resolver keeps writing it under
+ * the OLD dir while every gate run's relative `-p` path resolves against the
+ * NEW one, so the gate fails with `TS5058: path does not exist` forever, on
+ * every cycle, unfixable by the model (it is a harness artifact, not something
+ * in the model's editable scope). Re-resolving fresh against the new directory
+ * — exactly what a cold boot into that directory would do — is the only way to
+ * keep the overlay and the execution cwd pointed at the same place.
+ */
+export async function reboundGateForRebuild(
+  args: ICliArgs,
+  dirChanged: boolean,
+  current: {
+    readonly accept: string;
+    readonly autoGate: AutoGateResolver | undefined;
+    readonly autoGateActive: boolean;
+  },
+  resolve: typeof resolveGate = resolveGate
+): Promise<{ accept: string; autoGate?: AutoGateResolver }> {
+  if (!dirChanged) {
+    return {
+      accept: current.accept,
+      ...autoGateCarry(current.autoGate, current.autoGateActive),
+    };
+  }
+
+  const resolved = await resolve(args, null);
+
+  return {
+    accept: resolved.accept,
+    ...(resolved.autoGate === undefined ? {} : { autoGate: resolved.autoGate }),
+  };
+}
+
 /** The effective `--profile` for a run: a resumed session's saved profile fills in when the
  *  user didn't pass one THIS run, so `--continue` keeps the strictness the build was started
  *  with. An explicit CLI `--profile` always wins. Only a VALID saved id is restored — a
@@ -1924,10 +1966,20 @@ export async function repl(args: ICliArgs): Promise<number> {
     readonly dest?: string;
     readonly silent?: boolean;
   }): Promise<void> => {
+    const dirChanged = opts?.dest !== undefined;
+
     if (opts?.dest !== undefined) {
       args.dir = opts.dest;
       process.chdir(opts.dest);
     }
+
+    // See reboundGateForRebuild's doc comment: a directory change must re-resolve
+    // the gate fresh rather than carry the old auto-gate resolver forward.
+    const rebound = await reboundGateForRebuild(args, dirChanged, {
+      accept: session.gate,
+      autoGate,
+      autoGateActive: session.autoGateActive,
+    });
 
     // Rebuild the session with the current state (config is not reused;
     // repl's /clear creates a fresh Session.create call)
@@ -1945,7 +1997,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       provider,
       cwd: args.dir,
       files: session.scope,
-      accept: session.gate,
+      accept: rebound.accept,
       contextWindow,
       report: makeReporter(logFile, id, id),
       enableThinking: false,
@@ -1966,10 +2018,12 @@ export async function repl(args: ICliArgs): Promise<number> {
       // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
       // the last static command and stops picking up new framework packs. Withheld
       // once a manual /gate has taken over (autoGateActive false), so the rebuild
-      // never silently re-arms the auto gate over the user's command.
-      ...autoGateCarry(autoGate, session.autoGateActive),
+      // never silently re-arms the auto gate over the user's command. A directory
+      // change resolves a FRESH resolver instead of carrying the old one forward —
+      // see reboundGateForRebuild.
+      ...(rebound.autoGate === undefined ? {} : { autoGate: rebound.autoGate }),
       // Same gated-build contract as init — /clear must not drop on-demand `check`.
-      ...(autoGate !== undefined || session.gate.length > 0
+      ...(rebound.autoGate !== undefined || rebound.accept.length > 0
         ? {
             executionMode: "drive-to-green" as const,
             offerCheck: true as const,
