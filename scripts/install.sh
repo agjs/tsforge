@@ -29,7 +29,7 @@ ensure_bun() {
     return 0
   fi
 
-  info "Bun not found. Installing Bun (tsforge requires Bun >= 1.3.14)..."
+  info "Bun not found. Installing Bun (tsforge requires Bun >= 1.4.0)..."
   curl -fsSL https://bun.sh/install | bash
   export BUN_INSTALL="${BUN_INSTALL:-${HOME}/.bun}"
   export PATH="${BUN_INSTALL}/bin:${PATH}"
@@ -42,6 +42,25 @@ ensure_bun() {
 }
 
 install_from_npm() {
+  # Prefer real npm over `bun install -g` here: as of Bun 1.4.x, the global
+  # installer mishandles @agjs/tsforge's `@typescript/native` dependency
+  # (TypeScript 7's platform-specific optionalDependencies — only one of
+  # ~20 resolves on any given machine, and an unresolved one can be left
+  # with an internal empty name that Bun's global-install safety check then
+  # rejects outright instead of skipping). Bun fixed the same class of bug
+  # in its dependency-tree builder (oven-sh/bun#31652) but not in this
+  # installer-level check, so it's still broken on 1.4.0. npm doesn't share
+  # that code path.
+  if command -v npm >/dev/null 2>&1; then
+    info "Trying npm registry (npm install -g @agjs/tsforge)..."
+    if npm install -g @agjs/tsforge@latest; then
+      info "Installed tsforge from npm."
+      print_done
+      return 0
+    fi
+    return 1
+  fi
+
   info "Trying npm registry (bun install -g @agjs/tsforge)..."
   if bun install -g @agjs/tsforge@latest; then
     info "Installed tsforge from npm."
@@ -67,7 +86,23 @@ install_from_git() {
   (
     cd "${TSFORGE_LIB}/packages/core"
     bun install
-    bun link --global
+    # NOT `bun link --global`: on Bun 1.4.x it fails with `error: package.json
+    # missing "name"` against the global project file it just created itself
+    # (a separate Bun 1.4 regression from the one in install_from_npm above).
+    # A direct symlink into Bun's own global bin dir sidesteps it — but that
+    # global project file has to exist with a "name" first, or a totally
+    # fresh Bun install fails the same way on `bun pm bin -g` itself. Seed a
+    # minimal one (only if missing, so a real one is never overwritten).
+    bun_install_dir="${BUN_INSTALL:-${HOME}/.bun}"
+    global_dir="${bun_install_dir}/install/global"
+    if [ ! -f "${global_dir}/package.json" ]; then
+      mkdir -p "${global_dir}"
+      printf '{"name":"bun-global","dependencies":{}}' >"${global_dir}/package.json"
+    fi
+
+    bin_dir="$(bun pm bin -g)"
+    mkdir -p "${bin_dir}"
+    ln -sf "${TSFORGE_LIB}/packages/core/bin/tsforge.js" "${bin_dir}/tsforge"
   )
 
   info "Linked tsforge globally from ${TSFORGE_LIB}/packages/core"
@@ -84,9 +119,10 @@ tsforge is installed.
 Configure your model in ~/.tsforge/models.json — see:
   https://tsforge.dev/quickstart/
 
-If \`tsforge\` is not found, add Bun's global bin dir to PATH:
+If \`tsforge\` is not found, add your package manager's global bin dir to PATH:
 
-  export PATH="\$(bun pm bin -g):\${PATH}"
+  npm:  export PATH="\$(npm config get prefix)/bin:\${PATH}"
+  bun:  export PATH="\$(bun pm bin -g):\${PATH}"
 
 EOF
 }
