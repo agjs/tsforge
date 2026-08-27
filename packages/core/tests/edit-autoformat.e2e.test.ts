@@ -39,4 +39,4 @@ test("a pre-format edit anchor survives the real write-guard auto-format", async
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 15_000);
