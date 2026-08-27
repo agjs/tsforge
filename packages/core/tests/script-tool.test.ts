@@ -394,8 +394,13 @@ test("the output drain is bounded when a backgrounded child holds the pipe open"
     // stdout pipe) then exits immediately, so `bun` exits fast while the orphan
     // keeps the pipe open. An unbounded drain (`Response(stdout).text()`) would
     // block the whole 5s waiting for EOF; the shared runner bounds it.
+    // Fire-and-forget async `Bun.spawn` here, NOT `Bun.spawnSync`: Bun 1.4 made
+    // `spawnSync` with inherited stdio wait for everything sharing that stdio
+    // (including this backgrounded job) before returning, which defeated the
+    // simulation — the script itself would block for the full 5s. `Bun.spawn`
+    // launches it and returns immediately, matching a real shell `&`.
     const code = [
-      `Bun.spawnSync(["sh", "-c", "sleep 5 &"], { stdout: "inherit" });`,
+      `Bun.spawn(["sh", "-c", "sleep 5 &"], { stdout: "inherit" });`,
       'console.log("SCRIPT_DONE");',
     ].join("\n");
     const events: ILoopEvent[] = [];
