@@ -6,6 +6,11 @@ export {
   askUserQuestion,
   shouldPauseForAskUser,
 } from "./ask-user-tool";
+export {
+  PRESENT_PLAN_SENTINEL,
+  presentPlanMessage,
+  shouldPauseForPresentPlan,
+} from "./present-plan-tool";
 export type {
   IToolContext,
   SpawnAgentFn,

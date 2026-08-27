@@ -76,6 +76,8 @@ import {
   executeTool,
   shouldPauseForAskUser,
   askUserQuestion,
+  shouldPauseForPresentPlan,
+  presentPlanMessage,
   type SpawnAgentFn,
   type IToolContext,
   type ICheckOutcome,
@@ -591,6 +593,12 @@ export interface ILoopState {
    *  drive loop ENDS the send (surfacing the question) so the human's next send is the
    *  reply. Cleared once consumed. Absent on autonomous runs (ask_user isn't offered). */
   pendingAskUser?: string;
+  /** Set when a present_plan proposal VALIDATED this turn: the plan is rendered and
+   *  awaiting the human, so the send ends here — real models otherwise keep exploring
+   *  and the human's "approve" typed meanwhile is swallowed as mid-send steering.
+   *  Unlike pendingAskUser this ends the send NORMALLY (no awaitingUser), so the next
+   *  line routes through plan-approval detection, not answer routing. */
+  pendingPlanPause?: boolean;
   /** WS-C: an ask_user pause ended a send that had ALSO edited a file. The `edited`
    *  accumulator is per-send, so the resume send would start `edited=false` and skip the
    *  gate — leaving that edit unvalidated. This flag re-seeds `edited` on the resume send
@@ -881,6 +889,22 @@ async function runOneToolCall(
     return false;
   }
 
+  // A VALIDATED present_plan is the same kind of boundary: the proposal is rendered
+  // and awaiting the human, so the send must end — feed the clean (sentinel-stripped)
+  // result back and stop. Gated on the CALL being present_plan so no other tool can
+  // forge an end-of-send. Rejected proposals return plain text and fall through, so
+  // the model revises in the same send.
+  if (shouldPauseForPresentPlan(call.name, result)) {
+    state.pendingPlanPause = true;
+    ctx.messages.push({
+      role: "tool",
+      content: presentPlanMessage(result),
+      toolCallId: callKey(call, index),
+    });
+
+    return false;
+  }
+
   let feedback = "";
   // F19 plugin drift is a HARD failure the guard deliberately rethrows — but
   // the tool has already executed by now, so the throw must not unwind before
@@ -1018,7 +1042,8 @@ export async function runToolCalls(
     // calls in the SAME model response (a `[ask_user, create]` batch must not write the
     // file before the human replies); STUB the rest (so no tool_call dangles → no 400)
     // and stop. The model re-issues them, with the answer in hand, on the next send.
-    if (state.pendingAskUser !== undefined) {
+    // A validated present_plan is the same boundary: the plan awaits the human.
+    if (state.pendingAskUser !== undefined || state.pendingPlanPause === true) {
       stubUnrunCalls(toolCalls, i, ctx);
       break;
     }

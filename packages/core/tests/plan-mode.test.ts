@@ -162,6 +162,65 @@ test("plan mode advertises only read-only tools; toggling off restores writes", 
   });
 });
 
+// Live DeepSeek finding (trace 2026-08-27, follow-up to the #298 dead end): the
+// model presented a valid plan, then kept exploring in the SAME send (turn after
+// turn of read-only calls), and the human's "approve" typed meanwhile was peeled
+// as mid-send steering — never reaching plan-approval routing. A validated
+// present_plan is an execution boundary exactly like ask_user: the send must
+// end, siblings in the same batch must be stubbed, and the next line must
+// arrive at an idle prompt (where classifyReplRoute sees the approval).
+test("a validated present_plan ENDS the send — sibling calls stubbed, no further turns", async () => {
+  await withDir(async (dir) => {
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        // Batches present_plan WITH more exploration, then would keep going
+        // forever — only the harness boundary can end this send.
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: `p${String(calls)}`,
+              name: "present_plan",
+              arguments: { goal: "g", items: [{ title: "A" }] },
+            },
+            {
+              id: `r${String(calls)}`,
+              name: "run",
+              arguments: { command: "ls" },
+            },
+          ],
+        };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      offerPresentPlan: true,
+    });
+
+    session.setPlanMode(true);
+    const result = await session.send("add a feature");
+
+    // ONE model call: the validated proposal ended the send.
+    expect(calls).toBe(1);
+    expect(result.status).toBe("responded");
+    // The proposal is pending approval, not silently dropped.
+    expect(session.getPendingPlan()).not.toBeNull();
+    // The sibling `run` in the same batch was stubbed, not executed — and every
+    // tool_call got a response (no dangling call → no API 400 on the next send).
+    const toolMsgs = session.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => m.content);
+
+    expect(toolMsgs).toHaveLength(2);
+    expect(toolMsgs.join("\n")).toMatch(/not run|wait/i);
+    expect(toolMsgs.join("\n")).not.toContain("<<<PRESENT_PLAN>>>");
+  });
+});
+
 test("a fenced-snippet-heavy plan never trips the code-dump build nudge", async () => {
   await withDir(async (dir) => {
     let calls = 0;
