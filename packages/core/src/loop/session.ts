@@ -3251,6 +3251,29 @@ export class Session {
       };
     }
 
+    // A present_plan proposal VALIDATED this turn (runOneToolCall set this): the plan
+    // card is rendered and awaiting the human, so END the send — real models otherwise
+    // keep exploring read-only and the human's "approve" typed meanwhile is peeled as
+    // mid-send steering instead of binding the plan. Unlike the ask_user pause this is
+    // a NORMAL end (no awaitingUser), so the next line routes through plan-approval
+    // detection (classifyReplRoute), not answer routing.
+    if (this.state.pendingPlanPause === true) {
+      this.state.pendingPlanPause = undefined;
+
+      return {
+        action: {
+          status: "responded",
+          turns: turn,
+        },
+        edited,
+        editsSinceCheck,
+        readonlyStreak: carry.readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+        historyMetaStreak: carry.historyMetaStreak,
+        forceWriteNext: false,
+      };
+    }
+
     const hadHistoryMeta = turnHadHistoryMetaReject(
       this.ctx.messages,
       messagesStart

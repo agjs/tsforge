@@ -2,6 +2,9 @@ import { test, expect, describe } from "bun:test";
 import {
   doPresentPlan,
   presentPlanArgsToRaw,
+  presentPlanMessage,
+  shouldPauseForPresentPlan,
+  PRESENT_PLAN_SENTINEL,
 } from "../src/loop/tools/present-plan-tool";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 import type { IPlanDocument } from "../src/loop/worklist/checklist.types";
@@ -105,5 +108,32 @@ describe("doPresentPlan", () => {
     );
 
     expect(presented[0]?.items[0]?.kind).toBe("create");
+  });
+});
+
+describe("present_plan pause sentinel", () => {
+  test("a VALID proposal carries the pause sentinel; the model-facing text is clean", () => {
+    // The send must END on a validated proposal — real models otherwise keep
+    // exploring and the human's "approve" is swallowed as mid-send steering.
+    const result = doPresentPlan({ goal: "g", items: [{ title: "A" }] }, ctx());
+
+    expect(result.startsWith(PRESENT_PLAN_SENTINEL)).toBe(true);
+    expect(shouldPauseForPresentPlan("present_plan", result)).toBe(true);
+    // The sentinel never reaches the model.
+    expect(presentPlanMessage(result)).not.toContain(PRESENT_PLAN_SENTINEL);
+    expect(presentPlanMessage(result)).toMatch(/presented/i);
+  });
+
+  test("a REJECTED proposal returns plain text — the model revises in the same send", () => {
+    const result = doPresentPlan({ goal: "x", items: [] }, ctx());
+
+    expect(result.startsWith(PRESENT_PLAN_SENTINEL)).toBe(false);
+    expect(shouldPauseForPresentPlan("present_plan", result)).toBe(false);
+  });
+
+  test("another tool cannot forge the boundary — gated on the call name", () => {
+    expect(
+      shouldPauseForPresentPlan("run", `${PRESENT_PLAN_SENTINEL}whatever`)
+    ).toBe(false);
   });
 });
