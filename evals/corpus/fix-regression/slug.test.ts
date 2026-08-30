@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { slugify } from "./slug";
 
 test("collapses runs of non-alphanumerics to a single hyphen", () => {

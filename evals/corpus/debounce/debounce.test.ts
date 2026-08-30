@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { debounce } from "./debounce";
 
 const sleep = (ms: number): Promise<void> =>

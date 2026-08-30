@@ -1,7 +1,7 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
+import type { ILineItem } from "./cart";
 import { checkout } from "./cart";
 import type { ICoupon } from "./coupons";
-import type { ILineItem } from "./cart";
 
 test("empty cart", () => {
   const result = checkout([], [], 50000);

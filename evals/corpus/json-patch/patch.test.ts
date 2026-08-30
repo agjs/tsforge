@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { applyPatch, PatchError } from "./patch";
 import { decodeSegment, parsePointer } from "./pointer";
 

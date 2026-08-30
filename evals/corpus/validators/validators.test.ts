@@ -1,9 +1,9 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
+import { isEmail } from "./email";
+import { isHexColor } from "./hexColor";
 import { isNonEmpty } from "./nonEmpty";
 import { isPositive } from "./positive";
-import { isEmail } from "./email";
 import { isSlug } from "./slug";
-import { isHexColor } from "./hexColor";
 import { isUuid } from "./uuid";
 
 const valid: ReadonlyArray<[string, (v: string) => boolean, string]> = [

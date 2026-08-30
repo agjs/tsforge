@@ -1,4 +1,4 @@
-import { ISelectQuery, IExpression } from "./parser";
+import { IExpression, ISelectQuery } from "./parser";
 
 type RowType = Record<string, string | number | null>;
 

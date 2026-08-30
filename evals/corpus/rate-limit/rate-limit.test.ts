@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { createRateLimiter } from "./rate-limit";
 
 test("allows up to the limit per window, then blocks", () => {

@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { run as r1 } from "./svc1";
 import { run as r2 } from "./svc2";
 import { run as r3 } from "./svc3";

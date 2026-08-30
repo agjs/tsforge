@@ -1,11 +1,11 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
+import { handleCreated } from "./created";
+import { handleGone } from "./gone";
 import { handleHealth } from "./health";
-import { handleVersion } from "./version";
+import { handleNotFound } from "./notFound";
 import { handlePing } from "./ping";
 import { handleTeapot } from "./teapot";
-import { handleNotFound } from "./notFound";
-import { handleGone } from "./gone";
-import { handleCreated } from "./created";
+import { handleVersion } from "./version";
 
 interface IReply {
   status: number;

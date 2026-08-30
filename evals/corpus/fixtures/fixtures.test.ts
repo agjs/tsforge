@@ -1,11 +1,11 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
+import { makeInvoice } from "./invoice";
+import { makeOrder } from "./order";
+import { makePayment } from "./payment";
+import { makeProduct } from "./product";
+import { makeShipment } from "./shipment";
 import type { IEntity } from "./types";
 import { makeUser } from "./user";
-import { makeOrder } from "./order";
-import { makeProduct } from "./product";
-import { makeInvoice } from "./invoice";
-import { makePayment } from "./payment";
-import { makeShipment } from "./shipment";
 
 const cases: ReadonlyArray<[string, () => IEntity]> = [
   ["user", makeUser],

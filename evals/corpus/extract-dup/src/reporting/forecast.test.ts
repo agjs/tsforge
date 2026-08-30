@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { forecastTotal } from "./forecast";
 
 test("forecast keeps BANKER'S rounding — ties go to even", () => {

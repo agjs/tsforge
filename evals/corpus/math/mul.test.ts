@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { mul } from "./mul";
 
 test("multiplies a cent amount by a quantity", () => {

@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { roundHalfUp } from "./money";
 
 test("rounds halves away from zero, in both directions", () => {

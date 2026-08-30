@@ -1,7 +1,7 @@
-import { test, expect, beforeEach } from "bun:test";
+import { beforeEach, expect, test } from "bun:test";
+import { login, resetAccounts, signup } from "./accounts";
 import { validatePassword } from "./passwords";
 import { issueSession, validateSession } from "./sessions";
-import { signup, login, resetAccounts } from "./accounts";
 
 beforeEach(() => {
   resetAccounts();

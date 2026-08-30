@@ -1,6 +1,6 @@
+import { execute } from "./executor";
 import { lex } from "./lexer";
 import { parse } from "./parser";
-import { execute } from "./executor";
 
 type RowType = Record<string, string | number | null>;
 

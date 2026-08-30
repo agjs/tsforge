@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 import { orderTotal } from "./total";
 
 test("orderTotal sums then rounds half-up", () => {
