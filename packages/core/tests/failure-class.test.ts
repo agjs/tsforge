@@ -372,3 +372,72 @@ describe("attributionLeadIn", () => {
     );
   });
 });
+
+describe("missing-runtime-types (environment errors, not model errors)", () => {
+  test("runtime-global codes (TS2868 Bun / TS2591 process) → missing-runtime-types, not type-error", () => {
+    const out = classifyRun([
+      ev("validated", {
+        passed: false,
+        rules: ["TS2868", "TS2868", "TS2591", "TS2339"],
+      }),
+      STUCK,
+    ]);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.missingRuntimeTypes);
+    expect(out.signals.envTypeErrors).toBe(3);
+  });
+
+  test("TS2307 on a bun:/node: BUILTIN counts as environment, and outranks hallucinated-import", () => {
+    const errors: ErrorSet = [
+      {
+        key: "a",
+        rule: "TS2307",
+        message:
+          "Cannot find module 'bun:test' or its corresponding type declarations.",
+      },
+      {
+        key: "b",
+        rule: "TS2307",
+        message:
+          "Cannot find module 'node:fs' or its corresponding type declarations.",
+      },
+      {
+        key: "c",
+        rule: "TS2307",
+        message:
+          "Cannot find module 'dotenv' or its corresponding type declarations.",
+      },
+    ];
+    const out = classifyRun([STUCK], errors);
+
+    // The two builtin failures prove the gate environment is broken — the
+    // 'dotenv' one is the same broken resolution, not a hallucination.
+    expect(out.failureClass).toBe(FAILURE_CLASS.missingRuntimeTypes);
+    expect(out.signals.envTypeErrors).toBe(2);
+    expect(out.signals.missingModule).toBe(1);
+  });
+
+  test("plain TS2307 on an npm-looking module with a healthy environment stays hallucinated-import", () => {
+    const errors: ErrorSet = [
+      {
+        key: "a",
+        rule: "TS2307",
+        message:
+          "Cannot find module 'left-padd' or its corresponding type declarations.",
+      },
+    ];
+    const out = classifyRun([STUCK], errors);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.hallucinatedImport);
+    expect(out.signals.envTypeErrors).toBe(0);
+  });
+
+  test("attribution lead-in forbids installing/shimming around missing runtime types", () => {
+    const lead = attributionLeadIn({
+      failureClass: FAILURE_CLASS.missingRuntimeTypes,
+    });
+
+    expect(lead).toContain("missing-runtime-types");
+    expect(lead).toContain("Do not install packages");
+  });
+});

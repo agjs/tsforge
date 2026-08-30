@@ -1,24 +1,96 @@
 import { join, resolve, relative, isAbsolute, basename } from "node:path";
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync } from "node:fs";
+import { isRecord } from "../lib/guards";
+
+/** Manifest fields whose presence marks a package.json as a REAL package (its
+ *  own code + deps to gate) rather than a scripts-only monorepo root shell. */
+const DEP_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+] as const;
+
+/** True when `cwd`'s package.json declares no dependencies of any kind — the
+ *  scripts-only shell manifest a monorepo root keeps for `engines`/`scripts`
+ *  (boringstack's shape). Unreadable/unparseable ⇒ NOT a shell (fail closed:
+ *  treat it as a real package rather than re-scoping the gate on bad JSON). */
+function isShellManifest(cwd: string): boolean {
+  let raw: string;
+
+  try {
+    raw = readFileSync(join(cwd, "package.json"), "utf8");
+  } catch {
+    return false;
+  }
+
+  try {
+    const pkg: unknown = JSON.parse(raw);
+
+    if (!isRecord(pkg)) {
+      return false;
+    }
+
+    return DEP_FIELDS.every((field) => {
+      const deps = pkg[field];
+
+      return (
+        deps === undefined || (isRecord(deps) && Object.keys(deps).length === 0)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
 
 /**
- * A folder that contains other JS packages but is not itself a package
- * (no root package.json). Example: a multi-repo workspace root.
+ * A folder that contains other JS packages but is not itself a package to gate:
+ * either no root package.json at all (a multi-repo workspace bag), or a
+ * scripts-only shell manifest with the real packages nested below (a monorepo
+ * root like `apps/api` + `apps/ui`). Gating such a root as ONE package breaks
+ * everything downstream — a root tsconfig sweeping every .ts file across
+ * packages that own their types/paths yields hundreds of phantom errors (observed:
+ * a Bun monorepo red with 708 `bun:test`/`Bun`-not-found errors), so the
+ * per-package container gate must engage instead.
  */
 export function isWorkspaceContainer(cwd: string): boolean {
-  if (existsSync(join(cwd, "package.json"))) {
+  if (existsSync(join(cwd, "package.json")) && !isShellManifest(cwd)) {
     return false;
   }
 
   return listChildPackageRoots(cwd).length > 0;
 }
 
-/** Absolute paths of immediate child directories that have a package.json. */
+/** Package roots under `cwd`: immediate child directories with a package.json,
+ *  plus — for child directories WITHOUT one (grouping dirs like `apps/`,
+ *  `packages/`) — their immediate children that have one. Two levels covers the
+ *  conventional monorepo layouts; a dir that IS a package is never descended
+ *  into (its nested fixtures/examples belong to it, not the workspace). */
 export function listChildPackageRoots(cwd: string): string[] {
+  const out: string[] = [];
+
+  for (const child of childDirs(cwd)) {
+    if (existsSync(join(child, "package.json"))) {
+      out.push(child);
+      continue;
+    }
+
+    for (const grandchild of childDirs(child)) {
+      if (existsSync(join(grandchild, "package.json"))) {
+        out.push(grandchild);
+      }
+    }
+  }
+
+  return out.sort();
+}
+
+/** Absolute paths of `dir`'s child directories worth scanning for packages. */
+function childDirs(dir: string): string[] {
   let entries: { name: string; isDirectory: () => boolean }[];
 
   try {
-    entries = readdirSync(cwd, { withFileTypes: true, encoding: "utf8" });
+    entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
   } catch {
     return [];
   }
@@ -34,14 +106,10 @@ export function listChildPackageRoots(cwd: string): string[] {
       continue;
     }
 
-    const child = join(cwd, entry.name);
-
-    if (existsSync(join(child, "package.json"))) {
-      out.push(child);
-    }
+    out.push(join(dir, entry.name));
   }
 
-  return out.sort();
+  return out;
 }
 
 /** True when `abs` is `dir` itself or lives anywhere under it. */

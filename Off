@@ -1,3 +1,0 @@
-[t] should not surface
-Error: should not surface
-    at <anonymous> (/agjs/code/tsforge/packages/core/tests/lib-trace.test.ts:37:22)

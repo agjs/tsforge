@@ -88,6 +88,46 @@ const SAFE_FIXES = new Set([
   "fixAddMissingConstraint",
 ]);
 
+/** Diagnostic codes that mean the PROGRAM'S ENVIRONMENT is broken — modules or
+ *  runtime globals unresolvable (2307 cannot-find-module, 2580/2591 node
+ *  globals, 2688 missing types file, 2868 Bun). Under such a program every
+ *  other diagnostic is suspect: imports look unused because their module didn't
+ *  resolve, code looks unreachable because a type collapsed — and the "safe"
+ *  auto-fixes become vandalism (observed: 872 phantom quick-fixes over a Bun
+ *  monorepo gated without bun-types). Auto-fixers must stand down per-file. */
+const ENV_BROKEN_DIAG_CODES = new Set([2307, 2580, 2591, 2688, 2868]);
+
+/** Infer format settings from the file's own text instead of TypeScript's
+ *  4-space default, so an auto-fix in a 2-space or tab-indented project doesn't
+ *  reformat every line it touches into a foreign style. The unit is the
+ *  smallest positive leading-space run (tabs win when any line starts with
+ *  one); an unindented or unreadable file keeps the defaults. */
+function formatSettingsFor(text: string | undefined): ts.FormatCodeSettings {
+  const settings = ts.getDefaultFormatCodeSettings("\n");
+
+  if (text === undefined) {
+    return settings;
+  }
+
+  let minSpaces = Number.POSITIVE_INFINITY;
+
+  for (const line of text.split("\n")) {
+    if (line.startsWith("\t")) {
+      return { ...settings, convertTabsToSpaces: false };
+    }
+
+    const indent = line.length - line.trimStart().length;
+
+    if (indent > 0 && line.trim().length > 0 && indent < minSpaces) {
+      minSpaces = indent;
+    }
+  }
+
+  return Number.isFinite(minSpaces) && minSpaces !== 4
+    ? { ...settings, indentSize: minSpaces, tabSize: minSpaces }
+    : settings;
+}
+
 /**
  * Thin wrapper over the TypeScript LanguageService — the engine behind tsserver,
  * run in-process. Gives semantic diagnostics, TypeScript's own quick-fixes,
@@ -176,7 +216,7 @@ export class TsService {
   quickFixes(file: string): ITsFix[] {
     const abs = this.toAbs(file);
     const prefs: ts.UserPreferences = {};
-    const fmt = ts.getDefaultFormatCodeSettings("\n");
+    const fmt = formatSettingsFor(ts.sys.readFile(abs));
     const fixes: ITsFix[] = [];
 
     for (const d of this.diagnostics(file)) {
@@ -221,9 +261,18 @@ export class TsService {
 
   private firstSafeFix(file: string): ts.CodeFixAction | undefined {
     const abs = this.toAbs(file);
-    const fmt = ts.getDefaultFormatCodeSettings("\n");
+    const diagnostics = this.diagnostics(file);
 
-    for (const d of this.diagnostics(file)) {
+    // Environment broken (unresolvable modules/globals) → no diagnostic in this
+    // file can be trusted; auto-fixing on phantoms deletes live code. Stand down
+    // and let the gate surface the real (config) problem instead.
+    if (diagnostics.some((d) => ENV_BROKEN_DIAG_CODES.has(d.code))) {
+      return undefined;
+    }
+
+    const fmt = formatSettingsFor(ts.sys.readFile(abs));
+
+    for (const d of diagnostics) {
       const actions = this.service.getCodeFixesAtPosition(
         abs,
         d.start,
@@ -700,11 +749,19 @@ export class TsService {
     return new Set([...edits.map((e) => e.fileName), fromAbs]).size;
   }
 
-  /** Organize imports (dedupe/sort/drop unused) for one file. Returns edits made. */
+  /** Organize imports (dedupe/sort/drop unused) for one file. Returns edits made.
+   *  Stands down when the file has environment-broken diagnostics — with modules
+   *  unresolvable, "unused" is a phantom judgment (see ENV_BROKEN_DIAG_CODES). */
   organizeImports(file: string): number {
+    const abs = this.toAbs(file);
+
+    if (this.diagnostics(file).some((d) => ENV_BROKEN_DIAG_CODES.has(d.code))) {
+      return 0;
+    }
+
     const changes = this.service.organizeImports(
-      { type: "file", fileName: this.toAbs(file) },
-      ts.getDefaultFormatCodeSettings("\n"),
+      { type: "file", fileName: abs },
+      formatSettingsFor(ts.sys.readFile(abs)),
       {}
     );
 

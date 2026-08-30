@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tscPart } from "../src/gate/tsconfig";
@@ -85,6 +86,95 @@ describe("gate tsconfig overlay — the strict floor holds against a loose proje
       // the gate claimed a strict floor it wasn't enforcing.
       expect(run.exitCode).not.toBe(0);
       expect(run.stdout + run.stderr).toContain("TS2322");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("greenfield tsconfig — monorepo litter guard + Bun types", () => {
+  test("no root tsconfig is written when child packages exist (monorepo root)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-litter-"));
+
+    try {
+      // boringstack shape: scripts-only root manifest, packages under apps/.
+      await writeFile(
+        join(dir, "package.json"),
+        '{"name":"mono","private":true,"scripts":{"check":"true"}}'
+      );
+      await mkdir(join(dir, "apps", "api"), { recursive: true });
+      await writeFile(
+        join(dir, "apps", "api", "package.json"),
+        '{"name":"api"}'
+      );
+
+      const command = await tscPart(dir);
+
+      // Neither a gate command for the whole bag nor a littered tsconfig.json.
+      expect(command).toBeNull();
+      expect(existsSync(join(dir, "tsconfig.json"))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("greenfield Bun package gets the installed Bun types in its tsconfig", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-buntypes-"));
+
+    try {
+      await writeFile(join(dir, "package.json"), '{"name":"svc"}');
+      await writeFile(join(dir, "bun.lock"), "{}");
+      await mkdir(join(dir, "node_modules", "@types", "bun"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "node_modules", "@types", "bun", "package.json"),
+        '{"name":"@types/bun"}'
+      );
+
+      await tscPart(dir);
+
+      const written: unknown = JSON.parse(
+        await readFile(join(dir, "tsconfig.json"), "utf8")
+      );
+      const types =
+        typeof written === "object" &&
+        written !== null &&
+        "compilerOptions" in written
+          ? Reflect.get(
+              (written as { compilerOptions: object }).compilerOptions,
+              "types"
+            )
+          : undefined;
+
+      expect(types).toEqual(["@types/bun"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("greenfield non-Bun package gets NO types entry; Bun without installed types too", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-notypes-"));
+
+    try {
+      await writeFile(join(dir, "package.json"), '{"name":"svc"}');
+      await tscPart(dir);
+
+      const plain = await readFile(join(dir, "tsconfig.json"), "utf8");
+
+      expect(plain).not.toContain('"types"');
+      expect(plain).not.toContain("__TYPES__");
+
+      // Bun markers but no resolvable types package → still no entry (a types
+      // line naming an absent package is a hard TS2688).
+      await rm(join(dir, "tsconfig.json"));
+      await writeFile(join(dir, "bun.lock"), "{}");
+      await tscPart(dir);
+
+      const bun = await readFile(join(dir, "tsconfig.json"), "utf8");
+
+      expect(bun).not.toContain('"types"');
+      expect(bun).not.toContain("__TYPES__");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
