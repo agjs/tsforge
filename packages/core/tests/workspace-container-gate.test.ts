@@ -28,15 +28,86 @@ const stubTask: ITask = {
   files: ["**/*"],
 };
 
-test("isWorkspaceContainer: root package.json is never a container", async () => {
+test("isWorkspaceContainer: root package.json WITH deps is never a container", async () => {
   const dir = await tempDir();
 
   try {
-    await writeFile(join(dir, "package.json"), "{}");
+    await writeFile(
+      join(dir, "package.json"),
+      '{"dependencies":{"left-pad":"1.0.0"}}'
+    );
     await mkdir(join(dir, "packages"));
     await writeFile(join(dir, "packages", "package.json"), "{}");
 
     expect(isWorkspaceContainer(dir)).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("isWorkspaceContainer: scripts-only shell root over nested packages IS a container (boringstack shape)", async () => {
+  const dir = await tempDir();
+
+  try {
+    // Root manifest: scripts/engines only — no dependency fields at all.
+    await writeFile(
+      join(dir, "package.json"),
+      '{"name":"mono","private":true,"scripts":{"check":"true"},"engines":{"bun":"1.3.14"}}'
+    );
+    // Packages at depth 2 under a grouping dir, like apps/api + apps/ui.
+    await mkdir(join(dir, "apps", "api"), { recursive: true });
+    await mkdir(join(dir, "apps", "ui"), { recursive: true });
+    await writeFile(join(dir, "apps", "api", "package.json"), '{"name":"api"}');
+    await writeFile(join(dir, "apps", "ui", "package.json"), '{"name":"ui"}');
+
+    expect(isWorkspaceContainer(dir)).toBe(true);
+    expect(listChildPackageRoots(dir)).toEqual([
+      join(dir, "apps", "api"),
+      join(dir, "apps", "ui"),
+    ]);
+    // A tsconfig littered at the root by an old greenfield write must not
+    // change the verdict — detection keys on the manifest, not the litter.
+    await writeFile(join(dir, "tsconfig.json"), "{}");
+    expect(isWorkspaceContainer(dir)).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("isWorkspaceContainer: empty dep OBJECTS still count as a shell; bad JSON fails closed", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "api"));
+    await writeFile(join(dir, "api", "package.json"), '{"name":"api"}');
+
+    await writeFile(
+      join(dir, "package.json"),
+      '{"name":"mono","dependencies":{},"devDependencies":{}}'
+    );
+    expect(isWorkspaceContainer(dir)).toBe(true);
+
+    // Unparseable root manifest → treat as a real package (never re-scope the
+    // gate on bad JSON).
+    await writeFile(join(dir, "package.json"), "{not json");
+    expect(isWorkspaceContainer(dir)).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("listChildPackageRoots: never descends INTO a package (nested fixtures stay its own)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "api", "examples", "demo"), { recursive: true });
+    await writeFile(join(dir, "api", "package.json"), '{"name":"api"}');
+    await writeFile(
+      join(dir, "api", "examples", "demo", "package.json"),
+      '{"name":"demo"}'
+    );
+
+    expect(listChildPackageRoots(dir)).toEqual([join(dir, "api")]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

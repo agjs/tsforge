@@ -144,3 +144,57 @@ test("typeAt returns the type at a position", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("fixAll + organizeImports STAND DOWN when the file has environment-broken diagnostics", async () => {
+  // A module that can't resolve (broken env) + an import that would look
+  // "unused" + a would-be-unused local: under a broken program the janitor
+  // must not touch the file at all (observed vandalism: 872 phantom fixes in
+  // a Bun monorepo gated without bun-types).
+  const dir = await project({
+    "a.ts":
+      'import { helper } from "bun:test";\n' +
+      "const maybeUnused = 1;\n" +
+      "export const y = helper;\n" +
+      "void maybeUnused;\n",
+    "b.ts":
+      'import { readFileSync } from "not-a-real-module-xyz";\n' +
+      "const unused = 1;\n" +
+      "export const z = 2;\n",
+  });
+
+  try {
+    const svc = new TsService(dir);
+    const before = await Bun.file(join(dir, "b.ts")).text();
+
+    expect(svc.fixAll("b.ts")).toBe(0);
+    expect(svc.organizeImports("b.ts")).toBe(0);
+    expect(await Bun.file(join(dir, "b.ts")).text()).toBe(before);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("auto-fix formatting follows the file's own indent (2-space file stays 2-space)", async () => {
+  // A missing import fix in a 2-space file: TypeScript's DEFAULT format
+  // settings are 4-space, which reformatted touched import blocks into a
+  // foreign style across real repos.
+  const dir = await project({
+    "util.ts":
+      "export function twoSpaced(\n  a: number,\n  b: number\n): number {\n  return a + b;\n}\n",
+    "a.ts": "export const y = twoSpaced(\n  1,\n  2\n);\n",
+  });
+
+  try {
+    const svc = new TsService(dir);
+
+    svc.fixAll("a.ts");
+
+    const text = await Bun.file(join(dir, "a.ts")).text();
+
+    expect(text).toContain('import { twoSpaced } from "./util"');
+    // No line of the result uses a 4-space indent unit.
+    expect(text.split("\n").some((l) => l.startsWith("    "))).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

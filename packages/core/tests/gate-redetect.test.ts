@@ -1008,9 +1008,13 @@ test("Session refuses the package→container downgrade when root package.json v
   };
 
   try {
-    // A root package.json + a child package: deleting the root later makes
-    // isWorkspaceContainer(dir) true.
-    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+    // A root package.json WITH dependencies (a real package, not a scripts-only
+    // shell — shells with child packages are containers up front now) + a child
+    // package: deleting the root later makes isWorkspaceContainer(dir) true.
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "x", dependencies: { "left-pad": "1.0.0" } })
+    );
     await mkdir(join(dir, "api"), { recursive: true });
     await writeFile(
       join(dir, "api", "package.json"),

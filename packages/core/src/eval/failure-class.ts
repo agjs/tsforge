@@ -23,6 +23,13 @@ export const FAILURE_CLASS = {
   lintRule: "lint-rule",
   /** Imported a module that doesn't exist (TS2307 / "Cannot find module"). */
   hallucinatedImport: "hallucinated-import",
+  /** The typecheck ENVIRONMENT is missing the runtime's type definitions —
+   *  builtin modules (`bun:test`, `node:fs`) or runtime globals (`Bun`,
+   *  `process`) unresolvable. A gate/tsconfig misconfiguration, not model
+   *  error: telling the model to "install the package" sends it chasing
+   *  ghosts (observed: a Bun monorepo gated without bun-types → 708 errors,
+   *  attributed hallucinated-import, model stuck). */
+  missingRuntimeTypes: "missing-runtime-types",
   /** Output degenerated into a repetition loop (StreamGuard fired). */
   degeneration: "degeneration",
   /** A per-call/timeout backstop tripped. */
@@ -50,6 +57,9 @@ export interface IFailureSignals {
   tsErrors: number;
   lintErrors: number;
   missingModule: number;
+  /** Missing runtime type definitions: cannot-find-name-global codes (TS2580/
+   *  TS2591/TS2688/TS2868) + TS2307 on a `bun:`/`node:` BUILTIN specifier. */
+  envTypeErrors: number;
   browser: number;
   build: number;
 }
@@ -63,6 +73,14 @@ export interface IFailureSummary {
 
 const TS_CODE = /^TS\d+$/;
 const MISSING_MODULE = /cannot find module/i;
+// Runtime-global lookup failures: "Cannot find name 'Bun'/'process'…" — tsc's
+// install-@types hints (2580 node globals, 2591 process, 2688 missing types
+// file, 2868 Bun). These NEVER come from model-invented code in a repo that ran
+// before; they mean the GATE's tsconfig dropped the runtime's type definitions.
+const ENV_GLOBAL_CODES = new Set(["TS2580", "TS2591", "TS2688", "TS2868"]);
+// A TS2307 on a runtime BUILTIN specifier (`bun:test`, `node:fs`) is the same
+// environment signal — a model cannot hallucinate the runtime's own modules.
+const BUILTIN_MODULE = /cannot find module '(?:bun|node):/i;
 // The terminal degeneration stops say "repetition loop" (run.ts, session.ts) —
 // NOT "degenerate". Match both the user-facing phrase and the internal term.
 const DEGENERATE = /repetition loop|degenerat/i;
@@ -163,9 +181,20 @@ function gatherSignals(
   // Only fall back to the text scan when there are NO structured final rules to
   // classify from — i.e. it's a genuine fallback for unstructured logs, not a
   // veto over a decisive gate error.
+  //
+  // A TS2307 whose message names a runtime BUILTIN (`bun:test`, `node:fs`)
+  // counts as an environment error, not a hallucinated import — that split
+  // needs the per-error messages, so it only refines the finalErrors path;
+  // the rules-only fallback keeps every TS2307 under missingModule.
+  const builtin2307 = (finalErrors ?? []).filter(
+    (e) => e.rule === "TS2307" && BUILTIN_MODULE.test(e.message)
+  ).length;
   const missingModule =
-    rules.filter((r) => r === "TS2307").length +
+    rules.filter((r) => r === "TS2307").length -
+    builtin2307 +
     (rules.length === 0 && MISSING_MODULE.test(text) ? 1 : 0);
+  const envTypeErrors =
+    rules.filter((r) => ENV_GLOBAL_CODES.has(r)).length + builtin2307;
 
   return {
     repairs: events.filter((e) => e.kind === "repair").length,
@@ -181,9 +210,12 @@ function gatherSignals(
     degenerated: events.some((e) => DEGENERATE.test(e.message)),
     timedOut: events.some((e) => TIMED_OUT.test(e.message)),
     toolUseFailed: events.some((e) => TOOL_USE_FAILED.test(e.message)),
-    tsErrors: rules.filter((r) => TS_CODE.test(r) && r !== "TS2307").length,
+    tsErrors: rules.filter(
+      (r) => TS_CODE.test(r) && r !== "TS2307" && !ENV_GLOBAL_CODES.has(r)
+    ).length,
     lintErrors: rules.filter((r) => !TS_CODE.test(r)).length,
     missingModule,
+    envTypeErrors,
     browser: BROWSER.test(text) ? 1 : 0,
     build: BUILD.test(text) ? 1 : 0,
   };
@@ -273,6 +305,14 @@ export function classifyRun(
     return { failureClass: FAILURE_CLASS.degeneration, signals };
   }
 
+  // Environment errors outrank hallucinated-import: when the gate can't even
+  // resolve the runtime's own modules/globals, every other cannot-find-module
+  // in the same run is suspect (same broken resolution), and "install the
+  // package" guidance would send the model chasing ghosts.
+  if (signals.envTypeErrors > 0) {
+    return { failureClass: FAILURE_CLASS.missingRuntimeTypes, signals };
+  }
+
   if (signals.missingModule > 0) {
     return { failureClass: FAILURE_CLASS.hallucinatedImport, signals };
   }
@@ -313,6 +353,7 @@ function emptySignals(): IFailureSignals {
     tsErrors: 0,
     lintErrors: 0,
     missingModule: 0,
+    envTypeErrors: 0,
     browser: 0,
     build: 0,
   };
@@ -347,6 +388,12 @@ const ATTRIBUTION_GUIDANCE: Record<FailureClass, string> = {
     "if the missing module is an npm package, install it (and `@types/*` if it ships no types) " +
     "before more feature code; only create a local file when the import is a project-relative " +
     "path — do not invent packages",
+  [FAILURE_CLASS.missingRuntimeTypes]:
+    "the typecheck environment is missing the runtime's type definitions (Bun/Node globals or " +
+    "builtin modules) — a gate/tsconfig configuration problem, NOT missing npm packages. Do not " +
+    "install packages, create shim files, or edit code to work around unresolvable globals; if a " +
+    "tsconfig is in scope, ensure its `types` covers the runtime (e.g. `bun-types`/`@types/bun`, " +
+    "`@types/node`) — otherwise raise a hand",
   [FAILURE_CLASS.editReject]:
     "fix the path/scope of the write; do not retry the same rejected target",
   [FAILURE_CLASS.toolMalformed]:
