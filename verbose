@@ -1,3 +1,0 @@
-[t] boom
-Error: boom
-    at <anonymous> (/agjs/code/tsforge/packages/core/tests/lib-trace.test.ts:55:20)

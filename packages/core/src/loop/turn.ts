@@ -739,10 +739,17 @@ export interface ILoopState {
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
- *  so a setup failure can't break the loop (the `tsc -p` gate stays authority). */
+ *  so a setup failure can't break the loop (the `tsc -p` gate stays authority).
+ *  Never at a workspace-container root: any tsconfig there governs NO package
+ *  (often litter from an old greenfield write), and a whole-monorepo program
+ *  with broken per-package resolution makes every LSP answer a phantom while
+ *  its synchronous typechecks stall the interactive event loop for minutes. */
 export async function buildTsService(cwd: string): Promise<TsService | null> {
   try {
-    if (await fileExists(cwd, "tsconfig.json")) {
+    if (
+      (await fileExists(cwd, "tsconfig.json")) &&
+      !isWorkspaceContainer(cwd)
+    ) {
       return new TsService(cwd);
     }
   } catch (err) {
@@ -1093,6 +1100,14 @@ function fixCountsFor(counts: Map<string, IFixCounts>, f: string): IFixCounts {
   return c;
 }
 
+/** Hand the event loop one macrotask turn so stdin/paint stay alive between
+ *  synchronous language-service chunks (the janitor runs in the TUI process). */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 /** TS quick-fixes + import hygiene over `files`; returns the total applied. */
 async function applyTsQuickFixes(
   ctx: ILoopCtx,
@@ -1109,6 +1124,11 @@ async function applyTsQuickFixes(
   for (const f of files) {
     try {
       if (await fileExists(cwd, f)) {
+        // The language-service passes below are synchronous CPU work on the
+        // interactive process's ONLY thread — without a yield per file, a
+        // multi-file janitor pass freezes the TUI (no paint, no input) for
+        // its whole duration.
+        await yieldToEventLoop();
         tsService.refresh(f);
         const quick = tsService.fixAll(f);
         // Dedupe/sort imports + drop unused ones the model left behind — free
@@ -1146,6 +1166,9 @@ async function applyIdiomRewrites(
   for (const f of files) {
     try {
       if (await fileExists(cwd, f)) {
+        // Same per-file yield as applyTsQuickFixes — ast-grep parses run on
+        // the TUI thread too.
+        await yieldToEventLoop();
         let idioms = await astGrepFix(join(cwd, f));
 
         // Backstop the write-time strip (covers files changed via rename/organize

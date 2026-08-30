@@ -85,6 +85,7 @@ describe("dominantSignal", () => {
       tsErrors: 0,
       lintErrors: 0,
       missingModule: 0,
+      envTypeErrors: 0,
       browser: 0,
       build: 0,
     };

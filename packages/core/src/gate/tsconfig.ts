@@ -1,10 +1,15 @@
 import { join } from "node:path";
 import { TSC_BIN } from "./tool-paths";
 import { shellQuote } from "../lib/fs";
+import { isRecord } from "../lib/guards";
+import { listChildPackageRoots } from "./workspace-root";
 
 // The strict tsconfig tsforge brings to a greenfield project — strict + the
 // index-safety the local model is weakest at, with DOM + JSX libs so browser /
 // React code type-checks, and skipLibCheck so it never trips on dep .d.ts.
+// `__TYPES__` is replaced with a `"types"` line (or nothing) per project, so a
+// Bun package gets its runtime globals (`Bun`, `bun:test`) instead of hundreds
+// of phantom cannot-find-name errors.
 const STRICT_TSCONFIG = `{
   "compilerOptions": {
     "target": "ES2022",
@@ -12,7 +17,7 @@ const STRICT_TSCONFIG = `{
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "strict": true,
+__TYPES__    "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
@@ -68,6 +73,60 @@ const STRICT_TSCONFIG_OVERLAY = `{
   "exclude": ["../node_modules", "../dist", "../build", "../scratch", "../.tsforge"]
 }
 `;
+
+/** The greenfield strict tsconfig with the `__TYPES__` slot resolved for `cwd`:
+ *  a Bun package (bun lockfile / packageManager / engines.bun) gets a `"types"`
+ *  entry for whichever Bun type package is actually installed, so `Bun`,
+ *  `bun:test`, and `import.meta.dir` type-check; everything else gets no line. */
+export async function strictTsconfigFor(cwd: string): Promise<string> {
+  const types = (await usesBun(cwd)) ? await bunTypesPackage(cwd) : null;
+  const line = types === null ? "" : `    "types": ["${types}"],\n`;
+
+  return STRICT_TSCONFIG.replace("__TYPES__", line);
+}
+
+/** Bun runtime markers: a lockfile, or a bun packageManager/engines pin. */
+async function usesBun(cwd: string): Promise<boolean> {
+  if (
+    (await Bun.file(join(cwd, "bun.lock")).exists()) ||
+    (await Bun.file(join(cwd, "bun.lockb")).exists())
+  ) {
+    return true;
+  }
+
+  try {
+    const pkg: unknown = JSON.parse(
+      await Bun.file(join(cwd, "package.json")).text()
+    );
+
+    if (!isRecord(pkg)) {
+      return false;
+    }
+
+    return (
+      (typeof pkg.packageManager === "string" &&
+        pkg.packageManager.startsWith("bun@")) ||
+      (isRecord(pkg.engines) && "bun" in pkg.engines)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The INSTALLED Bun type package's name (`@types/bun` or `bun-types`), or null
+ *  when neither resolves — a `"types"` entry naming an absent package trades the
+ *  phantom-global flood for a hard TS2688, so only ever point at a real one. */
+async function bunTypesPackage(cwd: string): Promise<string | null> {
+  for (const name of ["@types/bun", "bun-types"]) {
+    if (
+      await Bun.file(join(cwd, "node_modules", name, "package.json")).exists()
+    ) {
+      return name;
+    }
+  }
+
+  return null;
+}
 
 /** The gate overlay's home: tsforge's cache dir + the overlay filename. */
 const GATE_TSCONFIG_DIR = ".tsforge";
@@ -139,9 +198,17 @@ export async function tscPart(cwd: string): Promise<string | null> {
 
   // Greenfield: bring a strict tsconfig so tsc can gate — but only when this is
   // actually a TS project (has a package.json), so we never litter a random dir.
+  // A root with CHILD packages nested below it is never greenfield, whatever its
+  // own manifest looks like: a whole-tree strict tsconfig at a monorepo root
+  // sweeps every package under one config that owns none of their types/paths
+  // (observed: 708 phantom errors in a Bun monorepo, then quick-fix vandalism
+  // driven by those phantoms). Those roots gate per package or not at all.
   // Unlike the overlay, a greenfield tsconfig.json is a DURABLE project file.
-  if (await Bun.file(join(cwd, "package.json")).exists()) {
-    await Bun.write(join(cwd, PROJECT_TSCONFIG), STRICT_TSCONFIG);
+  if (
+    (await Bun.file(join(cwd, "package.json")).exists()) &&
+    listChildPackageRoots(cwd).length === 0
+  ) {
+    await Bun.write(join(cwd, PROJECT_TSCONFIG), await strictTsconfigFor(cwd));
     // The buildinfo lives in .tsforge/ (git-ignored), NOT next to the durable
     // tsconfig — so incremental never leaks a cache file into the user's tree.
     await ignoreGateArtifact(cwd);
