@@ -207,7 +207,15 @@ function gatherSignals(
       (e) =>
         (e.kind === "edit" || e.kind === "tool") && REJECTED.test(e.message)
     ).length,
-    degenerated: events.some((e) => DEGENERATE.test(e.message)),
+    // `token` events are raw pass-through text (gate/tool output, streamed
+    // content) — never a harness-authored signal — so they're excluded here,
+    // same as the other kind-scoped signals below. Without this, a gate error
+    // that merely MENTIONS a path containing "degenerat" (e.g. a real TS2307
+    // on packages/core/tests/run-degenerated.test.ts) trips the regex and
+    // masks the actual cause with a false "degeneration" verdict.
+    degenerated: events.some(
+      (e) => e.kind !== "token" && DEGENERATE.test(e.message)
+    ),
     timedOut: events.some((e) => TIMED_OUT.test(e.message)),
     toolUseFailed: events.some((e) => TOOL_USE_FAILED.test(e.message)),
     tsErrors: rules.filter(
