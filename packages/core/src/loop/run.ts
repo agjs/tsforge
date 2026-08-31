@@ -68,6 +68,10 @@ import {
 } from "./ttsr-init";
 import { resolveImageCapabilityFlags } from "./tools/image-tools";
 import { resolveGithubCapability } from "./tools/github-ops";
+import { resolveLinearCapability } from "./tools/linear-ops";
+import { resolveNotionCapability } from "./tools/notion-ops";
+import { resolveSentryCapability } from "./tools/sentry-ops";
+import { connectMcpServers } from "../mcp";
 import { formatReport } from "./review/review-change";
 import { review } from "./review/review-agents";
 import { flags } from "../config";
@@ -374,6 +378,7 @@ async function resolveStackForRun(
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
   policy: ITsforgeProjectConfig["policy"];
   conventions: IConventions;
+  mcpServers: ITsforgeProjectConfig["mcpServers"];
 }> {
   const detectedProfile = await detectStack(cwd);
   const {
@@ -400,6 +405,7 @@ async function resolveStackForRun(
     ruleOverrides: normalizeRuleOverrides(cfg),
     policy: cfg.policy,
     conventions: resolveConventions(cfg.conventions),
+    mcpServers: cfg.mcpServers,
   };
 }
 
@@ -1348,7 +1354,7 @@ export async function runTask(
   }
 
   // Detect stack once per run, early; tsforge.config.json may adjust it
-  const { stackProfile, ruleOverrides, policy, conventions } =
+  const { stackProfile, ruleOverrides, policy, conventions, mcpServers } =
     await resolveStackForRun(
       cwd,
       (message) => {
@@ -1389,7 +1395,19 @@ export async function runTask(
 
   const imageCaps = await resolveImageCapabilityFlags();
   const github = await resolveGithubCapability(undefined, cwd);
-  const caps = { ...imageCaps, github };
+  // Same MCP connection + capability resolution as the interactive session
+  // (Session.create in session.ts) — a headless run must get the same Linear /
+  // Notion / Sentry verbs an interactive one does when the server is configured.
+  const mcpRegistry =
+    mcpServers === undefined
+      ? null
+      : await connectMcpServers(mcpServers, (message) => {
+          report({ kind: "tool", task: task.id, message });
+        });
+  const linear = resolveLinearCapability(mcpRegistry);
+  const notion = resolveNotionCapability(mcpRegistry);
+  const sentry = resolveSentryCapability(mcpRegistry);
+  const caps = { ...imageCaps, github, linear, notion, sentry };
   const tools = toolsFor(hasExistingCode, caps);
 
   // Mode-aware reasoning cap: scratch tasks over-think unbounded, so default
@@ -1412,6 +1430,10 @@ export async function runTask(
     tool: {
       touched: new Set<string>(),
       github,
+      linear,
+      notion,
+      sentry,
+      ...(mcpRegistry === null ? {} : { mcpRegistry }),
       ...policyCtxFields(policy, opts.policyMode),
     },
     gate: {
