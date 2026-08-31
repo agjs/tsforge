@@ -10,6 +10,7 @@ tsforge review                 # review the current diff
 tsforge review --staged        # only staged changes (pre-commit)
 tsforge review --base develop   # diff against a specific ref
 tsforge review --with-gate     # run the gate first; skip what it already covers
+tsforge review --json          # report as one line of JSON, for scripting
 ```
 
 Inside a session, the same review is available as `/review`.
@@ -87,5 +88,7 @@ Keep the cap a couple below your endpoint's `max_num_seqs` so an interactive ses
 ## In CI
 
 `tsforge review` exits non-zero if any error-severity finding survives, so you can gate a PR on it. It uses `git` to find what changed, so run it inside a git repository.
+
+With `--json`, the report prints as a single line of JSON instead of formatted text, for scripting. It's the **last line** of stdout — progress and gate lines can print before it — so parse the last line, not the whole output (e.g. `tsforge review --json | tail -1 | jq .`).
 
 → [Commands](/reference/commands/) · [Map the repo](/cli/map/)

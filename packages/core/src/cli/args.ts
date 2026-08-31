@@ -46,7 +46,9 @@ export interface ICliArgs {
    *  (`tsforge review --with-gate`). */
   withGate: boolean;
   /** Emit the review report as a single line of JSON instead of formatted
-   *  text (`tsforge review --json`) — a stable contract for scripting. */
+   *  text (`tsforge review --json`) — a stable contract for scripting. It's
+   *  the LAST line of stdout: progress/gate lines can still print before it,
+   *  so a consumer should read the last line, not all of stdout. */
   json: boolean;
   /** After a one-shot run goes green, run the adversarial review and feed verified
    *  findings into ONE repair cycle, reverting it if it breaks the gate

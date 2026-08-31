@@ -50,11 +50,12 @@ tsforge review                 # functional review of the current diff
 tsforge review --staged        # only staged changes (pre-commit)
 tsforge review --base develop  # diff against an explicit base ref
 tsforge review --with-gate     # run the gate first; skip what it already covers
+tsforge review --json          # report as one line of JSON, for scripting
 ```
 
 `tsforge review` reviews the change you're working on: the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
 
-It is **functional** review: logic, regressions, edge cases, and business rules, guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). When a `tsconfig.json` is present it also feeds the reviewer a **caller blast-radius** signal (who calls each changed export, computed type-exactly) so the regression lens has concrete call sites to check. Exits non-zero if any **error**-severity finding survives, so it's CI-usable.
+It is **functional** review: logic, regressions, edge cases, and business rules, guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). When a `tsconfig.json` is present it also feeds the reviewer a **caller blast-radius** signal (who calls each changed export, computed type-exactly) so the regression lens has concrete call sites to check. Exits non-zero if any **error**-severity finding survives, so it's CI-usable. `--json` prints the report as a single line of JSON instead — the **last line** of stdout, since progress/gate output can print before it — for feeding into scripting or a CI integration.
 
 The same review is available inside an interactive session as **`/review`** (optionally `/review <base>` to diff against a specific ref). A review also runs **automatically after a task goes green** (toggle with `TSFORGE_NO_REVIEW`); when it surfaces findings, **`/reviewfix`** hands them to the agent to address. See [Review your changes](/cli/review/).
 

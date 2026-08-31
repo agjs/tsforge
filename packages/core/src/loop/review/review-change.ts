@@ -184,7 +184,10 @@ export function formatReport(report: IReviewReport): string {
  *  findings into inline PR comments) or the existing plain-text format.
  *  JSON output is exactly `JSON.stringify(report)`: no re-shaping, so the
  *  contract is the same `IReviewReport` type callers of `review()` already
- *  see, not a second, drifting shape. */
+ *  see, not a second, drifting shape. In `--json` mode, `reviewMode` still
+ *  writes progress/gate lines to stdout before this — the JSON is
+ *  guaranteed to be the LAST line of stdout, not the only line, so a
+ *  consumer should read/parse the last line rather than all of stdout. */
 export function renderReport(report: IReviewReport, json: boolean): string {
   return json ? JSON.stringify(report) : formatReport(report);
 }
