@@ -4,7 +4,7 @@ import {
   RUN_STATUS,
   review,
   reviewRepair,
-  formatReport,
+  renderReport,
   runGreenfield,
   prepareState,
   planFeatures,
@@ -237,7 +237,11 @@ async function reviewMode(args: ICliArgs): Promise<number> {
     ),
   });
 
-  process.stdout.write(`\n${formatReport(report)}\n`);
+  process.stdout.write(
+    args.json
+      ? `${renderReport(report, true)}\n`
+      : `\n${renderReport(report, false)}\n`
+  );
 
   // Exit non-zero when there are error-severity findings, so it's CI-usable.
   return report.findings.some((f) => f.severity === "error") ? 1 : 0;

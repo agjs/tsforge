@@ -1,5 +1,6 @@
 export {
   formatReport,
+  renderReport,
   detectBase,
   collectChangedFiles,
   dedupeFindings,

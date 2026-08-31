@@ -94,20 +94,20 @@ Async functions returning an exit code, declared under the CLI — the commands.
 
 | Function | Declared |
 | --- | --- |
-| `agentsMode` | `cli.ts:364` |
-| `greenfieldMode` | `cli.ts:665` |
+| `agentsMode` | `cli.ts:368` |
+| `greenfieldMode` | `cli.ts:669` |
 | `harnessDiagnoseMode` | `cli/harness-diagnose-mode.ts:211` |
 | `harnessReviewMode` | `cli/harness-review-mode.ts:700` |
-| `main` | `cli.ts:781` |
-| `mapMode` | `cli.ts:500` |
-| `recipesMode` | `cli.ts:519` |
+| `main` | `cli.ts:785` |
+| `mapMode` | `cli.ts:504` |
+| `recipesMode` | `cli.ts:523` |
 | `repl` | `cli/repl.ts:1096` |
 | `reviewMode` | `cli.ts:201` |
 | `runOnce` | `cli.ts:103` |
 | `runTraceCommand` | `cli/repl-commands.ts:160` |
-| `scaffoldMode` | `cli.ts:747` |
-| `setupMode` | `cli.ts:508` |
-| `traceMode` | `cli.ts:570` |
+| `scaffoldMode` | `cli.ts:751` |
+| `setupMode` | `cli.ts:512` |
+| `traceMode` | `cli.ts:574` |
 
 ## Imports that leave `src/`
 

@@ -45,6 +45,11 @@ export interface ICliArgs {
   /** Run the gate first and tell the reviewer to skip what it already covers
    *  (`tsforge review --with-gate`). */
   withGate: boolean;
+  /** Emit the review report as a single line of JSON instead of formatted
+   *  text (`tsforge review --json`) — a stable contract for scripting. It's
+   *  the LAST line of stdout: progress/gate lines can still print before it,
+   *  so a consumer should read the last line, not all of stdout. */
+  json: boolean;
   /** After a one-shot run goes green, run the adversarial review and feed verified
    *  findings into ONE repair cycle, reverting it if it breaks the gate
    *  (`--with-review`). */
@@ -111,6 +116,7 @@ const BOOL_FLAGS: Record<
   | "strictFloorOnly"
   | "staged"
   | "withGate"
+  | "json"
   | "withReview"
   | "scout"
   | "greenfield"
@@ -127,6 +133,7 @@ const BOOL_FLAGS: Record<
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
   "--with-gate": "withGate",
+  "--json": "json",
   "--with-review": "withReview",
   "--scout": "scout",
   "--greenfield": "greenfield",
@@ -206,7 +213,7 @@ export function cliUsage(): string {
     "USAGE",
     "  tsforge                       interactive session (REPL)",
     '  tsforge "<task>"              one-shot task, driven to a green gate',
-    "  tsforge review [--staged]     functional review of the current diff",
+    "  tsforge review [--staged] [--json]  functional review of the current diff",
     "  tsforge map                   structural workspace map",
     "  tsforge setup [--yes]         infer + write project conventions",
     "  tsforge recipes | run <id>    list / run saved task recipes",
@@ -253,6 +260,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     review: false,
     staged: false,
     withGate: false,
+    json: false,
     withReview: false,
     scout: false,
     greenfield: false,
