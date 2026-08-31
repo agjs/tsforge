@@ -5,3 +5,9 @@
 # by the harness inside their own dir (where their bunfig registers the DOM).
 [test]
 root = "packages"
+# Isolate $TSFORGE_HOME to a fresh temp dir for the whole run, so no test
+# implicitly depends on (or reaches out through) whatever is actually
+# configured in the developer machine's real ~/.tsforge. Individual tests that
+# need a specific sandboxed home already save/restore process.env.TSFORGE_HOME
+# around their own value — this just changes what "unset" resolves to.
+preload = ["./packages/core/tests/helpers/isolate-tsforge-home.ts"]
