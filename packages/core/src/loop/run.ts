@@ -71,7 +71,9 @@ import { resolveGithubCapability } from "./tools/github-ops";
 import { resolveLinearCapability } from "./tools/linear-ops";
 import { resolveNotionCapability } from "./tools/notion-ops";
 import { resolveSentryCapability } from "./tools/sentry-ops";
-import { connectMcpServers } from "../mcp";
+import { connectMcpServers, mergeMcpServers } from "../mcp";
+import type { IMcpServerConfig } from "../mcp";
+import { loadGlobalMcpServers } from "../models-config";
 import { formatReport } from "./review/review-change";
 import { review } from "./review/review-agents";
 import { flags } from "../config";
@@ -378,7 +380,7 @@ async function resolveStackForRun(
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
   policy: ITsforgeProjectConfig["policy"];
   conventions: IConventions;
-  mcpServers: ITsforgeProjectConfig["mcpServers"];
+  mcpServers: Readonly<Record<string, IMcpServerConfig>>;
 }> {
   const detectedProfile = await detectStack(cwd);
   const {
@@ -395,6 +397,11 @@ async function resolveStackForRun(
     cfg.plugins === undefined
       ? []
       : await loadAndRegisterPlugins(cfg.plugins, cwd, report);
+  // The global registry (`~/.tsforge/models.json`) merged with this project's
+  // `tsforge.config.json` (project entries win on a name collision) — same
+  // precedence as the interactive Session.create path.
+  const globalMcpServers = await loadGlobalMcpServers();
+  const mcpServers = mergeMcpServers(globalMcpServers, cfg.mcpServers ?? {});
 
   return {
     stackProfile: {
@@ -405,7 +412,7 @@ async function resolveStackForRun(
     ruleOverrides: normalizeRuleOverrides(cfg),
     policy: cfg.policy,
     conventions: resolveConventions(cfg.conventions),
-    mcpServers: cfg.mcpServers,
+    mcpServers,
   };
 }
 
@@ -1399,7 +1406,7 @@ export async function runTask(
   // (Session.create in session.ts) — a headless run must get the same Linear /
   // Notion / Sentry verbs an interactive one does when the server is configured.
   const mcpRegistry =
-    mcpServers === undefined
+    Object.keys(mcpServers).length === 0
       ? null
       : await connectMcpServers(mcpServers, (message) => {
           report({ kind: "tool", task: task.id, message });

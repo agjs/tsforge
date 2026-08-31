@@ -108,6 +108,16 @@ export function parseMcpServers(
   return servers;
 }
 
+/** Merge the global (`~/.tsforge/models.json`) and project (`tsforge.config.json`)
+ *  `mcpServers` blocks, keyed by server name. A project entry overrides a global
+ *  entry of the same name; names unique to either side pass through untouched. */
+export function mergeMcpServers(
+  global: Readonly<Record<string, IMcpServerConfig>>,
+  project: Readonly<Record<string, IMcpServerConfig>>
+): Record<string, IMcpServerConfig> {
+  return { ...global, ...project };
+}
+
 /** Scan a string for `${VAR}` refs that are unset or empty in `env`. */
 function emptyEnvRefs(original: string, env: EnvLookup): string[] {
   const missing: string[] = [];

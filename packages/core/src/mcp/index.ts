@@ -11,6 +11,7 @@ export {
   interpolateEnv,
   diagnoseMcpServers,
   warnMcpConfigIssues,
+  mergeMcpServers,
 } from "./config";
 export { mcpToolName, mapMcpTool, type IToolSchema } from "./schema-mapping";
 export { LineDecoder, encodeMessage } from "./jsonrpc";
