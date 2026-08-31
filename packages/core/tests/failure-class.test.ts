@@ -168,6 +168,24 @@ describe("classifyRun", () => {
     ).toBe(FAILURE_CLASS.degeneration);
   });
 
+  test("a tsc error whose PATH merely mentions 'degenerat' does not false-positive as degeneration", () => {
+    // Real incident: packages/core/tests/run-degenerated.test.ts failed to
+    // resolve 'bun:test' (TS2307). The raw tsc text landed as a `token` event
+    // and its filename contains the substring "degenerat" — this must classify
+    // as hallucinated-import (the real cause), not degeneration.
+    const out = classifyRun([
+      ev("token", {
+        message:
+          "packages/core/tests/run-degenerated.test.ts(1,30): error TS2307: " +
+          "Cannot find module 'bun:test' or its corresponding type declarations.\n",
+      }),
+      ev("validated", { passed: false, rules: ["TS2307"] }),
+      STUCK,
+    ]);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.hallucinatedImport);
+  });
+
   test("malformed-tool-call / narrate-instead-of-build stops → tool-malformed", () => {
     expect(
       classifyRun([
