@@ -38,3 +38,4 @@ test-results/
 
 # local build/panel logs (never commit)
 /scratchpad-*.log*
+.local-plans/
