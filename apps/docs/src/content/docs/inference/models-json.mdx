@@ -181,6 +181,22 @@ By default the active model runs the post-work [code review](/cli/review/) on it
 
 One entry is a dedicated reviewer; several form a panel whose findings are pooled and deduped (more real issues caught). Absent ⇒ the active model reviews. A single ad-hoc reviewer can also be set by env — `TSFORGE_REVIEW_MODEL` (names a `models` entry) or the `TSFORGE_REVIEW_BASE_URL` / `_MODEL` / `_API_KEY` trio — which wins over `reviewModels`. (This is separate from `reviewPanel`, which is only for `tsforge harness-review` on tsforge's own PRs.)
 
+## Global MCP servers: `mcpServers`
+
+A top-level `mcpServers` block (a sibling of `active`/`models`) configures [MCP servers](/integrations/mcp/) available in **every** project, so a server you use everywhere — Linear, Sentry, Context7 — only needs to be set up once instead of copied into each repo's `tsforge.config.json`:
+
+```json
+{
+  "active": "local",
+  "models": { "local": { "baseUrl": "http://localhost:8000/v1", "model": "deepseek-v4-flash" } },
+  "mcpServers": {
+    "linear": { "command": "npx", "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"] }
+  }
+}
+```
+
+A project's own `tsforge.config.json` `mcpServers` entry with the same name overrides this one entirely; entries unique to either side apply together. See [MCP servers](/integrations/mcp/) for the field reference and the curated Linear/Notion/Sentry integrations.
+
 ### Any other provider: `extraBody` / `extraHeaders`
 
 When a provider needs a param or auth scheme tsforge doesn't model, express it directly. `extraBody` is merged **last** (so it overrides anything), and `extraHeaders` can set a non-Bearer scheme:

@@ -12,6 +12,8 @@ import {
   isReasoningProfile,
   isReasoningStyle,
 } from "./inference/reasoning-profile";
+import type { IMcpServerConfig } from "./mcp/mcp.types";
+import { parseMcpServers, warnMcpConfigIssues } from "./mcp";
 
 /**
  * The model registry — `~/.tsforge/models.json`, the central place a user
@@ -109,6 +111,10 @@ export interface IModelsConfig {
    *  pooled + deduped. Absent ⇒ the active model reviews its own work. Distinct
    *  from `reviewPanel` (which drives `tsforge harness-review` on tsforge's own PRs). */
   reviewModels?: string[];
+  /** Global default MCP servers, available across every project. A project's own
+   *  `tsforge.config.json` `mcpServers` entry with the same name overrides this
+   *  one; entries unique to either side apply together (see `mergeMcpServers`). */
+  mcpServers?: Readonly<Record<string, IMcpServerConfig>>;
 }
 
 export interface IReviewerModel {
@@ -546,6 +552,7 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
   const capabilities = parseCapabilities(raw.capabilities, models);
   const reviewPanel = parseReviewPanel(raw.reviewPanel, models);
   const reviewModels = parseReviewModels(raw.reviewModels, models);
+  const mcpServers = parseGlobalMcpServers(raw.mcpServers);
 
   const withCaps =
     capabilities === undefined
@@ -553,10 +560,29 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
       : { active: raw.active, models, capabilities };
   const withPanel =
     reviewPanel === undefined ? withCaps : { ...withCaps, reviewPanel };
+  const withReviewModels =
+    reviewModels === undefined ? withPanel : { ...withPanel, reviewModels };
 
-  return reviewModels === undefined
-    ? withPanel
-    : { ...withPanel, reviewModels };
+  return mcpServers === undefined
+    ? withReviewModels
+    : { ...withReviewModels, mcpServers };
+}
+
+/** Validate the optional global `mcpServers` block — same shape and validation as
+ *  the project's `tsforge.config.json` field, reused as-is (see `mergeMcpServers`
+ *  for how the two are combined). A missing/empty block yields `undefined`. */
+function parseGlobalMcpServers(
+  raw: unknown
+): Record<string, IMcpServerConfig> | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const servers = parseMcpServers(raw, process.env);
+
+  warnMcpConfigIssues(raw, servers, process.env);
+
+  return Object.keys(servers).length > 0 ? servers : undefined;
 }
 
 /** Validate the optional `reviewModels` list: an array of names, each pointing at
@@ -649,6 +675,20 @@ export async function loadModelsConfig(): Promise<IModelsConfig> {
   }
 
   return parseModelsConfig(raw);
+}
+
+/** Fail-soft read of just the global `mcpServers` block. A broken/invalid
+ *  `~/.tsforge/models.json` must never block MCP resolution for a run that
+ *  doesn't otherwise need it — mirrors `connectMcpServers`' own never-throws
+ *  contract (a bad model registry is surfaced separately, at model selection). */
+export async function loadGlobalMcpServers(): Promise<
+  Readonly<Record<string, IMcpServerConfig>>
+> {
+  try {
+    return (await loadModelsConfig()).mcpServers ?? {};
+  } catch {
+    return {};
+  }
 }
 
 /** Names that must never reach the file, whatever built the config. */

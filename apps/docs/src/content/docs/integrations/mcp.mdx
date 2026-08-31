@@ -31,6 +31,21 @@ Add an `mcpServers` block to `tsforge.config.json` at your repo root. Each entry
 | `type` | no | `stdio` (default) or `http` (http not yet wired) |
 | `timeoutMs` | no | Per-call timeout (default 30000) |
 
+### Global servers (`~/.tsforge/models.json`)
+
+An `mcpServers` block also works in the global model registry, `~/.tsforge/models.json` — same shape, same fields. Servers defined there are available in every project, so a server you use everywhere (Linear, Sentry, Context7) only needs to be configured once. A project's own `tsforge.config.json` `mcpServers` entry with the same name **overrides** the global one entirely; entries unique to either side apply together.
+
+```json title="~/.tsforge/models.json"
+{
+  "active": "...",
+  "models": { "...": { } },
+  "mcpServers": {
+    "linear": { "command": "npx", "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"] },
+    "sentry": { "command": "npx", "args": ["-y", "mcp-remote", "https://mcp.sentry.dev/sse"] }
+  }
+}
+```
+
 ## How tools are exposed
 
 On startup tsforge connects each server, lists its tools, and advertises them to the model under a namespaced name: `mcp__<server>__<tool>` (for example `mcp__context7__get-library-docs`). When the model calls one, tsforge routes it to that server and feeds the text result back into the conversation.

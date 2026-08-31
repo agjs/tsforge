@@ -91,7 +91,8 @@ import {
   normalizeRuleOverrides,
   resolveActivePacks,
 } from "../config/tsforge-config";
-import { connectMcpServers } from "../mcp";
+import { connectMcpServers, mergeMcpServers } from "../mcp";
+import { loadGlobalMcpServers } from "../models-config";
 import { loadAndRegisterPlugins } from "../config/external-plugins";
 import {
   formatPackActivationNotice,
@@ -1632,12 +1633,19 @@ export class Session {
     const ruleOverrides = normalizeRuleOverrides(projectConfig);
 
     // Opt-in: connect any configured MCP servers so their tools are offered to
-    // the agent. A bad server is reported and skipped (connectMcpServers never
-    // throws), so MCP can never block an interactive session from starting.
+    // the agent — the global registry (`~/.tsforge/models.json`) merged with this
+    // project's `tsforge.config.json` (project entries win on a name collision). A
+    // bad server is reported and skipped (connectMcpServers never throws), so MCP
+    // can never block an interactive session from starting.
+    const globalMcpServers = await loadGlobalMcpServers();
+    const mergedMcpServers = mergeMcpServers(
+      globalMcpServers,
+      projectConfig.mcpServers ?? {}
+    );
     const mcpRegistry =
-      projectConfig.mcpServers === undefined
+      Object.keys(mergedMcpServers).length === 0
         ? null
-        : await connectMcpServers(projectConfig.mcpServers, (message) => {
+        : await connectMcpServers(mergedMcpServers, (message) => {
             report({ kind: "tool", task: SESSION_ID, message });
           });
 
