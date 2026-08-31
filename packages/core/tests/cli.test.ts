@@ -542,6 +542,29 @@ test("removed --tui-panes / --no-tui-panes are ignored (not swallowed into the t
   expect(parseArgs(["--tui-panes", "ship", "it"]).task).toBe("ship it");
 });
 
+test("--json sets args.json for review", () => {
+  expect(parseArgs(["review", "--json"]).json).toBe(true);
+  expect(parseArgs(["review"]).json).toBe(false);
+});
+
+test("--json composes with --staged and --base without interfering", () => {
+  const a = parseArgs([
+    "review",
+    "--staged",
+    "--json",
+    "--base",
+    "origin/main",
+  ]);
+
+  expect(a.json).toBe(true);
+  expect(a.staged).toBe(true);
+  expect(a.base).toBe("origin/main");
+});
+
+test("cliUsage documents --json for review", () => {
+  expect(cliUsage()).toContain("--json");
+});
+
 test("paneConsoleRejectReason: tiny interactive TTY fails closed; pipes do not", () => {
   expect(
     paneConsoleRejectReason({

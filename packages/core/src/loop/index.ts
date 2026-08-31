@@ -90,6 +90,7 @@ export {
   review,
   reviewAgents,
   formatReport,
+  renderReport,
   formatReviewCard,
   LENSES,
   type IReviewAgentsOptions,
