@@ -15,6 +15,29 @@ async function gitText(cwd: string, argv: string[]): Promise<string> {
   return res.exitCode === 0 ? res.stdout.trim() : "";
 }
 
+/** Resolves `ref` to something `git diff`/`merge-base` can actually use
+ *  locally. After a typical CI checkout of a PR ref (e.g. `actions/checkout`
+ *  with `ref: refs/pull/N/head`), the runner is in detached HEAD with the
+ *  base branch never fetched as a LOCAL branch — only `origin/<ref>`
+ *  resolves. Without this fallback, `--base master` (or auto-detected
+ *  `main`/`master`) silently resolves to nothing, `collectChangedFiles`
+ *  sees zero tracked diffs, and the whole review reports "No changed
+ *  source files to review." even though the PR plainly changes files —
+ *  confirmed against a real GitHub Actions checkout. Returns `undefined`
+ *  when neither form resolves. */
+async function resolveRef(cwd: string, ref: string): Promise<string | undefined> {
+  const direct = await gitText(cwd, ["rev-parse", "--verify", "--quiet", ref]);
+
+  if (direct.length > 0) {
+    return ref;
+  }
+
+  const originRef = `origin/${ref}`;
+  const viaOrigin = await gitText(cwd, ["rev-parse", "--verify", "--quiet", originRef]);
+
+  return viaOrigin.length > 0 ? originRef : undefined;
+}
+
 /** The ref to diff the working tree against: explicit override, else the
  *  merge-base with the default branch, else HEAD (already on the default branch). */
 export async function detectBase(
@@ -22,24 +45,23 @@ export async function detectBase(
   override?: string
 ): Promise<string> {
   if (override !== undefined && override.length > 0) {
-    return override;
+    return (await resolveRef(cwd, override)) ?? override;
   }
 
   const branch = await gitText(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
 
   for (const candidate of ["main", "master"]) {
-    const exists = await gitText(cwd, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      candidate,
-    ]);
-
-    if (exists.length === 0 || branch === candidate) {
+    if (branch === candidate) {
       continue;
     }
 
-    const mergeBase = await gitText(cwd, ["merge-base", "HEAD", candidate]);
+    const resolved = await resolveRef(cwd, candidate);
+
+    if (resolved === undefined) {
+      continue;
+    }
+
+    const mergeBase = await gitText(cwd, ["merge-base", "HEAD", resolved]);
 
     if (mergeBase.length > 0) {
       return mergeBase;
