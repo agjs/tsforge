@@ -113,6 +113,13 @@ describe(detectBase.name, () => {
       // Mirrors actions/checkout on a PR ref: clone, detach HEAD, delete the
       // local master branch so only origin/master (remote-tracking) resolves.
       await runGit(tmpdir(), ["clone", "-q", originDir, workDir]);
+      // `git clone` doesn't inherit the origin repo's LOCAL user.name/email
+      // (that's per-repo config, not copied) — a CI runner has no global
+      // git identity configured either, so the clone needs its own before
+      // it can commit. Caught by real CI (this passed on a dev machine with
+      // a global git identity already set, and failed there).
+      await runGit(workDir, ["config", "user.email", "test@example.com"]);
+      await runGit(workDir, ["config", "user.name", "Test"]);
       await runGit(workDir, ["checkout", "-q", "--detach"]);
       await runGit(workDir, ["branch", "-D", "master"]);
       await commitFile(workDir, "a.txt", "hello\nworld\n", "add world");
@@ -147,6 +154,13 @@ describe(detectBase.name, () => {
       await commitFile(originDir, "a.txt", "hello\n", "init");
 
       await runGit(tmpdir(), ["clone", "-q", originDir, workDir]);
+      // `git clone` doesn't inherit the origin repo's LOCAL user.name/email
+      // (that's per-repo config, not copied) — a CI runner has no global
+      // git identity configured either, so the clone needs its own before
+      // it can commit. Caught by real CI (this passed on a dev machine with
+      // a global git identity already set, and failed there).
+      await runGit(workDir, ["config", "user.email", "test@example.com"]);
+      await runGit(workDir, ["config", "user.name", "Test"]);
       await runGit(workDir, ["checkout", "-q", "--detach"]);
       await runGit(workDir, ["branch", "-D", "main"]);
       await commitFile(workDir, "a.txt", "hello\nworld\n", "add world");
@@ -174,6 +188,13 @@ describe(collectChangedFiles.name, () => {
       await commitFile(originDir, "a.txt", "hello\n", "init");
 
       await runGit(tmpdir(), ["clone", "-q", originDir, workDir]);
+      // `git clone` doesn't inherit the origin repo's LOCAL user.name/email
+      // (that's per-repo config, not copied) — a CI runner has no global
+      // git identity configured either, so the clone needs its own before
+      // it can commit. Caught by real CI (this passed on a dev machine with
+      // a global git identity already set, and failed there).
+      await runGit(workDir, ["config", "user.email", "test@example.com"]);
+      await runGit(workDir, ["config", "user.name", "Test"]);
       await runGit(workDir, ["checkout", "-q", "--detach"]);
       await runGit(workDir, ["branch", "-D", "master"]);
       await commitFile(
