@@ -53,7 +53,9 @@ async function runGit(cwd: string, argv: string[]): Promise<string> {
   const res = await runArgvCommand(cwd, ["git", ...argv]);
 
   if (res.exitCode !== 0) {
-    throw new Error(`git ${argv.join(" ")} failed in ${cwd} (exit ${res.exitCode}): ${res.stderr}`);
+    throw new Error(
+      `git ${argv.join(" ")} failed in ${cwd} (exit ${res.exitCode}): ${res.stderr}`
+    );
   }
 
   return res.stdout;
@@ -65,7 +67,12 @@ async function initRepo(dir: string): Promise<void> {
   await runGit(dir, ["config", "user.name", "Test"]);
 }
 
-async function commitFile(dir: string, name: string, contents: string, message: string): Promise<void> {
+async function commitFile(
+  dir: string,
+  name: string,
+  contents: string,
+  message: string
+): Promise<void> {
   await Bun.write(join(dir, name), contents);
   await runGit(dir, ["add", name]);
   await runGit(dir, ["commit", "-q", "-m", message]);
@@ -169,7 +176,12 @@ describe(collectChangedFiles.name, () => {
       await runGit(tmpdir(), ["clone", "-q", originDir, workDir]);
       await runGit(workDir, ["checkout", "-q", "--detach"]);
       await runGit(workDir, ["branch", "-D", "master"]);
-      await commitFile(workDir, "src/divide.ts", "export const x = 1;\n", "add divide.ts");
+      await commitFile(
+        workDir,
+        "src/divide.ts",
+        "export const x = 1;\n",
+        "add divide.ts"
+      );
 
       const base = await detectBase(workDir, "master");
       const { files } = await collectChangedFiles(workDir, base, false);

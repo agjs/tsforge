@@ -25,7 +25,10 @@ async function gitText(cwd: string, argv: string[]): Promise<string> {
  *  source files to review." even though the PR plainly changes files —
  *  confirmed against a real GitHub Actions checkout. Returns `undefined`
  *  when neither form resolves. */
-async function resolveRef(cwd: string, ref: string): Promise<string | undefined> {
+async function resolveRef(
+  cwd: string,
+  ref: string
+): Promise<string | undefined> {
   const direct = await gitText(cwd, ["rev-parse", "--verify", "--quiet", ref]);
 
   if (direct.length > 0) {
@@ -33,7 +36,12 @@ async function resolveRef(cwd: string, ref: string): Promise<string | undefined>
   }
 
   const originRef = `origin/${ref}`;
-  const viaOrigin = await gitText(cwd, ["rev-parse", "--verify", "--quiet", originRef]);
+  const viaOrigin = await gitText(cwd, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    originRef,
+  ]);
 
   return viaOrigin.length > 0 ? originRef : undefined;
 }
