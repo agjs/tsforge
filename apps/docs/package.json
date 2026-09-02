@@ -20,13 +20,13 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/react": "6.0.2",
+    "@astrojs/react": "6.0.4",
     "@astrojs/sitemap": "3.7.3",
-    "@astrojs/starlight": "0.41.7",
+    "@astrojs/starlight": "0.41.10",
     "@tailwindcss/vite": "4.3.3",
-    "astro": "7.2.2",
+    "astro": "7.2.9",
     "astro-mermaid": "2.1.0",
-    "mermaid": "11.16.1",
+    "mermaid": "11.17.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "reading-time": "1.5.0",
@@ -35,6 +35,6 @@
     "tailwindcss": "4.3.3"
   },
   "devDependencies": {
-    "wrangler": "4.123.0"
+    "wrangler": "4.127.1"
   }
 }
