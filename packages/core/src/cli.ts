@@ -49,7 +49,7 @@ import {
   modelForRun,
   envNumber,
 } from "./cli/model-setup";
-import { makeReporter, resolveLogPath } from "./cli/logging";
+import { makeReporter, resolveLogPath, withLedger } from "./cli/logging";
 import { resolveGate } from "./cli/gate-setup";
 import {
   loadTsforgeConfig,
@@ -224,6 +224,16 @@ async function reviewMode(args: ICliArgs): Promise<number> {
   // Configured reviewer model(s); empty ⇒ the primary model reviews.
   const reviewProviders = resolveReviewProviders(await loadModelsConfig());
 
+  // `--log` previously only worked for `runOnce`'s reporter (`makeReporter`,
+  // bound to the terminal render pipeline `review` doesn't use) — `review`
+  // accepted and silently ignored the flag. `withLedger` wraps review's own
+  // summary-tracker reporter instead, so the flag actually does something here.
+  const logFile = resolveLogPath("review", args.log);
+
+  if (logFile.length > 0) {
+    process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
+  }
+
   const report = await review(makeProvider(entry), args.dir, {
     ...(args.base.length > 0 ? { base: args.base } : {}),
     staged: args.staged,
@@ -231,9 +241,13 @@ async function reviewMode(args: ICliArgs): Promise<number> {
     ...(reviewProviders.length > 0 ? { reviewProviders } : {}),
     log: (m) => process.stdout.write(`  ↳ ${m}\n`),
     concurrency,
-    // Each reviewer runs as a live agent; summarize the fan-out to the transcript.
-    onEvent: makeAgentSummaryTracker((line) =>
-      process.stdout.write(`  ↳ ${line}\n`)
+    // Each reviewer runs as a live agent; summarize the fan-out to the
+    // transcript, and (when --log is set) also append the raw event to the
+    // ledger.
+    onEvent: withLedger(
+      makeAgentSummaryTracker((line) => process.stdout.write(`  ↳ ${line}\n`)),
+      logFile,
+      "review"
     ),
   });
 

@@ -9,7 +9,7 @@ import {
   type ILoopEvent,
   type LedgerEventType,
 } from "../src/loop";
-import { makeReporter } from "../src/cli/logging";
+import { makeReporter, withLedger } from "../src/cli/logging";
 import { parseEventLog } from "../src/eval";
 
 async function withLog<T>(
@@ -261,5 +261,43 @@ describe("agent attribution write→read round-trip", () => {
       expect(child?.totalTokens).toBe(42);
       expect(parent).toBeDefined();
     });
+  });
+
+  // `review`'s own reporter isn't the terminal one `makeReporter` wraps —
+  // this is what lets `--log` work there too (previously silently ignored:
+  // reviewMode accepted the flag but never wired up any ledger writer).
+  test("withLedger calls the delegate AND writes the ledger, for a non-terminal delegate", async () => {
+    await withLog(async (file, read) => {
+      const seenByDelegate: string[] = [];
+
+      const delegate = (event: ILoopEvent): void => {
+        seenByDelegate.push(event.kind);
+      };
+
+      const report = withLedger(delegate, file, "review");
+
+      report({
+        kind: "agent_spawned",
+        task: "review",
+        message: "review:reviewer-0",
+      });
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(seenByDelegate).toEqual(["agent_spawned"]);
+
+      const [event] = await read();
+
+      expect(event?.type).toBe("agent_spawned");
+      expect(event?.runId).toBe("review");
+    });
+  });
+
+  test("withLedger returns the delegate unchanged when logFile is empty (logging off)", () => {
+    const delegate = (): void => undefined;
+
+    expect(withLedger(delegate, "", "review")).toBe(delegate);
   });
 });
