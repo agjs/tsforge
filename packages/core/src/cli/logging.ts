@@ -75,30 +75,42 @@ const render: Reporter = (event) => {
   }
 };
 
-/** Reporter that renders to the terminal AND, when `--log <file>` is set, appends
- *  the full event stream as JSONL (one event per line, timestamped) for later
- *  evaluation — the durable record of what the agent did: its reasoning, every
- *  file it wrote, the gate verdicts, and the loops it got stuck in. Append-only
- *  (NOT overwritten like the session JSON), and unredacted — it's an opt-in local
- *  debug artifact. Logging failures never break the session. */
-export function makeReporter(
+/** Wraps any Reporter so that, when `--log <file>` is set, every event it
+ *  sees is ALSO appended as JSONL (one event per line, timestamped) — the
+ *  durable record of what the agent did: its reasoning, every file it
+ *  wrote, the gate verdicts, and the loops it got stuck in. Append-only
+ *  (NOT overwritten like the session JSON). Logging failures never break
+ *  the session. `logFile === ""` (logging off) returns `delegate` as-is. */
+export function withLedger(
+  delegate: Reporter,
   logFile: string,
   runId: string,
   sessionId?: string
 ): Reporter {
   if (logFile.length === 0) {
-    return render;
+    return delegate;
   }
 
   const ledger = new LedgerWriter(logFile, runId, sessionId);
 
   return (event) => {
-    render(event);
+    delegate(event);
 
     const { kind, agentId, ...rest } = event;
 
     ledger.record(ledgerTypeFor(event), { kind, ...rest }, agentId);
   };
+}
+
+/** `withLedger` bound to the CLI's own terminal reporter — what every
+ *  command used before `withLedger` existed to let others (e.g. `review`,
+ *  whose reporter isn't the terminal one) reuse the same ledger wiring. */
+export function makeReporter(
+  logFile: string,
+  runId: string,
+  sessionId?: string
+): Reporter {
+  return withLedger(render, logFile, runId, sessionId);
 }
 
 /** Resolve the run-log file when `--log` is set: an auto-named, timestamped JSONL
