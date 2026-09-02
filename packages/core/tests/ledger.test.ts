@@ -269,13 +269,18 @@ describe("agent attribution write→read round-trip", () => {
   test("withLedger calls the delegate AND writes the ledger, for a non-terminal delegate", async () => {
     await withLog(async (file, read) => {
       const seenByDelegate: string[] = [];
+
       const delegate = (event: ILoopEvent): void => {
         seenByDelegate.push(event.kind);
       };
 
       const report = withLedger(delegate, file, "review");
 
-      report({ kind: "agent_spawned", task: "review", message: "review:reviewer-0" });
+      report({
+        kind: "agent_spawned",
+        task: "review",
+        message: "review:reviewer-0",
+      });
 
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
