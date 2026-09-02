@@ -64,7 +64,9 @@ function reviewSpecFor(index: number): IAgentSpec {
       TOOL_NAME.diagnostics,
       TOOL_NAME.gitContext,
     ],
-    maxTurns: 20,
+    // Ceiling, not a target — a well-behaved reviewer finishes well under
+    // this, so a generous cap costs nothing on typical changes.
+    maxTurns: 100,
     systemPrompt:
       base?.systemPrompt ??
       "You are a REVIEW subagent. Review the change like a senior engineer.",
