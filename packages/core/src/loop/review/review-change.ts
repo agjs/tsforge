@@ -53,7 +53,16 @@ export async function detectBase(
   override?: string
 ): Promise<string> {
   if (override !== undefined && override.length > 0) {
-    return (await resolveRef(cwd, override)) ?? override;
+    const resolved = (await resolveRef(cwd, override)) ?? override;
+    // Diff from the merge-base, not the override's current tip — an
+    // override that has moved on since the branch forked (any base branch
+    // with its own new commits) otherwise makes every file changed on the
+    // base look like part of THIS change too. Confirmed against a real PR
+    // whose branch was 3 commits behind master: the reviewer flagged
+    // unrelated master-side edits as regressions in a one-line PR.
+    const mergeBase = await gitText(cwd, ["merge-base", "HEAD", resolved]);
+
+    return mergeBase.length > 0 ? mergeBase : resolved;
   }
 
   const branch = await gitText(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);

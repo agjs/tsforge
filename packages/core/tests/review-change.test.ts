@@ -87,7 +87,7 @@ async function commitFile(
 // override unchanged, so collectChangedFiles()'s `git diff master` failed
 // (gitText() swallows the error as ""), producing zero changed files.
 describe(detectBase.name, () => {
-  test("resolves an explicit override that exists as a local branch, unchanged", async () => {
+  test("resolves an explicit override that exists as a local branch, to their shared merge-base", async () => {
     const dir = await mkdtemp(join(tmpdir(), "detectbase-local-"));
 
     try {
@@ -96,13 +96,18 @@ describe(detectBase.name, () => {
       await runGit(dir, ["checkout", "-q", "-b", "feature"]);
       await commitFile(dir, "a.txt", "hello\nworld\n", "add world");
 
-      expect(await detectBase(dir, "master")).toBe("master");
+      const masterSha = (await runGit(dir, ["rev-parse", "master"])).trim();
+
+      // master hasn't moved since the branch forked, so the merge-base is
+      // exactly master's own tip here — see the diverged-base test below
+      // for the case this distinction actually matters.
+      expect(await detectBase(dir, "master")).toBe(masterSha);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("falls back to origin/<override> when the base only exists as a remote-tracking ref (the real actions/checkout shape)", async () => {
+  test("falls back to origin/<override>'s merge-base when the base only exists as a remote-tracking ref (the real actions/checkout shape)", async () => {
     const originDir = await mkdtemp(join(tmpdir(), "detectbase-origin-"));
     const workDir = await mkdtemp(join(tmpdir(), "detectbase-work-"));
 
@@ -124,7 +129,68 @@ describe(detectBase.name, () => {
       await runGit(workDir, ["branch", "-D", "master"]);
       await commitFile(workDir, "a.txt", "hello\nworld\n", "add world");
 
-      expect(await detectBase(workDir, "master")).toBe("origin/master");
+      const originMasterSha = (
+        await runGit(workDir, ["rev-parse", "origin/master"])
+      ).trim();
+
+      expect(await detectBase(workDir, "master")).toBe(originMasterSha);
+    } finally {
+      await rm(originDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a base that has moved on since the branch forked resolves to the merge-base, not the base's current tip — the actual PR#8779 bug", async () => {
+    const originDir = await mkdtemp(
+      join(tmpdir(), "detectbase-diverged-origin-")
+    );
+    const workDir = await mkdtemp(join(tmpdir(), "detectbase-diverged-work-"));
+
+    try {
+      await initRepo(originDir);
+      await commitFile(
+        originDir,
+        "shared.ts",
+        "export const shared = 1;\n",
+        "init"
+      );
+
+      await runGit(tmpdir(), ["clone", "-q", originDir, workDir]);
+      await runGit(workDir, ["config", "user.email", "test@example.com"]);
+      await runGit(workDir, ["config", "user.name", "Test"]);
+      await runGit(workDir, ["checkout", "-q", "--detach"]);
+      await runGit(workDir, ["branch", "-D", "master"]);
+
+      const forkPoint = (await runGit(workDir, ["rev-parse", "HEAD"])).trim();
+
+      // The "PR" makes its own, unrelated change.
+      await commitFile(
+        workDir,
+        "src/pr-change.ts",
+        "export const x = 1;\n",
+        "pr change"
+      );
+
+      // Meanwhile origin/master moves on with a change to a file the PR
+      // never touches — this is what a real PR branch left open while
+      // master keeps moving looks like.
+      await commitFile(
+        originDir,
+        "shared.ts",
+        "export const shared = 2;\n",
+        "unrelated master change"
+      );
+      await runGit(workDir, ["fetch", "-q", "origin"]);
+
+      const base = await detectBase(workDir, "master");
+
+      expect(base).toBe(forkPoint);
+
+      const { files } = await collectChangedFiles(workDir, base, false);
+
+      // Only the PR's own file — never shared.ts, which only differs
+      // because master moved on, not because the PR touched it.
+      expect(files).toEqual(["src/pr-change.ts"]);
     } finally {
       await rm(originDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
